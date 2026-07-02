@@ -1,0 +1,30 @@
+[project]
+name = "forecastbench"
+version = "0.1.0"
+description = "Backtest harness for ForecastBench forecasting evaluation"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.31",
+    "pydantic>=2.0",
+]
+
+[project.scripts]
+forecastbench = "eval:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.0",
+    "mypy>=1.0",
+    "ruff>=0.4",
+]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
