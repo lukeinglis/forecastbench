@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator
 
 
 REPO_OWNER = "forecastingresearch"
 REPO_NAME = "forecastbench-datasets"
-RAW_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main"
-API_BASE = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents"
+RAW_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/datasets"
+API_BASE = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/datasets"
 CACHE_DIR = Path(".cache")
 
 
@@ -30,6 +29,32 @@ class Question(BaseModel):
     url: str | None = None
     combination_of: list[str] | None = None
 
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        if isinstance(v, list):
+            return "|".join(str(x) for x in v)
+        return str(v)
+
+    @field_validator("freeze_datetime_value", mode="before")
+    @classmethod
+    def _coerce_freeze_value(cls, v: Any) -> float | None:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
+    @field_validator("combination_of", mode="before")
+    @classmethod
+    def _coerce_combination_of(cls, v: Any) -> list[str] | None:
+        if v is None or (isinstance(v, str) and v.upper() == "N/A"):
+            return None
+        if isinstance(v, list):
+            return [x["id"] if isinstance(x, dict) else str(x) for x in v]
+        return v
+
 
 class QuestionSet(BaseModel):
     forecast_due_date: str
@@ -41,6 +66,21 @@ class Resolution(BaseModel):
     id: str
     outcome: int | None = None
     resolution_date: str | None = None
+
+    @field_validator("id", mode="before")
+    @classmethod
+    def _coerce_id(cls, v: Any) -> str:
+        if isinstance(v, list):
+            return "|".join(str(x) for x in v)
+        return str(v)
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> Resolution:
+        if isinstance(obj, dict) and "outcome" not in obj and "resolved_to" in obj:
+            obj = dict(obj)
+            val = obj.pop("resolved_to", None)
+            obj["outcome"] = round(val) if val is not None else None
+        return super().model_validate(obj, **kwargs)
 
 
 class ResolvedQuestion(BaseModel):
@@ -88,7 +128,7 @@ def list_question_set_files() -> list[str]:
 
 def list_resolution_files() -> list[str]:
     """List available resolution JSON filenames from the GitHub repo."""
-    data = _fetch_json(f"{API_BASE}/resolutions", "resolutions_listing.json")
+    data = _fetch_json(f"{API_BASE}/resolution_sets", "resolution_sets_listing.json")
     return [item["name"] for item in data if item["name"].endswith(".json")]
 
 
@@ -101,7 +141,7 @@ def fetch_question_set(filename: str) -> QuestionSet:
 
 def fetch_resolution(filename: str) -> list[Resolution]:
     """Fetch and parse a single resolution file."""
-    url = f"{RAW_BASE}/resolutions/{filename}"
+    url = f"{RAW_BASE}/resolution_sets/{filename}"
     data = _fetch_json(url, f"res_{filename}")
     if isinstance(data, list):
         return [Resolution.model_validate(r) for r in data]

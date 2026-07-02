@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
 
 from fetch_data import QuestionSet, Question, ResolvedQuestion
 from eval import split_held_out
-from score import ScoringResult
 
 
 class TestSplitHeldOut:

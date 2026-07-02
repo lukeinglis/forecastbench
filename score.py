@@ -52,6 +52,8 @@ def mean_brier_score(pairs: list[tuple[float, int]]) -> float:
 
 def brier_index(mean_bs: float) -> float:
     """Transform mean Brier score to Brier Index. Applied AFTER averaging, never per-question."""
+    if mean_bs < 0:
+        raise ValueError(f"mean_bs must be non-negative, got {mean_bs}")
     return (1.0 - math.sqrt(mean_bs)) * 100.0
 
 

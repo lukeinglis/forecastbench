@@ -5,11 +5,10 @@ from __future__ import annotations
 import math
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
-from fetch_data import ResolvedQuestion
-from score import brier_score, mean_brier_score, brier_index, score_forecasts, ScoringResult
+from score import brier_score, mean_brier_score, brier_index, score_forecasts
 
 
 class TestBrierScore:

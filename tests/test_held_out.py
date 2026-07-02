@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fetch_data import QuestionSet, Question, ResolvedQuestion, join_resolved_questions
+from fetch_data import QuestionSet, join_resolved_questions
 from eval import split_held_out
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
-from fetch_data import Question, QuestionSet, ResolvedQuestion, load_data, join_resolved_questions
+from fetch_data import Question, QuestionSet, Resolution, load_data, join_resolved_questions
 from score import ScoringResult, score_forecasts
 
 
@@ -43,7 +43,7 @@ def run_eval(
     resolutions_by_id = {q.id: q for q in resolved}
     iteration_resolved = join_resolved_questions(
         iteration_set,
-        {q_id: type("R", (), {"id": q_id, "outcome": r.outcome, "resolution_date": r.resolution_date})()  # type: ignore[arg-type]
+        {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
          for q_id, r in resolutions_by_id.items()},
     )
 
