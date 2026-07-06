@@ -6,6 +6,7 @@ from typing import Callable, Protocol
 
 from fetch_data import Question, QuestionSet, Resolution, load_data, join_resolved_questions
 from score import ScoringResult, score_forecasts
+from cutoff import CutoffEnvironment
 
 
 class Forecaster(Protocol):
@@ -77,6 +78,55 @@ def _print_results(result: ScoringResult) -> None:
     print(f"Overall:  Brier={result.overall_brier:.4f}  Index={result.overall_index:.1f}%")
     print(f"Missing forecasts (defaulted to 0.5): {result.n_missing}")
     print("=" * 50)
+
+
+def run_baseline_eval(
+    model: str | None = None,
+    n_held_out: int = 2,
+) -> "RunResult":  # noqa: F821
+    """Run baseline LLM agent evaluation with cutoff enforcement and error analysis."""
+    import baseline_agent
+    from analyze import RunResult, analyze_run, save_results, print_summary
+
+    env = CutoffEnvironment()
+    question_sets, resolved = load_data()
+    iteration_set, _held_out = split_held_out(question_sets, n_held_out)
+
+    resolutions_by_id = {q.id: q for q in resolved}
+    iteration_resolved = join_resolved_questions(
+        iteration_set,
+        {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
+         for q_id, r in resolutions_by_id.items()},
+    )
+
+    used_model = model or baseline_agent.DEFAULT_MODEL
+    forecasts: dict[str, float] = {}
+    for q in iteration_resolved:
+        question = Question(
+            id=q.id,
+            source=q.source,
+            question=q.question,
+            background=q.background,
+            resolution_criteria=q.resolution_criteria,
+            freeze_datetime=q.freeze_datetime,
+            freeze_datetime_value=q.freeze_datetime_value,
+            resolution_dates=q.resolution_dates,
+            url=q.url,
+            combination_of=q.combination_of,
+        )
+        context = env.prepare_context(question, q.forecast_due_date)
+        today_date = env.get_today_date(context)
+        forecasts[q.id] = baseline_agent.forecast(question, model=model, today_date=today_date)
+
+    result: RunResult = analyze_run(forecasts, iteration_resolved, used_model)
+    filepath = save_results(result)
+    print(f"\nResults saved to {filepath}")
+    print_summary(result)
+
+    scoring = score_forecasts(forecasts, iteration_resolved)
+    _print_results(scoring)
+
+    return result
 
 
 def main() -> None:
