@@ -13,6 +13,7 @@
 - `cd /Users/linglis/forecastbench && uv run python eval.py` to run full eval pipeline
 - `cd /Users/linglis/forecastbench && uv run python dummy_forecaster.py` to run dummy forecaster
 - `cd /Users/linglis/forecastbench && uv run python baseline_agent.py` to run baseline LLM agent eval
+- `FORECAST_MODEL=vertex_ai/claude-sonnet-4@20250514 uv run python baseline_agent.py` to run with Vertex AI
 - `FORECAST_MODEL=openai/gpt-4o uv run python baseline_agent.py` to run with alternate model
 
 ## Architecture
@@ -37,6 +38,7 @@
 - Missing forecasts default to 0.5 per ForecastBench rules
 - Binary outcomes only: {0, 1}
 - Questions classified as "market" (metaculus, polymarket, manifold, infer) vs "dataset"
-- FORECAST_MODEL env var selects LLM provider/model (default: anthropic/claude-sonnet-4-20250514)
+- FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514)
+- Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON

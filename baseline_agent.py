@@ -11,7 +11,9 @@ from fetch_data import Question
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4-20250514"
+DEFAULT_MODEL = "vertex_ai/claude-sonnet-4@20250514"
+DEFAULT_VERTEX_PROJECT = "itpc-gcp-product-all-claude"
+DEFAULT_VERTEX_LOCATION = "us-east5"
 
 
 def build_prompt(question: Question, today_date: str) -> str:
@@ -89,12 +91,18 @@ def forecast(question: Question, model: str | None = None, today_date: str | Non
 
     prompt = build_prompt(question, today_date)
 
+    vertex_kwargs = {}
+    if model.startswith("vertex_ai/"):
+        vertex_kwargs["vertex_project"] = os.environ.get("VERTEX_PROJECT", DEFAULT_VERTEX_PROJECT)
+        vertex_kwargs["vertex_location"] = os.environ.get("VERTEX_LOCATION", DEFAULT_VERTEX_LOCATION)
+
     try:
         response = litellm.completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=2000,
+            **vertex_kwargs,
         )
         content = response.choices[0].message.content
         return parse_probability(content)
