@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import re
 import time
@@ -101,8 +102,11 @@ def _load_cached_forecast(model: str, question_id: str) -> float | None:
     path = _cache_dir(model) / f"{question_id}.json"
     if not path.exists():
         return None
-    data = json.loads(path.read_text())
-    return float(data["probability"])
+    try:
+        data = json.loads(path.read_text())
+        return float(data["probability"])
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return None
 
 
 def _save_cached_forecast(model: str, question_id: str, probability: float) -> None:
@@ -117,6 +121,8 @@ def _save_cached_forecast(model: str, question_id: str, probability: float) -> N
 
 
 def _format_duration(seconds: float) -> str:
+    if not math.isfinite(seconds):
+        return "--"
     if seconds < 60:
         return f"{int(seconds)}s"
     minutes = int(seconds) // 60
@@ -149,7 +155,10 @@ async def run_baseline_eval(
     n_held_out: int = 2,
 ) -> ScoringResult:
     """Run async evaluation with concurrency, caching, and progress logging."""
-    concurrency = int(os.environ.get("FORECAST_CONCURRENCY", "10"))
+    try:
+        concurrency = max(1, int(os.environ.get("FORECAST_CONCURRENCY", "10")))
+    except (ValueError, TypeError):
+        concurrency = 10
     if not model:
         model = os.environ.get("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
