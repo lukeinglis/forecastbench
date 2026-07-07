@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import os
+import re
+import time
+from pathlib import Path
 from typing import Callable, Protocol
 
-from fetch_data import Question, QuestionSet, Resolution, load_data, join_resolved_questions
+from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions
 from score import ScoringResult, score_forecasts
 
 
 class Forecaster(Protocol):
     def __call__(self, question: Question) -> float: ...
+
+
+class AsyncForecaster(Protocol):
+    async def __call__(self, question: Question) -> float: ...
 
 
 def split_held_out(
@@ -77,6 +87,133 @@ def _print_results(result: ScoringResult) -> None:
     print(f"Overall:  Brier={result.overall_brier:.4f}  Index={result.overall_index:.1f}%")
     print(f"Missing forecasts (defaulted to 0.5): {result.n_missing}")
     print("=" * 50)
+
+
+def _model_slug(model: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", model)
+
+
+def _cache_dir(model: str) -> Path:
+    return Path(".cache") / "forecasts" / _model_slug(model)
+
+
+def _load_cached_forecast(model: str, question_id: str) -> float | None:
+    path = _cache_dir(model) / f"{question_id}.json"
+    if not path.exists():
+        return None
+    data = json.loads(path.read_text())
+    return float(data["probability"])
+
+
+def _save_cached_forecast(model: str, question_id: str, probability: float) -> None:
+    cache = _cache_dir(model)
+    cache.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "probability": probability,
+        "model": model,
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    (cache / f"{question_id}.json").write_text(json.dumps(payload))
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    minutes = int(seconds) // 60
+    secs = int(seconds) % 60
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours = minutes // 60
+    mins = minutes % 60
+    return f"{hours}h{mins:02d}m"
+
+
+def _resolved_to_question(q: ResolvedQuestion) -> Question:
+    return Question(
+        id=q.id,
+        source=q.source,
+        question=q.question,
+        background=q.background,
+        resolution_criteria=q.resolution_criteria,
+        freeze_datetime=q.freeze_datetime,
+        freeze_datetime_value=q.freeze_datetime_value,
+        resolution_dates=q.resolution_dates,
+        url=q.url,
+        combination_of=q.combination_of,
+    )
+
+
+async def run_baseline_eval(
+    forecaster: AsyncForecaster,
+    model: str = "",
+    n_held_out: int = 2,
+) -> ScoringResult:
+    """Run async evaluation with concurrency, caching, and progress logging."""
+    concurrency = int(os.environ.get("FORECAST_CONCURRENCY", "10"))
+    if not model:
+        model = os.environ.get("FORECAST_MODEL", "claude-sonnet-4-20250514")
+
+    question_sets, resolved = load_data()
+    iteration_set, _held_out = split_held_out(question_sets, n_held_out)
+
+    resolutions_by_id = {q.id: q for q in resolved}
+    iteration_resolved = join_resolved_questions(
+        iteration_set,
+        {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
+         for q_id, r in resolutions_by_id.items()},
+    )
+
+    forecasts: dict[str, float] = {}
+    to_forecast: list[ResolvedQuestion] = []
+
+    for q in iteration_resolved:
+        cached = _load_cached_forecast(model, q.id)
+        if cached is not None:
+            forecasts[q.id] = cached
+        else:
+            to_forecast.append(q)
+
+    total = len(iteration_resolved)
+    done = len(forecasts)
+    if done > 0:
+        print(f"Loaded {done} cached forecasts, {len(to_forecast)} remaining")
+
+    semaphore = asyncio.Semaphore(concurrency)
+    start_time = time.monotonic()
+
+    async def forecast_one(q: ResolvedQuestion) -> tuple[str, float]:
+        async with semaphore:
+            question = _resolved_to_question(q)
+            prob = await forecaster(question)
+            _save_cached_forecast(model, q.id, prob)
+            return q.id, prob
+
+    completed = 0
+    log_interval = 50
+    tasks = [asyncio.create_task(forecast_one(q)) for q in to_forecast]
+
+    for coro in asyncio.as_completed(tasks):
+        q_id, prob = await coro
+        forecasts[q_id] = prob
+        done += 1
+        completed += 1
+
+        if completed % log_interval == 0 or completed == len(to_forecast):
+            elapsed = time.monotonic() - start_time
+            pct = done / total * 100 if total > 0 else 100.0
+            if completed > 0:
+                eta = elapsed / completed * (len(to_forecast) - completed)
+            else:
+                eta = 0.0
+            print(
+                f"[{done}/{total}] {pct:.1f}%"
+                f" — elapsed {_format_duration(elapsed)}"
+                f" — ETA {_format_duration(eta)}"
+            )
+
+    result = score_forecasts(forecasts, iteration_resolved)
+    _print_results(result)
+    return result
 
 
 def main() -> None:
