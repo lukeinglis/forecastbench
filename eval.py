@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import math
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Callable, Protocol
 
+from cutoff import CutoffEnvironment
 from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions
 from score import ScoringResult, score_forecasts
 
@@ -20,7 +22,9 @@ class Forecaster(Protocol):
 
 
 class AsyncForecaster(Protocol):
-    async def __call__(self, question: Question) -> float: ...
+    async def __call__(
+        self, question: Question, cutoff: CutoffEnvironment | None = None
+    ) -> float: ...
 
 
 def split_held_out(
@@ -193,7 +197,10 @@ async def run_baseline_eval(
     async def forecast_one(q: ResolvedQuestion) -> tuple[str, float]:
         async with semaphore:
             question = _resolved_to_question(q)
-            prob = await forecaster(question)
+            cutoff: CutoffEnvironment | None = None
+            if q.freeze_datetime:
+                cutoff = CutoffEnvironment(freeze_datetime=q.freeze_datetime)
+            prob = await forecaster(question, cutoff)
             _save_cached_forecast(model, q.id, prob)
             return q.id, prob
 
@@ -226,8 +233,41 @@ async def run_baseline_eval(
 
 
 def main() -> None:
-    from dummy_forecaster import forecast
-    run_eval(forecast)
+    parser = argparse.ArgumentParser(description="ForecastBench evaluation")
+    parser.add_argument("--baseline", action="store_true", help="Run baseline LLM agent")
+    parser.add_argument("--analyze", action="store_true", help="Run error analysis after scoring")
+    args = parser.parse_args()
+
+    if args.baseline:
+        from baseline_agent import aforecast
+        model = os.environ.get("FORECAST_MODEL", "claude-sonnet-4-20250514")
+        asyncio.run(run_baseline_eval(aforecast, model=model))
+
+        if args.analyze:
+            from analyze import run_analysis, save_analysis
+
+            question_sets, resolved = load_data()
+            iteration_set, _ = split_held_out(question_sets)
+            resolutions_by_id = {q.id: q for q in resolved}
+            iteration_resolved = join_resolved_questions(
+                iteration_set,
+                {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
+                 for q_id, r in resolutions_by_id.items()},
+            )
+
+            forecasts: dict[str, float] = {}
+            for q in iteration_resolved:
+                cached = _load_cached_forecast(model, q.id)
+                if cached is not None:
+                    forecasts[q.id] = cached
+
+            analysis = run_analysis(forecasts, iteration_resolved)
+            output_dir = Path("results")
+            save_analysis(analysis, output_dir)
+            print(f"Analysis saved to {output_dir}/analysis.json and {output_dir}/analysis.md")
+    else:
+        from dummy_forecaster import forecast
+        run_eval(forecast)
 
 
 if __name__ == "__main__":
