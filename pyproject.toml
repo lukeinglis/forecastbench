@@ -6,6 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31",
     "pydantic>=2.0",
+    "litellm>=1.0",
+    "tqdm>=4.60",
 ]
 
 [project.scripts]
@@ -14,6 +16,7 @@ forecastbench = "eval:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "hypothesis>=6.0",
     "mypy>=1.0",
     "ruff>=0.4",
@@ -28,3 +31,4 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"

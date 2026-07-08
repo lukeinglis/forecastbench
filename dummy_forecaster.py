@@ -11,5 +11,6 @@ def forecast(question: Question) -> float:
 
 
 if __name__ == "__main__":
+    import asyncio
     from eval import run_eval
-    run_eval(forecast)
+    asyncio.run(run_eval(forecast))
