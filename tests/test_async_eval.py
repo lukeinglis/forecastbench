@@ -173,6 +173,7 @@ class TestAsyncPath:
 
         with patch("eval.CACHE_DIR", tmp_path):
             forecasts = await _run_async(failing_fn, [_make_question("q1")], "test")
+            assert _read_cache("test", "q1") is None
 
         assert forecasts["q1"] == pytest.approx(0.5)
 

@@ -155,7 +155,7 @@ async def _run_async(
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
 
-    concurrency = int(os.getenv("FORECAST_CONCURRENCY", "10"))
+    concurrency = max(1, int(os.getenv("FORECAST_CONCURRENCY", "10")))
     semaphore = asyncio.Semaphore(concurrency)
 
     async def _forecast_one(q: Question) -> tuple[str, float]:
@@ -166,7 +166,7 @@ async def _run_async(
             try:
                 prob = await forecaster(q)
             except Exception:
-                prob = 0.5
+                return q.id, 0.5
         _write_cache(model_slug, q.id, prob)
         return q.id, prob
 
