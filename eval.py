@@ -191,8 +191,72 @@ def _print_results(result: ScoringResult) -> None:
 
 
 def main() -> None:
-    from dummy_forecaster import forecast
-    asyncio.run(run_eval(forecast))
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ForecastBench evaluation")
+    parser.add_argument(
+        "--agent",
+        choices=["dummy", "baseline"],
+        default="dummy",
+        help="Forecaster agent to use (default: dummy)",
+    )
+    args = parser.parse_args()
+
+    if args.agent == "baseline":
+        from baseline_agent import aforecast
+        forecaster: Forecaster = aforecast
+    else:
+        from dummy_forecaster import forecast
+        forecaster = forecast
+
+    result = asyncio.run(run_eval(forecaster))
+
+    if args.agent != "dummy":
+        _run_analysis(result)
+
+
+def _run_analysis(result: ScoringResult) -> None:
+    from analyze import (
+        analyze_by_source,
+        analyze_calibration,
+        analyze_biases,
+        print_analysis,
+        save_analysis,
+    )
+    from fetch_data import load_data
+
+    question_sets, resolved = load_data()
+    iteration_set, _ = split_held_out(question_sets)
+
+    resolutions_by_id = {q.id: q for q in resolved}
+    from fetch_data import Resolution, join_resolved_questions as _join
+
+    iteration_resolved = _join(
+        iteration_set,
+        {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
+         for q_id, r in resolutions_by_id.items()},
+    )
+
+    model_slug = _model_slug()
+    cache_dir = Path(f".cache/forecasts/{model_slug}")
+    forecasts: dict[str, float] = {}
+    if cache_dir.exists():
+        for p in cache_dir.glob("*.json"):
+            cached = _read_cache(model_slug, p.stem)
+            if cached is not None:
+                forecasts[p.stem] = cached
+
+    analysis = {
+        "by_source": analyze_by_source(forecasts, iteration_resolved),
+        "calibration": analyze_calibration(forecasts, iteration_resolved),
+        "biases": analyze_biases(forecasts, iteration_resolved),
+    }
+
+    print_analysis(analysis)
+
+    analysis_path = Path(f".cache/analysis/{model_slug}/analysis.json")
+    save_analysis(analysis, analysis_path)
+    print(f"\nAnalysis saved to {analysis_path}")
 
 
 if __name__ == "__main__":
