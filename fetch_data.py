@@ -28,6 +28,11 @@ class Question(BaseModel):
     resolution_dates: Any = None  # "N/A", null, or list of date strings
     url: str | None = None
     combination_of: list[str] | None = None
+    source_intro: str | None = None
+    freeze_datetime_value_explanation: str | None = None
+    market_info_open_datetime: str | None = None
+    market_info_close_datetime: str | None = None
+    market_info_resolution_criteria: str | None = None
 
     @field_validator("id", mode="before")
     @classmethod
@@ -94,6 +99,11 @@ class ResolvedQuestion(BaseModel):
     resolution_dates: Any = None
     url: str | None = None
     combination_of: list[str] | None = None
+    source_intro: str | None = None
+    freeze_datetime_value_explanation: str | None = None
+    market_info_open_datetime: str | None = None
+    market_info_close_datetime: str | None = None
+    market_info_resolution_criteria: str | None = None
     outcome: int
     resolution_date: str | None = None
     forecast_due_date: str = ""
@@ -199,6 +209,11 @@ def join_resolved_questions(
                         resolution_dates=q.resolution_dates,
                         url=q.url,
                         combination_of=q.combination_of,
+                        source_intro=q.source_intro,
+                        freeze_datetime_value_explanation=q.freeze_datetime_value_explanation,
+                        market_info_open_datetime=q.market_info_open_datetime,
+                        market_info_close_datetime=q.market_info_close_datetime,
+                        market_info_resolution_criteria=q.market_info_resolution_criteria,
                         outcome=r.outcome,  # type: ignore[arg-type]
                         resolution_date=r.resolution_date,
                         forecast_due_date=qs.forecast_due_date,
