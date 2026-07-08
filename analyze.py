@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from fetch_data import ResolvedQuestion
 from score import brier_score, brier_index
@@ -12,13 +13,13 @@ from score import brier_score, brier_index
 def analyze_by_source(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
-) -> dict[str, dict]:
+) -> dict[str, dict[str, object]]:
     by_source: dict[str, list[tuple[float, int]]] = {}
     for q in resolved:
         f = forecasts.get(q.id, 0.5)
         by_source.setdefault(q.source, []).append((f, q.outcome))
 
-    results: dict[str, dict] = {}
+    results: dict[str, dict[str, object]] = {}
     for source, pairs in sorted(by_source.items()):
         bs = sum(brier_score(f, o) for f, o in pairs) / len(pairs)
         results[source] = {
@@ -33,13 +34,13 @@ def analyze_calibration(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
     n_bins: int = 10,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
     if not pairs:
         return []
 
     bin_width = 1.0 / n_bins
-    bins: list[dict] = []
+    bins: list[dict[str, object]] = []
 
     for i in range(n_bins):
         low = i * bin_width
@@ -61,7 +62,7 @@ def analyze_calibration(
 def analyze_biases(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
-) -> dict:
+) -> dict[str, object]:
     pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
     if not pairs:
         return {"mean_forecast": 0.0, "mean_outcome": 0.0, "bias": 0.0, "low_bin": {}, "high_bin": {}}
@@ -73,7 +74,7 @@ def analyze_biases(
     low_pairs = [(f, o) for f, o in pairs if f < 0.3]
     high_pairs = [(f, o) for f, o in pairs if f > 0.7]
 
-    def _bin_stats(bp: list[tuple[float, int]]) -> dict:
+    def _bin_stats(bp: list[tuple[float, int]]) -> dict[str, object]:
         if not bp:
             return {"mean_predicted": 0.0, "mean_observed": 0.0, "count": 0, "brier": 0.0}
         bfs, bos = zip(*bp)
@@ -94,7 +95,7 @@ def analyze_biases(
     }
 
 
-def print_analysis(analysis: dict) -> None:
+def print_analysis(analysis: dict[str, Any]) -> None:
     if "by_source" in analysis:
         print("\n--- Performance by Source ---")
         for source, stats in analysis["by_source"].items():
@@ -121,7 +122,7 @@ def print_analysis(analysis: dict) -> None:
             print(f"  High (>0.7):    predicted={b['high_bin']['mean_predicted']:.3f}  observed={b['high_bin']['mean_observed']:.3f}  n={b['high_bin']['count']}")
 
 
-def save_analysis(analysis: dict, path: str | Path) -> None:
+def save_analysis(analysis: dict[str, Any], path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(analysis, indent=2))

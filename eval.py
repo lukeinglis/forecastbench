@@ -15,7 +15,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import Question, QuestionSet, Resolution, load_data, join_resolved_questions  # noqa: E402
+from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions  # noqa: E402
 from score import ScoringResult, score_forecasts  # noqa: E402
 
 CACHE_DIR = Path(".cache/forecasts")
@@ -37,7 +37,7 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
 
 
 def _model_slug() -> str:
-    raw = os.getenv("FORECASTER_MODEL", "default")
+    raw = os.getenv("FORECAST_MODEL", "default")
     return re.sub(r"[^\w\-.]", "_", raw)
 
 
@@ -87,12 +87,12 @@ def split_held_out(
     return iteration_set, held_out_set
 
 
-def _build_question(q: Question | object) -> Question:
+def _build_question(q: Question | ResolvedQuestion) -> Question:
     """Build a Question from a ResolvedQuestion or Question-like object."""
     return Question(
-        id=q.id,  # type: ignore[attr-defined]
-        source=q.source,  # type: ignore[attr-defined]
-        question=q.question,  # type: ignore[attr-defined]
+        id=q.id,
+        source=q.source,
+        question=q.question,
         background=getattr(q, "background", ""),
         resolution_criteria=getattr(q, "resolution_criteria", ""),
         freeze_datetime=getattr(q, "freeze_datetime", None),

@@ -53,7 +53,7 @@ class Question(BaseModel):
             return None
         if isinstance(v, list):
             return [x["id"] if isinstance(x, dict) else str(x) for x in v]
-        return v
+        return list(v) if isinstance(v, (list, tuple)) else None
 
 
 class QuestionSet(BaseModel):

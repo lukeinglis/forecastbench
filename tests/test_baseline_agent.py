@@ -113,7 +113,7 @@ class TestForecastSync:
 
         mock_litellm.completion.assert_called_once()
         call_kwargs = mock_litellm.completion.call_args
-        assert call_kwargs.kwargs["temperature"] == 1.0
+        assert call_kwargs.kwargs["temperature"] == 0.3
         assert call_kwargs.kwargs["timeout"] == 60
         assert result == pytest.approx(0.73)
 
@@ -135,7 +135,7 @@ class TestModelConfig:
     def test_default_model(self) -> None:
         assert "claude" in MODEL.lower() or "sonnet" in MODEL.lower()
 
-    @patch.dict("os.environ", {"FORECASTER_MODEL": "gpt-4o"})
+    @patch.dict("os.environ", {"FORECAST_MODEL": "gpt-4o"})
     def test_model_configurable_via_env(self) -> None:
         import importlib
         import baseline_agent

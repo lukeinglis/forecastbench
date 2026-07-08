@@ -10,7 +10,7 @@ import litellm
 from cutoff import CutoffEnvironment
 from fetch_data import Question
 
-MODEL = os.getenv("FORECASTER_MODEL", "claude-sonnet-4-20250514")
+MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
 PROMPT_TEMPLATE = """You are an expert superforecaster with a track record of well-calibrated probabilistic predictions. Your goal is to estimate the probability that the following question resolves to YES.
 
@@ -70,7 +70,7 @@ def forecast(question: Question) -> float:
     response = litellm.completion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=1.0,
+        temperature=0.3,
         timeout=60,
     )
     text = response.choices[0].message.content or ""
@@ -82,7 +82,7 @@ async def aforecast(question: Question) -> float:
     response = await litellm.acompletion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=1.0,
+        temperature=0.3,
         timeout=60,
     )
     text = response.choices[0].message.content or ""
