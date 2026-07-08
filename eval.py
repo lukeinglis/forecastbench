@@ -25,11 +25,11 @@ MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
 
 
 class SyncForecaster(Protocol):
-    def __call__(self, question: Question) -> float: ...
+    def __call__(self, question: Question, resolution_date: str | None = None) -> float: ...
 
 
 class AsyncForecaster(Protocol):
-    async def __call__(self, question: Question) -> float: ...
+    async def __call__(self, question: Question, resolution_date: str | None = None) -> float: ...
 
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
@@ -39,7 +39,7 @@ def _has_multi_horizon(question: Question) -> bool:
     if question.source.lower() in MARKET_SOURCES:
         return False
     rd = question.resolution_dates
-    return isinstance(rd, list) and len(rd) > 0
+    return isinstance(rd, list) and any(d for d in rd)
 
 
 def _expand_resolved_for_horizons(
@@ -201,7 +201,10 @@ def _run_sync(
                 if cached is not None:
                     forecasts[composite_key] = cached
                     continue
-                prob = forecaster(q, resolution_date=date_str)  # type: ignore[call-arg]
+                try:
+                    prob = forecaster(q, resolution_date=date_str)
+                except Exception:
+                    prob = 0.5
                 forecasts[composite_key] = prob
                 _write_cache(model_slug, composite_key, prob)
         else:
@@ -236,7 +239,7 @@ async def _run_async(
         async with semaphore:
             try:
                 if resolution_date is not None:
-                    prob = await forecaster(q, resolution_date=resolution_date)  # type: ignore[call-arg]
+                    prob = await forecaster(q, resolution_date=resolution_date)
                 else:
                     prob = await forecaster(q)
             except Exception:
