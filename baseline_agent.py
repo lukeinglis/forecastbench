@@ -16,7 +16,7 @@ PROMPT_TEMPLATE = """You are an expert superforecaster with a track record of we
 
 {temporal_context}
 
-Question: {question}
+{source_context}{resolution_date_section}Question: {question}
 
 {background_section}{criteria_section}
 
@@ -31,7 +31,10 @@ Your final answer MUST be a single probability between 0.01 and 0.99 on its own 
 Probability: <number>"""
 
 
-def _build_prompt(question: Question) -> str:
+def _build_prompt(
+    question: Question,
+    resolution_date: str | None = None,
+) -> str:
     if question.freeze_datetime:
         env = CutoffEnvironment(question.freeze_datetime)
         prepared = env.prepare_question(question)
@@ -39,6 +42,18 @@ def _build_prompt(question: Question) -> str:
     else:
         prepared = question
         temporal_context = ""
+
+    source_context = (
+        f"Source Context: {prepared.source_intro}\n\n"
+        if getattr(prepared, "source_intro", None)
+        else ""
+    )
+
+    resolution_date_section = (
+        f"Target resolution date: {resolution_date}\n\n"
+        if resolution_date
+        else ""
+    )
 
     background_section = f"Background: {prepared.background}\n" if prepared.background else ""
     criteria_section = (
@@ -52,6 +67,8 @@ def _build_prompt(question: Question) -> str:
         question=prepared.question,
         background_section=background_section,
         criteria_section=criteria_section,
+        source_context=source_context,
+        resolution_date_section=resolution_date_section,
     )
 
 
@@ -65,8 +82,11 @@ def _parse_probability(text: str) -> float:
     return 0.5
 
 
-def forecast(question: Question) -> float:
-    prompt = _build_prompt(question)
+def forecast(
+    question: Question,
+    resolution_date: str | None = None,
+) -> float:
+    prompt = _build_prompt(question, resolution_date=resolution_date)
     response = litellm.completion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
@@ -77,8 +97,11 @@ def forecast(question: Question) -> float:
     return _parse_probability(text)
 
 
-async def aforecast(question: Question) -> float:
-    prompt = _build_prompt(question)
+async def aforecast(
+    question: Question,
+    resolution_date: str | None = None,
+) -> float:
+    prompt = _build_prompt(question, resolution_date=resolution_date)
     response = await litellm.acompletion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],

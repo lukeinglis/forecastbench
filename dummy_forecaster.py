@@ -5,7 +5,7 @@ from __future__ import annotations
 from fetch_data import Question
 
 
-def forecast(question: Question) -> float:
+def forecast(question: Question, resolution_date: str | None = None) -> float:
     """Return 0.5 regardless of the question."""
     return 0.5
 

@@ -21,15 +21,65 @@ from score import ScoringResult, score_forecasts  # noqa: E402
 CACHE_DIR = Path(".cache/forecasts")
 
 
+MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
+
+
 class SyncForecaster(Protocol):
-    def __call__(self, question: Question) -> float: ...
+    def __call__(self, question: Question, resolution_date: str | None = None) -> float: ...
 
 
 class AsyncForecaster(Protocol):
-    async def __call__(self, question: Question) -> float: ...
+    async def __call__(self, question: Question, resolution_date: str | None = None) -> float: ...
 
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
+
+
+def _has_multi_horizon(question: Question) -> bool:
+    if question.source.lower() in MARKET_SOURCES:
+        return False
+    rd = question.resolution_dates
+    return isinstance(rd, list) and any(d for d in rd)
+
+
+def _expand_resolved_for_horizons(
+    resolved: list[ResolvedQuestion],
+) -> list[ResolvedQuestion]:
+    expanded: list[ResolvedQuestion] = []
+    for rq in resolved:
+        if rq.source.lower() in MARKET_SOURCES:
+            expanded.append(rq)
+            continue
+        rd = rq.resolution_dates
+        if not isinstance(rd, list) or len(rd) == 0:
+            expanded.append(rq)
+            continue
+        for date_str in rd:
+            composite_id = f"{rq.id}_{date_str}"
+            expanded.append(
+                ResolvedQuestion(
+                    id=composite_id,
+                    source=rq.source,
+                    question=rq.question,
+                    background=rq.background,
+                    resolution_criteria=rq.resolution_criteria,
+                    freeze_datetime=rq.freeze_datetime,
+                    freeze_datetime_value=rq.freeze_datetime_value,
+                    resolution_dates=rq.resolution_dates,
+                    url=rq.url,
+                    combination_of=rq.combination_of,
+                    source_intro=rq.source_intro,
+                    freeze_datetime_value_explanation=rq.freeze_datetime_value_explanation,
+                    market_info_open_datetime=rq.market_info_open_datetime,
+                    market_info_close_datetime=rq.market_info_close_datetime,
+                    market_info_resolution_criteria=rq.market_info_resolution_criteria,
+                    outcome=rq.outcome,
+                    resolution_date=date_str,
+                    forecast_due_date=rq.forecast_due_date,
+                    question_set=rq.question_set,
+                )
+            )
+    return expanded
 
 
 def is_async_forecaster(forecaster: Forecaster) -> bool:
@@ -100,6 +150,11 @@ def _build_question(q: Question | ResolvedQuestion) -> Question:
         resolution_dates=getattr(q, "resolution_dates", None),
         url=getattr(q, "url", None),
         combination_of=getattr(q, "combination_of", None),
+        source_intro=getattr(q, "source_intro", None),
+        freeze_datetime_value_explanation=getattr(q, "freeze_datetime_value_explanation", None),
+        market_info_open_datetime=getattr(q, "market_info_open_datetime", None),
+        market_info_close_datetime=getattr(q, "market_info_close_datetime", None),
+        market_info_resolution_criteria=getattr(q, "market_info_resolution_criteria", None),
     )
 
 
@@ -126,7 +181,8 @@ async def run_eval(
     else:
         forecasts = _run_sync(forecaster, questions, model_slug)  # type: ignore[arg-type]
 
-    result = score_forecasts(forecasts, iteration_resolved)
+    expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
+    result = score_forecasts(forecasts, expanded_resolved)
     _print_results(result)
     return result
 
@@ -138,13 +194,27 @@ def _run_sync(
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
-        cached = _read_cache(model_slug, q.id)
-        if cached is not None:
-            forecasts[q.id] = cached
-            continue
-        prob = forecaster(q)
-        forecasts[q.id] = prob
-        _write_cache(model_slug, q.id, prob)
+        if _has_multi_horizon(q):
+            for date_str in q.resolution_dates:
+                composite_key = f"{q.id}_{date_str}"
+                cached = _read_cache(model_slug, composite_key)
+                if cached is not None:
+                    forecasts[composite_key] = cached
+                    continue
+                try:
+                    prob = forecaster(q, resolution_date=date_str)
+                except Exception:
+                    prob = 0.5
+                forecasts[composite_key] = prob
+                _write_cache(model_slug, composite_key, prob)
+        else:
+            cached = _read_cache(model_slug, q.id)
+            if cached is not None:
+                forecasts[q.id] = cached
+                continue
+            prob = forecaster(q)
+            forecasts[q.id] = prob
+            _write_cache(model_slug, q.id, prob)
     return forecasts
 
 
@@ -158,19 +228,34 @@ async def _run_async(
     concurrency = max(1, int(os.getenv("FORECAST_CONCURRENCY", "10")))
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def _forecast_one(q: Question) -> tuple[str, float]:
-        cached = _read_cache(model_slug, q.id)
+    async def _forecast_one(
+        q: Question,
+        cache_key: str,
+        resolution_date: str | None = None,
+    ) -> tuple[str, float]:
+        cached = _read_cache(model_slug, cache_key)
         if cached is not None:
-            return q.id, cached
+            return cache_key, cached
         async with semaphore:
             try:
-                prob = await forecaster(q)
+                if resolution_date is not None:
+                    prob = await forecaster(q, resolution_date=resolution_date)
+                else:
+                    prob = await forecaster(q)
             except Exception:
-                return q.id, 0.5
-        _write_cache(model_slug, q.id, prob)
-        return q.id, prob
+                return cache_key, 0.5
+        _write_cache(model_slug, cache_key, prob)
+        return cache_key, prob
 
-    tasks = [_forecast_one(q) for q in questions]
+    tasks = []
+    for q in questions:
+        if _has_multi_horizon(q):
+            for date_str in q.resolution_dates:
+                composite_key = f"{q.id}_{date_str}"
+                tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
+        else:
+            tasks.append(_forecast_one(q, q.id))
+
     if tasks:
         results = await tqdm_asyncio.gather(*tasks, desc="Forecasting")
     else:
