@@ -1,9 +1,14 @@
-"""Brier score and Brier Index scoring for ForecastBench."""
+"""Brier score and Brier Index scoring for ForecastBench.
+
+Implements the difficulty-adjusted Brier score from:
+  Kucinskas, Bastani & Karger, "ForecastBench: Updated Ranking Methodology"
+  https://www.forecastbench.org/assets/pdfs/forecastbench_updated_methodology.pdf
+"""
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fetch_data import ResolvedQuestion
 
@@ -19,6 +24,8 @@ class ScoringResult:
     n_dataset: int
     n_market: int
     n_missing: int
+    difficulty_adjusted: bool = False
+    question_effects: dict[str, float] = field(default_factory=dict)
 
 
 def _validate_forecast(forecast: float) -> float:
@@ -62,45 +69,244 @@ def _is_market_question(q: ResolvedQuestion) -> bool:
     return any(s in source_lower for s in ("metaculus", "polymarket", "manifold", "infer"))
 
 
+def _estimate_difficulty_effects_ols(
+    all_forecasts: dict[str, dict[str, float]],
+    outcomes: dict[str, int],
+    question_ids: list[str],
+) -> dict[str, float]:
+    """Estimate question-difficulty fixed effects via OLS on Brier scores.
+
+    Uses the two-way fixed-effects model: b_{i,j} = α_i + γ_j + ε_{i,j}
+    The OLS estimate of γ_j equals the mean Brier score on question j
+    across all forecasters who answered it, minus the grand mean.
+    With demeaned data (forecaster effects removed), γ̂_j = mean_j(b_{i,j}) - grand_mean.
+    """
+    if not question_ids or not all_forecasts:
+        return {}
+
+    question_scores: dict[str, list[float]] = {qid: [] for qid in question_ids}
+    for forecaster_id, fcast_map in all_forecasts.items():
+        for qid in question_ids:
+            if qid in fcast_map and qid in outcomes:
+                bs = (fcast_map[qid] - outcomes[qid]) ** 2
+                question_scores[qid].append(bs)
+
+    question_means: dict[str, float] = {}
+    for qid, scores in question_scores.items():
+        if scores:
+            question_means[qid] = sum(scores) / len(scores)
+
+    if not question_means:
+        return {}
+
+    grand_mean = sum(question_means.values()) / len(question_means)
+    return {qid: mean - grand_mean for qid, mean in question_means.items()}
+
+
+def _build_market_effects(
+    all_forecasts: dict[str, dict[str, float]],
+    outcomes: dict[str, int],
+    market_qids: list[str],
+    market_weight: float,
+    market_forecasts: dict[str, float] | None,
+) -> dict[str, float]:
+    """Compute difficulty effects for market questions using weighted estimator."""
+    if not market_qids:
+        return {}
+    ols_market = _estimate_difficulty_effects_ols(all_forecasts, outcomes, market_qids)
+    if market_weight == 0.0:
+        return ols_market
+    if market_weight == 1.0 and market_forecasts:
+        raw: dict[str, float] = {}
+        for qid in market_qids:
+            if qid in outcomes and qid in market_forecasts:
+                raw[qid] = (market_forecasts[qid] - outcomes[qid]) ** 2
+        if not raw:
+            return {}
+        raw_mean = sum(raw.values()) / len(raw)
+        return {qid: bs - raw_mean for qid, bs in raw.items()}
+    if market_forecasts:
+        raw_mkt: dict[str, float] = {}
+        effects: dict[str, float] = {}
+        for qid in market_qids:
+            ols_val = ols_market.get(qid, 0.0)
+            if qid in outcomes and qid in market_forecasts:
+                mkt_bs = (market_forecasts[qid] - outcomes[qid]) ** 2
+                raw_mkt[qid] = mkt_bs
+            else:
+                effects[qid] = ols_val
+        if raw_mkt:
+            mkt_mean = sum(raw_mkt.values()) / len(raw_mkt)
+            for qid, mkt_bs in raw_mkt.items():
+                ols_val = ols_market.get(qid, 0.0)
+                centered_mkt = mkt_bs - mkt_mean
+                effects[qid] = market_weight * centered_mkt + (1.0 - market_weight) * ols_val
+        return effects
+    return ols_market
+
+
+def adjust_for_difficulty(
+    all_forecasts: dict[str, dict[str, float]],
+    resolved: list[ResolvedQuestion],
+    market_weight: float = 1.0,
+    market_forecasts: dict[str, float] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Apply difficulty-adjusted Brier scoring per ForecastBench methodology.
+
+    Args:
+        all_forecasts: {forecaster_id: {question_id: forecast}} for all forecasters.
+        resolved: Resolved questions with outcomes.
+        market_weight: Weight on market-based difficulty for market questions (w_mkt).
+            ForecastBench uses 1.0 in practice.
+        market_forecasts: {question_id: market_probability} for market questions.
+            Required when market_weight > 0 and market questions exist.
+
+    Returns:
+        {forecaster_id: {question_id: adjusted_brier_score}} with rescaled scores.
+    """
+    if not all_forecasts or not resolved:
+        return {}
+
+    outcomes = {q.id: q.outcome for q in resolved}
+    dataset_qids = [q.id for q in resolved if not _is_market_question(q)]
+    market_qids = [q.id for q in resolved if _is_market_question(q)]
+
+    dataset_effects = _estimate_difficulty_effects_ols(
+        all_forecasts, outcomes, dataset_qids,
+    )
+    market_effects = _build_market_effects(
+        all_forecasts, outcomes, market_qids, market_weight, market_forecasts,
+    )
+
+    all_effects = {**dataset_effects, **market_effects}
+
+    raw_brier: dict[str, dict[str, float]] = {}
+    for fid, fcast_map in all_forecasts.items():
+        raw_brier[fid] = {}
+        for qid in fcast_map:
+            if qid in outcomes:
+                raw_brier[fid][qid] = (fcast_map[qid] - outcomes[qid]) ** 2
+
+    unscaled: dict[str, dict[str, float]] = {}
+    for fid, scores in raw_brier.items():
+        unscaled[fid] = {}
+        for qid, bs in scores.items():
+            effect = all_effects.get(qid, 0.0)
+            unscaled[fid][qid] = bs - effect
+
+    constant_half_scores: list[float] = []
+    for q in resolved:
+        bs_half = (0.5 - q.outcome) ** 2
+        effect = all_effects.get(q.id, 0.0)
+        constant_half_scores.append(bs_half - effect)
+
+    if constant_half_scores:
+        mean_half_unscaled = sum(constant_half_scores) / len(constant_half_scores)
+    else:
+        mean_half_unscaled = 0.0
+
+    shift = 0.25 - mean_half_unscaled
+
+    adjusted: dict[str, dict[str, float]] = {}
+    for fid, scores in unscaled.items():
+        adjusted[fid] = {}
+        for qid, val in scores.items():
+            adjusted[fid][qid] = max(0.0, min(1.0, val + shift))
+
+    return adjusted
+
+
 def score_forecasts(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
+    *,
+    difficulty_adjusted: bool = True,
+    all_forecasts: dict[str, dict[str, float]] | None = None,
+    market_weight: float = 1.0,
+    market_forecasts: dict[str, float] | None = None,
 ) -> ScoringResult:
     """Score forecasts against resolved questions.
 
     Missing forecasts default to 0.5 per ForecastBench rules.
+    When difficulty_adjusted=True and all_forecasts is provided,
+    applies the ForecastBench two-way fixed-effects adjustment.
     """
     if not resolved:
         raise ValueError("No resolved questions to score")
 
-    dataset_pairs: list[tuple[float, int]] = []
-    market_pairs: list[tuple[float, int]] = []
     n_missing = 0
-
+    complete_forecasts: dict[str, float] = {}
     for q in resolved:
         if q.id in forecasts:
-            f = forecasts[q.id]
+            complete_forecasts[q.id] = forecasts[q.id]
         else:
-            f = 0.5
+            complete_forecasts[q.id] = 0.5
             n_missing += 1
 
+    for f in complete_forecasts.values():
         _validate_forecast(f)
+    for q in resolved:
         _validate_outcome(q.outcome)
 
-        if _is_market_question(q):
-            market_pairs.append((f, q.outcome))
-        else:
-            dataset_pairs.append((f, q.outcome))
+    question_effects: dict[str, float] = {}
 
-    ds_brier = mean_brier_score(dataset_pairs) if dataset_pairs else 0.0
-    ds_index = brier_index(ds_brier) if dataset_pairs else 0.0
-    mk_brier = mean_brier_score(market_pairs) if market_pairs else 0.0
-    mk_index = brier_index(mk_brier) if market_pairs else 0.0
+    if difficulty_adjusted and all_forecasts and len(all_forecasts) > 1:
+        forecaster_id = "_target_"
+        pool = dict(all_forecasts)
+        pool[forecaster_id] = complete_forecasts
+        adjusted_scores = adjust_for_difficulty(
+            pool, resolved,
+            market_weight=market_weight,
+            market_forecasts=market_forecasts,
+        )
+        target_adjusted = adjusted_scores.get(forecaster_id, {})
+
+        outcomes = {q.id: q.outcome for q in resolved}
+        ds_qids = [q.id for q in resolved if not _is_market_question(q)]
+        mk_qids = [q.id for q in resolved if _is_market_question(q)]
+        ds_eff = _estimate_difficulty_effects_ols(pool, outcomes, ds_qids)
+        mk_eff = _build_market_effects(
+            pool, outcomes, mk_qids, market_weight, market_forecasts,
+        )
+        question_effects = {**ds_eff, **mk_eff}
+
+        dataset_scores: list[float] = []
+        market_scores: list[float] = []
+        for q in resolved:
+            adj = target_adjusted.get(q.id)
+            if adj is None:
+                adj = brier_score(complete_forecasts[q.id], q.outcome)
+            if _is_market_question(q):
+                market_scores.append(adj)
+            else:
+                dataset_scores.append(adj)
+
+        ds_brier = (sum(dataset_scores) / len(dataset_scores)) if dataset_scores else 0.0
+        mk_brier = (sum(market_scores) / len(market_scores)) if market_scores else 0.0
+    else:
+        dataset_pairs: list[tuple[float, int]] = []
+        market_pairs: list[tuple[float, int]] = []
+
+        for q in resolved:
+            f = complete_forecasts[q.id]
+            if _is_market_question(q):
+                market_pairs.append((f, q.outcome))
+            else:
+                dataset_pairs.append((f, q.outcome))
+
+        ds_brier = mean_brier_score(dataset_pairs) if dataset_pairs else 0.0
+        mk_brier = mean_brier_score(market_pairs) if market_pairs else 0.0
+
+    n_dataset = len([q for q in resolved if not _is_market_question(q)])
+    n_market = len([q for q in resolved if _is_market_question(q)])
+
+    ds_index = brier_index(ds_brier) if n_dataset > 0 else 0.0
+    mk_index = brier_index(mk_brier) if n_market > 0 else 0.0
 
     components = []
-    if dataset_pairs:
+    if n_dataset > 0:
         components.append(ds_brier)
-    if market_pairs:
+    if n_market > 0:
         components.append(mk_brier)
 
     if components:
@@ -115,7 +321,9 @@ def score_forecasts(
         market_index=mk_index,
         overall_brier=overall_bs,
         overall_index=brier_index(overall_bs),
-        n_dataset=len(dataset_pairs),
-        n_market=len(market_pairs),
+        n_dataset=n_dataset,
+        n_market=n_market,
         n_missing=n_missing,
+        difficulty_adjusted=difficulty_adjusted and all_forecasts is not None and len(all_forecasts or {}) > 1,
+        question_effects=question_effects,
     )
