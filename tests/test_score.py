@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from fetch_data import ResolvedQuestion
 from score import (
+    _build_market_effects,
     _estimate_difficulty_effects_ols,
     adjust_for_difficulty,
     brier_index,
@@ -215,8 +216,8 @@ class TestAdjustForDifficulty:
             "good": {"q1": 0.9, "q2": 0.1, "q3": 0.8},
             "bad": {"q1": 0.2, "q2": 0.8, "q3": 0.3},
         }
-        adjusted = adjust_for_difficulty(forecasts, qs)
-        half_scores = adjusted["half"]
+        result = adjust_for_difficulty(forecasts, qs)
+        half_scores = result.adjusted_scores["half"]
         mean_adj = sum(half_scores.values()) / len(half_scores)
         assert abs(mean_adj - 0.25) < 1e-10
 
@@ -233,7 +234,8 @@ class TestAdjustForDifficulty:
             "half": {"q1": 0.5, "q2": 0.5, "q3": 0.5, "q4": 0.5},
             "bad": {"q1": 0.1, "q2": 0.9, "q3": 0.2, "q4": 0.8},
         }
-        adjusted = adjust_for_difficulty(forecasts, qs)
+        result = adjust_for_difficulty(forecasts, qs)
+        adjusted = result.adjusted_scores
         good_mean = sum(adjusted["good"].values()) / len(adjusted["good"])
         half_mean = sum(adjusted["half"].values()) / len(adjusted["half"])
         assert good_mean < half_mean
@@ -261,7 +263,8 @@ class TestAdjustForDifficulty:
             "A": {"q1": 0.9, "q2": 0.1},
             "B": {"q1": 0.7, "q2": 0.3},
         }
-        adjusted = adjust_for_difficulty(forecasts, qs)
+        result = adjust_for_difficulty(forecasts, qs)
+        adjusted = result.adjusted_scores
         assert abs(adjusted["A"]["q1"] - 0.01) < 1e-10
         assert abs(adjusted["A"]["q2"] - 0.01) < 1e-10
         assert abs(adjusted["B"]["q1"] - 0.09) < 1e-10
@@ -293,12 +296,15 @@ class TestAdjustForDifficulty:
             "A": {"q1": 0.6, "q2": 0.9},
             "B": {"q1": 0.5, "q2": 0.95},
         }
-        adjusted = adjust_for_difficulty(forecasts, qs)
+        result = adjust_for_difficulty(forecasts, qs)
+        adjusted = result.adjusted_scores
         assert abs(adjusted["A"]["q1"] - 0.060625) < 1e-10
         assert abs(adjusted["A"]["q2"] - 0.109375) < 1e-10
 
     def test_empty_returns_empty(self) -> None:
-        assert adjust_for_difficulty({}, []) == {}
+        result = adjust_for_difficulty({}, [])
+        assert result.adjusted_scores == {}
+        assert result.question_effects == {}
 
 
 class TestScoreForecastsDifficultyAdjusted:
@@ -427,7 +433,114 @@ class TestDifficultyAdjustedPropertyBased:
         fcast_map_a = {f"q{i}": f for i, (f, _) in enumerate(forecasts)}
         fcast_map_b = {f"q{i}": 0.5 for i in range(len(forecasts))}
         all_f = {"A": fcast_map_a, "B": fcast_map_b}
-        adjusted = adjust_for_difficulty(all_f, qs)
-        for fid, scores in adjusted.items():
+        result = adjust_for_difficulty(all_f, qs)
+        for fid, scores in result.adjusted_scores.items():
             for qid, s in scores.items():
                 assert 0.0 <= s <= 1.0, f"{fid}/{qid}: {s} out of [0,1]"
+
+
+class TestMarketEffects:
+    def test_market_effects_are_centered(self) -> None:
+        """With market_weight=1.0 and market_forecasts, effects should sum to ~0."""
+        qs = [
+            _make_resolved("m1", "metaculus", 1),
+            _make_resolved("m2", "polymarket", 0),
+            _make_resolved("m3", "metaculus", 1),
+        ]
+        forecasts = {
+            "A": {"m1": 0.8, "m2": 0.2, "m3": 0.7},
+            "B": {"m1": 0.6, "m2": 0.4, "m3": 0.5},
+        }
+        outcomes = {q.id: q.outcome for q in qs}
+        market_forecasts = {"m1": 0.75, "m2": 0.25, "m3": 0.65}
+        effects = _build_market_effects(
+            forecasts, outcomes, ["m1", "m2", "m3"],
+            market_weight=1.0, market_forecasts=market_forecasts,
+        )
+        assert len(effects) == 3
+        assert abs(sum(effects.values())) < 1e-10
+
+    def test_blended_market_weight(self) -> None:
+        """market_weight=0.5 should interpolate between OLS and market effects."""
+        qs = [
+            _make_resolved("m1", "metaculus", 1),
+            _make_resolved("m2", "polymarket", 0),
+        ]
+        forecasts = {
+            "A": {"m1": 0.9, "m2": 0.1},
+            "B": {"m1": 0.6, "m2": 0.4},
+        }
+        outcomes = {q.id: q.outcome for q in qs}
+        market_forecasts = {"m1": 0.8, "m2": 0.2}
+
+        ols_effects = _build_market_effects(
+            forecasts, outcomes, ["m1", "m2"],
+            market_weight=0.0, market_forecasts=market_forecasts,
+        )
+        mkt_effects = _build_market_effects(
+            forecasts, outcomes, ["m1", "m2"],
+            market_weight=1.0, market_forecasts=market_forecasts,
+        )
+        blended_effects = _build_market_effects(
+            forecasts, outcomes, ["m1", "m2"],
+            market_weight=0.5, market_forecasts=market_forecasts,
+        )
+        for qid in ["m1", "m2"]:
+            expected = 0.5 * mkt_effects[qid] + 0.5 * ols_effects[qid]
+            assert abs(blended_effects[qid] - expected) < 1e-10
+
+    def test_only_market_questions(self) -> None:
+        """When all questions are market-type, dataset_index should be 0.0."""
+        qs = [
+            _make_resolved("m1", "metaculus", 1),
+            _make_resolved("m2", "polymarket", 0),
+        ]
+        peer_pool = {
+            "p1": {"m1": 0.7, "m2": 0.3},
+            "p2": {"m1": 0.6, "m2": 0.4},
+        }
+        result = score_forecasts(
+            {"m1": 0.8, "m2": 0.2}, qs,
+            difficulty_adjusted=True, all_forecasts=peer_pool,
+        )
+        assert result.dataset_index == 0.0
+        assert result.n_dataset == 0
+        assert result.n_market == 2
+
+    def test_only_dataset_questions(self) -> None:
+        """When all questions are dataset-type, market_index should be 0.0."""
+        qs = [
+            _make_resolved("d1", "acled", 1),
+            _make_resolved("d2", "acled", 0),
+        ]
+        peer_pool = {
+            "p1": {"d1": 0.7, "d2": 0.3},
+            "p2": {"d1": 0.6, "d2": 0.4},
+        }
+        result = score_forecasts(
+            {"d1": 0.8, "d2": 0.2}, qs,
+            difficulty_adjusted=True, all_forecasts=peer_pool,
+        )
+        assert result.market_index == 0.0
+        assert result.n_market == 0
+        assert result.n_dataset == 2
+
+    def test_unbalanced_panel(self) -> None:
+        """Forecasters answering different question subsets should still produce valid scores."""
+        qs = [
+            _make_resolved("q1", "acled", 1),
+            _make_resolved("q2", "acled", 0),
+            _make_resolved("q3", "acled", 1),
+        ]
+        peer_pool = {
+            "p1": {"q1": 0.8, "q2": 0.3},
+            "p2": {"q2": 0.4, "q3": 0.7},
+            "p3": {"q1": 0.6, "q3": 0.9},
+        }
+        result = score_forecasts(
+            {"q1": 0.9, "q2": 0.1, "q3": 0.85}, qs,
+            difficulty_adjusted=True, all_forecasts=peer_pool,
+        )
+        assert result.difficulty_adjusted
+        assert 0.0 <= result.dataset_brier <= 1.0
+        assert 0.0 <= result.dataset_index <= 100.0
