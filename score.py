@@ -9,8 +9,15 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import NamedTuple
+from uuid import uuid4
 
 from fetch_data import ResolvedQuestion
+
+
+class AdjustmentResult(NamedTuple):
+    adjusted_scores: dict[str, dict[str, float]]
+    question_effects: dict[str, float]
 
 
 @dataclass
@@ -99,7 +106,8 @@ def _estimate_difficulty_effects_ols(
     if not question_means:
         return {}
 
-    grand_mean = sum(question_means.values()) / len(question_means)
+    all_scores = [s for scores in question_scores.values() for s in scores]
+    grand_mean = sum(all_scores) / len(all_scores) if all_scores else 0.0
     return {qid: mean - grand_mean for qid, mean in question_means.items()}
 
 
@@ -150,7 +158,7 @@ def adjust_for_difficulty(
     resolved: list[ResolvedQuestion],
     market_weight: float = 1.0,
     market_forecasts: dict[str, float] | None = None,
-) -> dict[str, dict[str, float]]:
+) -> AdjustmentResult:
     """Apply difficulty-adjusted Brier scoring per ForecastBench methodology.
 
     Args:
@@ -162,10 +170,10 @@ def adjust_for_difficulty(
             Required when market_weight > 0 and market questions exist.
 
     Returns:
-        {forecaster_id: {question_id: adjusted_brier_score}} with rescaled scores.
+        AdjustmentResult with adjusted_scores and question_effects.
     """
     if not all_forecasts or not resolved:
-        return {}
+        return AdjustmentResult(adjusted_scores={}, question_effects={})
 
     outcomes = {q.id: q.outcome for q in resolved}
     dataset_qids = [q.id for q in resolved if not _is_market_question(q)]
@@ -213,7 +221,7 @@ def adjust_for_difficulty(
         for qid, val in scores.items():
             adjusted[fid][qid] = max(0.0, min(1.0, val + shift))
 
-    return adjusted
+    return AdjustmentResult(adjusted_scores=adjusted, question_effects=all_effects)
 
 
 def score_forecasts(
@@ -251,24 +259,16 @@ def score_forecasts(
     question_effects: dict[str, float] = {}
 
     if difficulty_adjusted and all_forecasts and len(all_forecasts) > 1:
-        forecaster_id = "_target_"
+        forecaster_id = f"_target_{uuid4().hex}"
         pool = dict(all_forecasts)
         pool[forecaster_id] = complete_forecasts
-        adjusted_scores = adjust_for_difficulty(
+        adj_result = adjust_for_difficulty(
             pool, resolved,
             market_weight=market_weight,
             market_forecasts=market_forecasts,
         )
-        target_adjusted = adjusted_scores.get(forecaster_id, {})
-
-        outcomes = {q.id: q.outcome for q in resolved}
-        ds_qids = [q.id for q in resolved if not _is_market_question(q)]
-        mk_qids = [q.id for q in resolved if _is_market_question(q)]
-        ds_eff = _estimate_difficulty_effects_ols(pool, outcomes, ds_qids)
-        mk_eff = _build_market_effects(
-            pool, outcomes, mk_qids, market_weight, market_forecasts,
-        )
-        question_effects = {**ds_eff, **mk_eff}
+        target_adjusted = adj_result.adjusted_scores.get(forecaster_id, {})
+        question_effects = adj_result.question_effects
 
         dataset_scores: list[float] = []
         market_scores: list[float] = []
