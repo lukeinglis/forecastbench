@@ -11,6 +11,7 @@ You can edit this file to add custom evals or adjust weights.
 Once edited, it becomes a Tier 1 (explicit) eval — the factory will use it as-is.
 """
 
+import glob
 import json
 import subprocess
 import sys
@@ -88,8 +89,9 @@ def eval_lint() -> dict:
 def eval_type_check() -> dict:
     """Run type checker: uv run mypy ./"""
     try:
+        py_files = glob.glob('*.py')
         result = subprocess.run(
-            ['uv', 'run', 'mypy', '--ignore-missing-imports', '--exclude', 'eval/', '*.py'],
+            ['uv', 'run', 'mypy', '--ignore-missing-imports', '--exclude', 'eval/'] + py_files,
             capture_output=True,
             text=True,
             timeout=120,
