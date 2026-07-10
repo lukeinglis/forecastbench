@@ -117,20 +117,30 @@ def _build_market_effects(
     if market_weight == 0.0:
         return ols_market
     if market_weight == 1.0 and market_forecasts:
-        effects: dict[str, float] = {}
+        raw: dict[str, float] = {}
         for qid in market_qids:
             if qid in outcomes and qid in market_forecasts:
-                effects[qid] = (market_forecasts[qid] - outcomes[qid]) ** 2
-        return effects
+                raw[qid] = (market_forecasts[qid] - outcomes[qid]) ** 2
+        if not raw:
+            return {}
+        raw_mean = sum(raw.values()) / len(raw)
+        return {qid: bs - raw_mean for qid, bs in raw.items()}
     if market_forecasts:
-        effects = {}
+        raw_mkt: dict[str, float] = {}
+        effects: dict[str, float] = {}
         for qid in market_qids:
             ols_val = ols_market.get(qid, 0.0)
             if qid in outcomes and qid in market_forecasts:
                 mkt_bs = (market_forecasts[qid] - outcomes[qid]) ** 2
-                effects[qid] = market_weight * mkt_bs + (1.0 - market_weight) * ols_val
+                raw_mkt[qid] = mkt_bs
             else:
                 effects[qid] = ols_val
+        if raw_mkt:
+            mkt_mean = sum(raw_mkt.values()) / len(raw_mkt)
+            for qid, mkt_bs in raw_mkt.items():
+                ols_val = ols_market.get(qid, 0.0)
+                centered_mkt = mkt_bs - mkt_mean
+                effects[qid] = market_weight * centered_mkt + (1.0 - market_weight) * ols_val
         return effects
     return ols_market
 
@@ -287,12 +297,13 @@ def score_forecasts(
         ds_brier = mean_brier_score(dataset_pairs) if dataset_pairs else 0.0
         mk_brier = mean_brier_score(market_pairs) if market_pairs else 0.0
 
-    ds_index = brier_index(ds_brier) if ds_brier >= 0 else 0.0
-    mk_index = brier_index(mk_brier) if mk_brier >= 0 else 0.0
-
-    components = []
     n_dataset = len([q for q in resolved if not _is_market_question(q)])
     n_market = len([q for q in resolved if _is_market_question(q)])
+
+    ds_index = brier_index(ds_brier) if n_dataset > 0 else 0.0
+    mk_index = brier_index(mk_brier) if n_market > 0 else 0.0
+
+    components = []
     if n_dataset > 0:
         components.append(ds_brier)
     if n_market > 0:
