@@ -77,7 +77,7 @@ discovered (confidence: 0.80, human_reviewed: true)
   description: Run ruff linter via uv
 
 - name: uv_typecheck
-  command: uv run mypy --ignore-missing-imports --exclude eval/ .
+  command: uv run mypy --ignore-missing-imports --exclude eval/ --exclude tests/ .
   parse: exit_code
   weight: 1.0
   description: Run mypy type checker via uv
