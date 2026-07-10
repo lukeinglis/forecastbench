@@ -62,5 +62,30 @@ uv run pytest -x -q
 ### Tier
 discovered (confidence: 0.80, human_reviewed: true)
 
+## Project Eval
+
+- name: uv_tests
+  command: uv run pytest -q
+  parse: exit_code
+  weight: 2.0
+  description: Run test suite via uv
+
+- name: uv_lint
+  command: uv run ruff check .
+  parse: exit_code
+  weight: 1.0
+  description: Run ruff linter via uv
+
+- name: uv_typecheck
+  command: uv run mypy --ignore-missing-imports --exclude eval/ .
+  parse: exit_code
+  weight: 1.0
+  description: Run mypy type checker via uv
+
+## Eval Weights
+- hygiene: 0.2
+- growth: 0.3
+- project: 0.5
+
 ## Target Branch
 main
