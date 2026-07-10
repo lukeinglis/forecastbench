@@ -7,8 +7,9 @@ import inspect
 import json
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol, Union
+from typing import NamedTuple, Protocol, Union
 
 os.environ.setdefault("LITELLM_LOG", "ERROR")
 import litellm  # noqa: E402
@@ -19,6 +20,7 @@ from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load
 from score import ScoringResult, score_forecasts  # noqa: E402
 
 CACHE_DIR = Path(".cache/forecasts")
+RESULTS_DIR = Path("results")
 
 
 MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
@@ -33,6 +35,13 @@ class AsyncForecaster(Protocol):
 
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
+
+
+class EvalResult(NamedTuple):
+    scoring: ScoringResult
+    forecasts: dict[str, float]
+    resolved: list[ResolvedQuestion]
+    model_slug: str
 
 
 def _has_multi_horizon(question: Question) -> bool:
@@ -117,6 +126,57 @@ def _write_cache(model_slug: str, question_id: str, probability: float) -> None:
     }))
 
 
+def save_result(
+    result: ScoringResult,
+    forecasts: dict[str, float],
+    model_slug: str,
+    question_sets_used: list[str],
+    n_held_out: int,
+) -> Path:
+    """Save run result to results/{timestamp}_{model_slug}.json."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    payload = {
+        "timestamp": timestamp,
+        "model_slug": model_slug,
+        "scoring_result": {
+            "dataset_brier": result.dataset_brier,
+            "dataset_index": result.dataset_index,
+            "market_brier": result.market_brier,
+            "market_index": result.market_index,
+            "overall_brier": result.overall_brier,
+            "overall_index": result.overall_index,
+            "n_dataset": result.n_dataset,
+            "n_market": result.n_market,
+            "n_missing": result.n_missing,
+            "difficulty_adjusted": result.difficulty_adjusted,
+        },
+        "forecasts": forecasts,
+        "metadata": {
+            "n_questions": result.n_dataset + result.n_market,
+            "n_held_out": n_held_out,
+            "question_sets_used": question_sets_used,
+        },
+    }
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    path = RESULTS_DIR / f"{timestamp}_{model_slug}.json"
+    path.write_text(json.dumps(payload, indent=2))
+    return path
+
+
+def load_previous_results(results_dir: Path = RESULTS_DIR) -> list[dict[str, object]]:
+    """Load all previously saved results for building peer pools."""
+    if not results_dir.exists():
+        return []
+    results: list[dict[str, object]] = []
+    for p in sorted(results_dir.glob("*.json")):
+        try:
+            data = json.loads(p.read_text())
+            results.append(data)
+        except (json.JSONDecodeError, KeyError):
+            continue
+    return results
+
+
 def split_held_out(
     question_sets: list[QuestionSet],
     n_held_out: int = 2,
@@ -161,7 +221,7 @@ def _build_question(q: Question | ResolvedQuestion) -> Question:
 async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
-) -> ScoringResult:
+) -> EvalResult:
     """Run the full evaluation pipeline."""
     question_sets, resolved = load_data()
     iteration_set, _held_out = split_held_out(question_sets, n_held_out)
@@ -184,7 +244,12 @@ async def run_eval(
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
     result = score_forecasts(forecasts, expanded_resolved)
     _print_results(result)
-    return result
+
+    question_sets_used = [qs.forecast_due_date for qs in iteration_set]
+    result_path = save_result(result, forecasts, model_slug, question_sets_used, n_held_out)
+    print(f"Results saved to {result_path}")
+
+    return EvalResult(scoring=result, forecasts=forecasts, resolved=iteration_resolved, model_slug=model_slug)
 
 
 def _run_sync(
@@ -294,13 +359,17 @@ def main() -> None:
         from dummy_forecaster import forecast
         forecaster = forecast
 
-    result = asyncio.run(run_eval(forecaster))
+    eval_result = asyncio.run(run_eval(forecaster))
 
     if args.agent != "dummy":
-        _run_analysis(result)
+        _run_analysis(eval_result.forecasts, eval_result.resolved, eval_result.model_slug)
 
 
-def _run_analysis(result: ScoringResult) -> None:
+def _run_analysis(
+    forecasts: dict[str, float],
+    resolved: list[ResolvedQuestion],
+    model_slug: str,
+) -> None:
     from analyze import (
         analyze_by_source,
         analyze_calibration,
@@ -308,33 +377,11 @@ def _run_analysis(result: ScoringResult) -> None:
         print_analysis,
         save_analysis,
     )
-    from fetch_data import load_data
-
-    question_sets, resolved = load_data()
-    iteration_set, _ = split_held_out(question_sets)
-
-    resolutions_by_id = {q.id: q for q in resolved}
-    from fetch_data import Resolution, join_resolved_questions as _join
-
-    iteration_resolved = _join(
-        iteration_set,
-        {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
-         for q_id, r in resolutions_by_id.items()},
-    )
-
-    model_slug = _model_slug()
-    cache_dir = Path(f".cache/forecasts/{model_slug}")
-    forecasts: dict[str, float] = {}
-    if cache_dir.exists():
-        for p in cache_dir.glob("*.json"):
-            cached = _read_cache(model_slug, p.stem)
-            if cached is not None:
-                forecasts[p.stem] = cached
 
     analysis = {
-        "by_source": analyze_by_source(forecasts, iteration_resolved),
-        "calibration": analyze_calibration(forecasts, iteration_resolved),
-        "biases": analyze_biases(forecasts, iteration_resolved),
+        "by_source": analyze_by_source(forecasts, resolved),
+        "calibration": analyze_calibration(forecasts, resolved),
+        "biases": analyze_biases(forecasts, resolved),
     }
 
     print_analysis(analysis)

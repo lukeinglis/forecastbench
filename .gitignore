@@ -1,4 +1,5 @@
 .cache/
+results/
 __pycache__/
 *.pyc
 *.pyo

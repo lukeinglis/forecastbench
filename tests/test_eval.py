@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 
 from fetch_data import QuestionSet, Question, ResolvedQuestion
-from eval import split_held_out
+from eval import split_held_out, save_result, load_previous_results
+from score import ScoringResult
 
 
 class TestSplitHeldOut:
@@ -55,3 +57,56 @@ class TestDummyForecasterIntegration:
         result = score_forecasts(forecasts, resolved)
         assert abs(result.dataset_brier - 0.25) < 1e-10
         assert abs(result.dataset_index - 50.0) < 1.0
+
+
+class TestResultPersistence:
+    def test_save_and_load_results(self, tmp_path: Path) -> None:
+        result = ScoringResult(
+            dataset_brier=0.25,
+            dataset_index=50.0,
+            market_brier=0.30,
+            market_index=45.2,
+            overall_brier=0.275,
+            overall_index=47.6,
+            n_dataset=5,
+            n_market=3,
+            n_missing=1,
+            difficulty_adjusted=False,
+        )
+        forecasts = {"q1": 0.7, "q2": 0.3}
+        model_slug = "test_model"
+        question_sets_used = ["2024-01-01", "2024-02-01"]
+        n_held_out = 2
+
+        # Monkey-patch RESULTS_DIR for this test
+        import eval as eval_mod
+        original_dir = eval_mod.RESULTS_DIR
+        eval_mod.RESULTS_DIR = tmp_path
+        try:
+            path = save_result(result, forecasts, model_slug, question_sets_used, n_held_out)
+            assert path.exists()
+            assert path.suffix == ".json"
+
+            loaded = load_previous_results(tmp_path)
+            assert len(loaded) == 1
+            data = loaded[0]
+            assert data["model_slug"] == "test_model"
+            assert data["scoring_result"]["dataset_brier"] == 0.25
+            assert data["scoring_result"]["n_dataset"] == 5
+            assert data["scoring_result"]["n_missing"] == 1
+            assert data["scoring_result"]["difficulty_adjusted"] is False
+            assert data["forecasts"] == {"q1": 0.7, "q2": 0.3}
+            assert data["metadata"]["n_questions"] == 8
+            assert data["metadata"]["n_held_out"] == 2
+            assert data["metadata"]["question_sets_used"] == ["2024-01-01", "2024-02-01"]
+        finally:
+            eval_mod.RESULTS_DIR = original_dir
+
+    def test_load_previous_results_empty_dir(self, tmp_path: Path) -> None:
+        results = load_previous_results(tmp_path)
+        assert results == []
+
+    def test_load_previous_results_no_dir(self, tmp_path: Path) -> None:
+        nonexistent = tmp_path / "does_not_exist"
+        results = load_previous_results(nonexistent)
+        assert results == []
