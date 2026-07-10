@@ -10,6 +10,9 @@ dependencies = [
     "tqdm>=4.60",
 ]
 
+[project.optional-dependencies]
+gcs = ["google-cloud-storage>=2.0"]
+
 [project.scripts]
 forecastbench = "eval:main"
 
