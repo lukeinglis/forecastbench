@@ -163,8 +163,10 @@ def save_result(
     return path
 
 
-def load_previous_results(results_dir: Path = RESULTS_DIR) -> list[dict[str, object]]:
+def load_previous_results(results_dir: Path | None = None) -> list[dict[str, object]]:
     """Load all previously saved results for building peer pools."""
+    if results_dir is None:
+        results_dir = RESULTS_DIR
     if not results_dir.exists():
         return []
     results: list[dict[str, object]] = []
@@ -221,6 +223,7 @@ def _build_question(q: Question | ResolvedQuestion) -> Question:
 async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
+    raw: bool = False,
 ) -> EvalResult:
     """Run the full evaluation pipeline."""
     question_sets, resolved = load_data()
@@ -242,7 +245,24 @@ async def run_eval(
         forecasts = _run_sync(forecaster, questions, model_slug)  # type: ignore[arg-type]
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
-    result = score_forecasts(forecasts, expanded_resolved)
+
+    all_forecasts: dict[str, dict[str, float]] | None = None
+    if not raw:
+        previous = load_previous_results()
+        if len(previous) >= 2:
+            all_forecasts = {}
+            for prev in previous:
+                slug = prev["model_slug"]
+                all_forecasts[str(slug)] = prev["forecasts"]  # type: ignore[assignment]
+            print(f"Difficulty adjustment: using {len(all_forecasts)} peer forecasters from results/")
+        else:
+            print(f"Difficulty adjustment: skipped (need 2+ results, found {len(previous)})")
+
+    result = score_forecasts(
+        forecasts, expanded_resolved,
+        difficulty_adjusted=not raw,
+        all_forecasts=all_forecasts,
+    )
     _print_results(result)
 
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
@@ -350,6 +370,11 @@ def main() -> None:
         default="dummy",
         help="Forecaster agent to use (default: dummy)",
     )
+    parser.add_argument(
+        "--raw",
+        action="store_true",
+        help="Disable difficulty adjustment, use raw Brier scores",
+    )
     args = parser.parse_args()
 
     if args.agent == "baseline":
@@ -359,7 +384,7 @@ def main() -> None:
         from dummy_forecaster import forecast
         forecaster = forecast
 
-    eval_result = asyncio.run(run_eval(forecaster))
+    eval_result = asyncio.run(run_eval(forecaster, raw=args.raw))
 
     if args.agent != "dummy":
         _run_analysis(eval_result.forecasts, eval_result.resolved, eval_result.model_slug)
