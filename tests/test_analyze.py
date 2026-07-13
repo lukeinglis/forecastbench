@@ -8,7 +8,16 @@ from pathlib import Path
 import pytest
 
 from fetch_data import ResolvedQuestion
-from analyze import analyze_by_source, analyze_calibration, analyze_biases, save_analysis
+from analyze import (
+    analyze_by_source,
+    analyze_calibration,
+    analyze_biases,
+    analyze_worst_questions,
+    analyze_by_horizon,
+    brier_decomposition,
+    compare_paired,
+    save_analysis,
+)
 
 
 def _rq(qid: str, source: str, outcome: int) -> ResolvedQuestion:
@@ -119,6 +128,108 @@ class TestAnalyzeBiases:
     def test_empty_data(self) -> None:
         result = analyze_biases({}, [])
         assert result["bias"] == 0.0
+
+
+class TestAnalyzeWorstQuestions:
+    def test_finds_worst(self) -> None:
+        resolved = [_rq("q1", "acled", 1), _rq("q2", "acled", 0), _rq("q3", "metaculus", 1)]
+        forecasts = {"q1": 0.1, "q2": 0.9, "q3": 0.9}
+        worst = analyze_worst_questions(forecasts, resolved, top_n=2)
+        assert len(worst) == 2
+        assert worst[0]["brier"] >= worst[1]["brier"]
+
+    def test_categorizes_confident_wrong(self) -> None:
+        resolved = [_rq("q1", "acled", 0)]
+        forecasts = {"q1": 0.95}
+        worst = analyze_worst_questions(forecasts, resolved, top_n=1)
+        assert worst[0]["category"] == "confident_wrong_positive"
+
+    def test_categorizes_uncertain(self) -> None:
+        resolved = [_rq("q1", "acled", 1)]
+        forecasts = {"q1": 0.5}
+        worst = analyze_worst_questions(forecasts, resolved, top_n=1)
+        assert worst[0]["category"] == "uncertain"
+
+    def test_missing_defaults_to_half(self) -> None:
+        resolved = [_rq("q1", "acled", 1)]
+        worst = analyze_worst_questions({}, resolved, top_n=1)
+        assert worst[0]["forecast"] == 0.5
+
+
+class TestAnalyzeByHorizon:
+    def test_groups_by_date(self) -> None:
+        resolved = [
+            ResolvedQuestion(id="q1_2024-02-01", source="acled", question="Q1",
+                             outcome=1, forecast_due_date="2024-01-01", resolution_date="2024-02-01"),
+            ResolvedQuestion(id="q2_2024-02-01", source="fred", question="Q2",
+                             outcome=0, forecast_due_date="2024-01-01", resolution_date="2024-02-01"),
+            ResolvedQuestion(id="q3_2024-06-01", source="acled", question="Q3",
+                             outcome=1, forecast_due_date="2024-01-01", resolution_date="2024-06-01"),
+        ]
+        forecasts = {"q1_2024-02-01": 0.8, "q2_2024-02-01": 0.2, "q3_2024-06-01": 0.7}
+        result = analyze_by_horizon(forecasts, resolved)
+        assert "2024-02-01" in result
+        assert "2024-06-01" in result
+        assert result["2024-02-01"]["count"] == 2
+        assert result["2024-06-01"]["count"] == 1
+
+    def test_non_horizon_questions_excluded(self) -> None:
+        resolved = [_rq("q1", "metaculus", 1)]
+        result = analyze_by_horizon({"q1": 0.5}, resolved)
+        assert result == {}
+
+
+class TestBrierDecomposition:
+    def test_components_sum(self) -> None:
+        resolved = [_rq(f"q{i}", "acled", i % 2) for i in range(100)]
+        forecasts = {f"q{i}": (i % 2) * 0.8 + (1 - i % 2) * 0.2 for i in range(100)}
+        decomp = brier_decomposition(forecasts, resolved)
+        expected = decomp["reliability"] - decomp["resolution"] + decomp["uncertainty"]
+        assert decomp["brier_from_decomposition"] == pytest.approx(expected)
+
+    def test_perfect_calibration_zero_reliability(self) -> None:
+        resolved = [_rq(f"q{i}", "acled", 1) for i in range(10)]
+        forecasts = {f"q{i}": 1.0 for i in range(10)}
+        decomp = brier_decomposition(forecasts, resolved)
+        assert decomp["reliability"] == pytest.approx(0.0, abs=1e-10)
+        assert decomp["ece"] == pytest.approx(0.0, abs=1e-10)
+
+    def test_empty_data(self) -> None:
+        decomp = brier_decomposition({}, [])
+        assert decomp["ece"] == 0.0
+
+
+class TestComparePaired:
+    def test_paired_comparison(self, tmp_path: Path) -> None:
+        result_a = {
+            "model_slug": "model_a",
+            "forecasts": {"q1": 0.9, "q2": 0.1, "q3": 0.5},
+            "scoring_result": {"overall_brier": 0.20},
+        }
+        result_b = {
+            "model_slug": "model_b",
+            "forecasts": {"q1": 0.5, "q2": 0.5, "q3": 0.5},
+            "scoring_result": {"overall_brier": 0.25},
+        }
+        path_a = tmp_path / "a.json"
+        path_b = tmp_path / "b.json"
+        path_a.write_text(json.dumps(result_a))
+        path_b.write_text(json.dumps(result_b))
+
+        result = compare_paired(path_a, path_b)
+        assert result["model_a"] == "model_a"
+        assert result["model_b"] == "model_b"
+        assert result["n_shared"] == 3
+
+    def test_no_shared_questions(self, tmp_path: Path) -> None:
+        result_a = {"model_slug": "a", "forecasts": {"q1": 0.5}, "scoring_result": {"overall_brier": 0.25}}
+        result_b = {"model_slug": "b", "forecasts": {"q2": 0.5}, "scoring_result": {"overall_brier": 0.25}}
+        path_a = tmp_path / "a.json"
+        path_b = tmp_path / "b.json"
+        path_a.write_text(json.dumps(result_a))
+        path_b.write_text(json.dumps(result_b))
+        result = compare_paired(path_a, path_b)
+        assert result["n_shared"] == 0
 
 
 class TestSaveAnalysis:
