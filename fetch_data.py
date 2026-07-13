@@ -16,6 +16,8 @@ RAW_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/dat
 API_BASE = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/datasets"
 CACHE_DIR = Path(".cache")
 
+MARKET_SOURCES = frozenset({"metaculus", "polymarket", "manifold", "infer"})
+
 
 class Question(BaseModel):
     id: str

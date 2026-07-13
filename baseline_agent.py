@@ -110,3 +110,9 @@ async def aforecast(
     )
     text = response.choices[0].message.content or ""
     return _parse_probability(text)
+
+
+if __name__ == "__main__":
+    import asyncio
+    from eval import run_eval
+    asyncio.run(run_eval(aforecast))

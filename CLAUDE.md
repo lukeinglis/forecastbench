@@ -10,11 +10,16 @@
 - `uv run pytest` to run tests
 - `uv run ruff check .` to lint
 - `uv run mypy --ignore-missing-imports *.py` to type check
-- `uv run python eval.py` to run full eval pipeline
-- `uv run python dummy_forecaster.py` to run dummy forecaster
-- `uv run python baseline_agent.py` to run baseline LLM agent eval
-- `FORECAST_MODEL=vertex_ai/claude-sonnet-4@20250514 uv run python baseline_agent.py` to run with Vertex AI
-- `FORECAST_MODEL=openai/gpt-4o uv run python baseline_agent.py` to run with alternate model
+- `uv run python eval.py --agent dummy` to run dummy forecaster (default)
+- `uv run python eval.py --agent baseline` to run LLM baseline agent
+- `uv run python eval.py --agent baseline --raw` to run without difficulty adjustment
+- `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
+- `uv run python baseline_agent.py` to run baseline LLM agent (shortcut)
+- `FORECAST_MODEL=vertex_ai/claude-sonnet-4@20250514 uv run python eval.py --agent baseline` to run with Vertex AI
+- `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent baseline` to run with alternate model
+- `uv run python analyze.py --compare` to compare all saved results
+- `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
+- `uv run python submit.py validate submissions/FILE.json` to validate coverage
 
 ## Architecture
 - **fetch_data.py** - Fetches question sets and resolutions from forecastbench-datasets GitHub repo
@@ -23,7 +28,8 @@
 - **dummy_forecaster.py** - Baseline forecaster (always predicts 0.5)
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
 - **baseline_agent.py** - LLM baseline forecaster using litellm (zero-shot superforecaster prompt)
-- **analyze.py** - Error analysis, calibration, and run result reporting
+- **analyze.py** - Error analysis, calibration, bias detection, and results comparison
+- **submit.py** - Submission assembly, coverage validation, GCS upload
 - **tests/** - pytest test suite
 
 ## Style
@@ -41,4 +47,8 @@
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514)
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
-- Results saved to results/ directory as JSON
+- Results saved to results/ directory as JSON (auto-persisted after each eval run)
+- Difficulty adjustment activates automatically when 2+ results exist in results/
+- Use --raw flag to disable difficulty adjustment
+- MARKET_SOURCES defined in fetch_data.py, imported by score.py, eval.py, submit.py
+- Submissions staged in submissions/ directory with ForecastBench file naming

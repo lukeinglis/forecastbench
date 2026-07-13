@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import NamedTuple
 from uuid import uuid4
 
-from fetch_data import ResolvedQuestion
+from fetch_data import MARKET_SOURCES, ResolvedQuestion
 
 
 class AdjustmentResult(NamedTuple):
@@ -73,7 +73,7 @@ def brier_index(mean_bs: float) -> float:
 
 def _is_market_question(q: ResolvedQuestion) -> bool:
     source_lower = q.source.lower()
-    return any(s in source_lower for s in ("metaculus", "polymarket", "manifold", "infer"))
+    return any(s in source_lower for s in MARKET_SOURCES)
 
 
 def _estimate_difficulty_effects_ols(
