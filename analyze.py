@@ -164,12 +164,13 @@ def compare_results(results_dir: str | Path = "results") -> None:
         print("No valid result files found.")
         return
 
-    print(f"\n{'Model':<35s} {'Brier':>7s} {'Index':>7s} {'DS Brier':>9s} {'MK Brier':>9s} {'N':>6s} {'Miss':>5s} {'Adj':>4s}")
-    print("-" * 90)
+    print(f"\n{'Model':<35s} {'Date':<11s} {'Brier':>7s} {'Index':>7s} {'DS Brier':>9s} {'MK Brier':>9s} {'N':>6s} {'Miss':>5s} {'Adj':>4s}")
+    print("-" * 101)
     for r in sorted(rows, key=lambda x: x["overall_brier"]):
         n = r["n_dataset"] + r["n_market"]
+        date = r["timestamp"][:8] if len(r["timestamp"]) >= 8 else r["timestamp"]
         print(
-            f"{r['model']:<35s} {r['overall_brier']:>7.4f} {r['overall_index']:>6.1f}% "
+            f"{r['model']:<35s} {date:<11s} {r['overall_brier']:>7.4f} {r['overall_index']:>6.1f}% "
             f"{r['dataset_brier']:>9.4f} {r['market_brier']:>9.4f} {n:>6d} {r['n_missing']:>5d} "
             f"{'yes' if r['adjusted'] else 'no':>4s}"
         )
