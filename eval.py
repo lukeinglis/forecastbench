@@ -16,14 +16,11 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions  # noqa: E402
+from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions  # noqa: E402
 from score import ScoringResult, score_forecasts  # noqa: E402
 
 CACHE_DIR = Path(".cache/forecasts")
 RESULTS_DIR = Path("results")
-
-
-MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
 
 
 class SyncForecaster(Protocol):

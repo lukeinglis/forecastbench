@@ -126,3 +126,66 @@ def save_analysis(analysis: dict[str, Any], path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(analysis, indent=2))
+
+
+def compare_results(results_dir: str | Path = "results") -> None:
+    """Print a comparison table of all saved results."""
+    p = Path(results_dir)
+    if not p.exists():
+        print("No results directory found.")
+        return
+
+    files = sorted(p.glob("*.json"))
+    if not files:
+        print("No result files found.")
+        return
+
+    rows: list[dict[str, Any]] = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+            sr = data["scoring_result"]
+            rows.append({
+                "timestamp": data["timestamp"],
+                "model": data["model_slug"],
+                "overall_brier": sr["overall_brier"],
+                "overall_index": sr["overall_index"],
+                "dataset_brier": sr["dataset_brier"],
+                "market_brier": sr["market_brier"],
+                "n_dataset": sr["n_dataset"],
+                "n_market": sr["n_market"],
+                "n_missing": sr["n_missing"],
+                "adjusted": sr.get("difficulty_adjusted", False),
+            })
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    if not rows:
+        print("No valid result files found.")
+        return
+
+    print(f"\n{'Model':<35s} {'Date':<11s} {'Brier':>7s} {'Index':>7s} {'DS Brier':>9s} {'MK Brier':>9s} {'N':>6s} {'Miss':>5s} {'Adj':>4s}")
+    print("-" * 101)
+    for r in sorted(rows, key=lambda x: x["overall_brier"]):
+        n = r["n_dataset"] + r["n_market"]
+        date = r["timestamp"][:8] if len(r["timestamp"]) >= 8 else r["timestamp"]
+        print(
+            f"{r['model']:<35s} {date:<11s} {r['overall_brier']:>7.4f} {r['overall_index']:>6.1f}% "
+            f"{r['dataset_brier']:>9.4f} {r['market_brier']:>9.4f} {n:>6d} {r['n_missing']:>5d} "
+            f"{'yes' if r['adjusted'] else 'no':>4s}"
+        )
+    print()
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ForecastBench analysis tools")
+    parser.add_argument("--compare", action="store_true", help="Compare all saved results")
+    parser.add_argument("--results-dir", default="results", help="Results directory")
+    args = parser.parse_args()
+
+    if args.compare:
+        compare_results(args.results_dir)
+    else:
+        parser.print_help()

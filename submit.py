@@ -7,10 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fetch_data import ResolvedQuestion
-
-
-MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
+from fetch_data import MARKET_SOURCES, ResolvedQuestion
 
 
 @dataclass
@@ -129,3 +126,70 @@ def upload_to_gcs(
     blob = client.bucket(bucket).blob(blob_name)
     blob.upload_from_filename(str(path))
     return f"gs://{bucket}/{blob_name}"
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ForecastBench submission tools")
+    sub = parser.add_subparsers(dest="command")
+
+    assemble_p = sub.add_parser("assemble", help="Assemble submission from latest result")
+    assemble_p.add_argument("--org", required=True, help="Organization name")
+    assemble_p.add_argument("--model", required=True, help="Model name")
+    assemble_p.add_argument("--model-org", required=True, help="Model organization")
+    assemble_p.add_argument("--result", required=True, help="Path to result JSON from eval pipeline")
+    assemble_p.add_argument("--output-dir", default="submissions", help="Output directory")
+
+    validate_p = sub.add_parser("validate", help="Validate coverage of a submission")
+    validate_p.add_argument("submission", help="Path to submission JSON")
+    validate_p.add_argument("--threshold", type=float, default=0.95, help="Coverage threshold")
+
+    args = parser.parse_args()
+
+    if args.command == "assemble":
+        result_data = json.loads(Path(args.result).read_text())
+        forecasts = result_data["forecasts"]
+        question_sets_used = result_data["metadata"]["question_sets_used"]
+
+        from fetch_data import load_data, join_resolved_questions, Resolution
+        all_qs, resolved = load_data()
+        used_qs = [qs for qs in all_qs if qs.forecast_due_date in question_sets_used]
+        resolutions = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+                       for q in resolved}
+        iteration_resolved = join_resolved_questions(used_qs, resolutions)
+
+        meta = SubmissionMetadata(
+            organization=args.org,
+            model=args.model,
+            model_organization=args.model_org,
+            question_set=question_sets_used[-1] if question_sets_used else "unknown",
+        )
+        submission = assemble_submission(forecasts, iteration_resolved, meta)
+
+        coverage = validate_coverage(submission, iteration_resolved)
+        print(f"Market coverage:  {coverage.market_covered}/{coverage.market_total} ({coverage.market_coverage:.1%})")
+        print(f"Dataset coverage: {coverage.dataset_covered}/{coverage.dataset_total} ({coverage.dataset_coverage:.1%})")
+        print(f"Passes threshold: {'YES' if coverage.passes else 'NO'}")
+
+        path = save_submission(submission, Path(args.output_dir))
+        print(f"Saved to {path}")
+
+    elif args.command == "validate":
+        submission = json.loads(Path(args.submission).read_text())
+        from fetch_data import load_data, join_resolved_questions, Resolution
+        all_qs, resolved = load_data()
+        resolutions = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+                       for q in resolved}
+        all_resolved = join_resolved_questions(all_qs, resolutions)
+
+        coverage = validate_coverage(submission, all_resolved, threshold=args.threshold)
+        print(f"Market coverage:  {coverage.market_covered}/{coverage.market_total} ({coverage.market_coverage:.1%})")
+        print(f"Dataset coverage: {coverage.dataset_covered}/{coverage.dataset_total} ({coverage.dataset_coverage:.1%})")
+        print(f"Passes threshold: {'YES' if coverage.passes else 'NO'}")
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
