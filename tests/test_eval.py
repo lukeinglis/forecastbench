@@ -86,7 +86,8 @@ class TestResultPersistence:
         original_dir = eval_mod.RESULTS_DIR
         eval_mod.RESULTS_DIR = tmp_path
         try:
-            path = save_result(result, forecasts, model_slug, question_sets_used, n_held_out)
+            outcomes = {"q1": 1, "q2": 0}
+            path = save_result(result, forecasts, outcomes, model_slug, question_sets_used, n_held_out)
             assert path.exists()
             assert path.suffix == ".json"
 
@@ -99,6 +100,7 @@ class TestResultPersistence:
             assert data["scoring_result"]["n_missing"] == 1
             assert data["scoring_result"]["difficulty_adjusted"] is False
             assert data["forecasts"] == {"q1": 0.7, "q2": 0.3}
+            assert data["outcomes"] == {"q1": 1, "q2": 0}
             assert data["metadata"]["n_questions"] == 8
             assert data["metadata"]["n_held_out"] == 2
             assert data["metadata"]["question_sets_used"] == ["2024-01-01", "2024-02-01"]

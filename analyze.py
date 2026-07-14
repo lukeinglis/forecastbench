@@ -289,54 +289,6 @@ def analyze_by_horizon(
     return results
 
 
-def brier_decomposition(
-    forecasts: dict[str, float],
-    resolved: list[ResolvedQuestion],
-    n_bins: int = 10,
-) -> dict[str, float]:
-    """Decompose Brier score into reliability, resolution, and uncertainty.
-
-    Also computes Expected Calibration Error (ECE) and Maximum Calibration Error (MCE).
-    """
-    pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
-    if not pairs:
-        return {"reliability": 0.0, "resolution": 0.0, "uncertainty": 0.0, "ece": 0.0, "mce": 0.0}
-
-    n = len(pairs)
-    base_rate = sum(o for _, o in pairs) / n
-    uncertainty = base_rate * (1.0 - base_rate)
-
-    bin_width = 1.0 / n_bins
-    reliability = 0.0
-    resolution = 0.0
-    ece = 0.0
-    mce = 0.0
-
-    for i in range(n_bins):
-        low = i * bin_width
-        high = (i + 1) * bin_width
-        in_bin = [(f, o) for f, o in pairs if low <= f < high or (i == n_bins - 1 and f == high)]
-        if not in_bin:
-            continue
-        n_k = len(in_bin)
-        mean_f = sum(f for f, _ in in_bin) / n_k
-        mean_o = sum(o for _, o in in_bin) / n_k
-        reliability += (n_k / n) * (mean_f - mean_o) ** 2
-        resolution += (n_k / n) * (mean_o - base_rate) ** 2
-        cal_error = abs(mean_f - mean_o)
-        ece += (n_k / n) * cal_error
-        mce = max(mce, cal_error)
-
-    return {
-        "reliability": reliability,
-        "resolution": resolution,
-        "uncertainty": uncertainty,
-        "brier_from_decomposition": reliability - resolution + uncertainty,
-        "ece": ece,
-        "mce": mce,
-    }
-
-
 def compare_paired(
     result_a_path: str | Path,
     result_b_path: str | Path,
@@ -347,7 +299,17 @@ def compare_paired(
     forecasts_a: dict[str, float] = data_a["forecasts"]
     forecasts_b: dict[str, float] = data_b["forecasts"]
 
-    shared_ids = set(forecasts_a.keys()) & set(forecasts_b.keys())
+    outcomes_a: dict[str, int] = data_a.get("outcomes", {})
+    outcomes_b: dict[str, int] = data_b.get("outcomes", {})
+
+    if not outcomes_a and not outcomes_b:
+        return {
+            "error": "Result files missing 'outcomes' key. Re-run eval to generate results with outcomes.",
+            "n_shared": 0,
+        }
+
+    outcomes = outcomes_a or outcomes_b
+    shared_ids = set(forecasts_a.keys()) & set(forecasts_b.keys()) & set(outcomes.keys())
     if not shared_ids:
         return {"error": "No shared questions between runs", "n_shared": 0}
 
@@ -358,8 +320,9 @@ def compare_paired(
     a_wins = 0
     b_wins = 0
     for qid in sorted(shared_ids):
-        bs_a = (forecasts_a[qid] - 0.5) ** 2
-        bs_b = (forecasts_b[qid] - 0.5) ** 2
+        outcome = outcomes[qid]
+        bs_a = (forecasts_a[qid] - outcome) ** 2
+        bs_b = (forecasts_b[qid] - outcome) ** 2
         diffs.append(bs_a - bs_b)
         if bs_a < bs_b:
             a_wins += 1
@@ -494,14 +457,20 @@ if __name__ == "__main__":
                 print(f"{h:<12s} {stats['brier']:>7.4f} {stats['index']:>6.1f}% {stats['count']:>7d}")
     elif args.decompose:
         forecasts, resolved = _load_result_forecasts(args.decompose)
-        decomp = brier_decomposition(forecasts, resolved)
-        print("\nBrier Score Decomposition:")
-        print(f"  Reliability (calibration error): {decomp['reliability']:.6f}")
-        print(f"  Resolution (discrimination):     {decomp['resolution']:.6f}")
-        print(f"  Uncertainty (base rate):          {decomp['uncertainty']:.6f}")
-        print(f"  Brier (rel - res + unc):          {decomp['brier_from_decomposition']:.6f}")
-        print(f"  ECE:                              {decomp['ece']:.6f}")
-        print(f"  MCE:                              {decomp['mce']:.6f}")
+        decomp = analyze_decomposition(forecasts, resolved)
+        murphy = decomp["murphy"]
+        cal = decomp["calibration"]
+        print("\nBrier Score Decomposition (Murphy):")
+        if murphy:
+            print(f"  Reliability (calibration error): {murphy['reliability']:.6f}")
+            print(f"  Resolution (discrimination):     {murphy['resolution']:.6f}")
+            print(f"  Uncertainty (base rate):          {murphy['uncertainty']:.6f}")
+            print(f"  Brier (rel - res + unc):          {murphy['brier_check']:.6f}")
+        print("\nCalibration Metrics:")
+        if cal:
+            print(f"  ECE:                              {cal['ece']:.6f}")
+            print(f"  MCE:                              {cal['mce']:.6f}")
+            print(f"  Sharpness:                        {cal['sharpness']:.6f}")
     elif args.versus:
         result = compare_paired(args.versus[0], args.versus[1])
         if "error" in result:

@@ -14,7 +14,6 @@ from analyze import (
     analyze_biases,
     analyze_worst_questions,
     analyze_by_horizon,
-    brier_decomposition,
     compare_paired,
     save_analysis,
 )
@@ -179,36 +178,21 @@ class TestAnalyzeByHorizon:
         assert result == {}
 
 
-class TestBrierDecomposition:
-    def test_components_sum(self) -> None:
-        resolved = [_rq(f"q{i}", "acled", i % 2) for i in range(100)]
-        forecasts = {f"q{i}": (i % 2) * 0.8 + (1 - i % 2) * 0.2 for i in range(100)}
-        decomp = brier_decomposition(forecasts, resolved)
-        expected = decomp["reliability"] - decomp["resolution"] + decomp["uncertainty"]
-        assert decomp["brier_from_decomposition"] == pytest.approx(expected)
-
-    def test_perfect_calibration_zero_reliability(self) -> None:
-        resolved = [_rq(f"q{i}", "acled", 1) for i in range(10)]
-        forecasts = {f"q{i}": 1.0 for i in range(10)}
-        decomp = brier_decomposition(forecasts, resolved)
-        assert decomp["reliability"] == pytest.approx(0.0, abs=1e-10)
-        assert decomp["ece"] == pytest.approx(0.0, abs=1e-10)
-
-    def test_empty_data(self) -> None:
-        decomp = brier_decomposition({}, [])
-        assert decomp["ece"] == 0.0
-
-
 class TestComparePaired:
     def test_paired_comparison(self, tmp_path: Path) -> None:
+        # q1: bs_a=(0.9-1)^2=0.01, bs_b=(0.5-1)^2=0.25 -> a wins
+        # q2: bs_a=(0.1-0)^2=0.01, bs_b=(0.5-0)^2=0.25 -> a wins
+        # q3: bs_a=(0.5-1)^2=0.25, bs_b=(0.5-1)^2=0.25 -> tie
         result_a = {
             "model_slug": "model_a",
             "forecasts": {"q1": 0.9, "q2": 0.1, "q3": 0.5},
-            "scoring_result": {"overall_brier": 0.20},
+            "outcomes": {"q1": 1, "q2": 0, "q3": 1},
+            "scoring_result": {"overall_brier": 0.09},
         }
         result_b = {
             "model_slug": "model_b",
             "forecasts": {"q1": 0.5, "q2": 0.5, "q3": 0.5},
+            "outcomes": {"q1": 1, "q2": 0, "q3": 1},
             "scoring_result": {"overall_brier": 0.25},
         }
         path_a = tmp_path / "a.json"
@@ -220,16 +204,49 @@ class TestComparePaired:
         assert result["model_a"] == "model_a"
         assert result["model_b"] == "model_b"
         assert result["n_shared"] == 3
+        # mean_diff = mean([0.01-0.25, 0.01-0.25, 0.25-0.25]) = mean([-0.24, -0.24, 0.0]) = -0.16
+        assert result["mean_diff"] == pytest.approx(-0.16)
+        assert result["a_wins"] == 2
+        assert result["b_wins"] == 0
+        assert result["ties"] == 1
 
     def test_no_shared_questions(self, tmp_path: Path) -> None:
-        result_a = {"model_slug": "a", "forecasts": {"q1": 0.5}, "scoring_result": {"overall_brier": 0.25}}
-        result_b = {"model_slug": "b", "forecasts": {"q2": 0.5}, "scoring_result": {"overall_brier": 0.25}}
+        result_a = {
+            "model_slug": "a",
+            "forecasts": {"q1": 0.5},
+            "outcomes": {"q1": 1},
+            "scoring_result": {"overall_brier": 0.25},
+        }
+        result_b = {
+            "model_slug": "b",
+            "forecasts": {"q2": 0.5},
+            "outcomes": {"q2": 0},
+            "scoring_result": {"overall_brier": 0.25},
+        }
         path_a = tmp_path / "a.json"
         path_b = tmp_path / "b.json"
         path_a.write_text(json.dumps(result_a))
         path_b.write_text(json.dumps(result_b))
         result = compare_paired(path_a, path_b)
         assert result["n_shared"] == 0
+
+    def test_missing_outcomes_returns_error(self, tmp_path: Path) -> None:
+        result_a = {
+            "model_slug": "a",
+            "forecasts": {"q1": 0.5},
+            "scoring_result": {"overall_brier": 0.25},
+        }
+        result_b = {
+            "model_slug": "b",
+            "forecasts": {"q1": 0.5},
+            "scoring_result": {"overall_brier": 0.25},
+        }
+        path_a = tmp_path / "a.json"
+        path_b = tmp_path / "b.json"
+        path_a.write_text(json.dumps(result_a))
+        path_b.write_text(json.dumps(result_b))
+        result = compare_paired(path_a, path_b)
+        assert "error" in result
 
 
 class TestSaveAnalysis:
