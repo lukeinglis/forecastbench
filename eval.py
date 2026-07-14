@@ -256,7 +256,10 @@ async def run_eval(
                 all_forecasts[str(slug)] = prev["forecasts"]  # type: ignore[assignment]
             logger.info("difficulty_adjustment_enabled", n_peers=len(all_forecasts))
         else:
-            logger.info("difficulty_adjustment_skipped", n_results=len(previous))
+            logger.info("difficulty_adjustment_skipped",
+                        n_results=len(previous),
+                        reason="need_at_least_2_prior_results",
+                        note="scores_not_difficulty_adjusted_this_run")
 
     result = score_forecasts(
         forecasts, expanded_resolved,
@@ -289,6 +292,7 @@ def _run_sync(
                 try:
                     prob = forecaster(q, resolution_date=date_str)
                 except Exception:
+                    logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=date_str, exc_info=True)
                     prob = 0.5
                 forecasts[composite_key] = prob
                 _write_cache(model_slug, composite_key, prob)
@@ -328,6 +332,7 @@ async def _run_async(
                 else:
                     prob = await forecaster(q)
             except Exception:
+                logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=resolution_date, exc_info=True)
                 return cache_key, 0.5
         _write_cache(model_slug, cache_key, prob)
         return cache_key, prob

@@ -13,6 +13,7 @@ from logging_config import get_logger
 
 logger = get_logger("baseline_agent")
 
+# Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
 PROMPT_TEMPLATE = """You are an expert superforecaster with a track record of well-calibrated probabilistic predictions. Your goal is to estimate the probability that the following question resolves to YES.
@@ -76,7 +77,9 @@ def _build_prompt(
 
 
 def _parse_probability(text: str) -> float:
-    match = re.search(r"(?:^|\s|:)\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*$", text, re.MULTILINE)
+    match = re.search(r"[Pp]robability[\s:=]+\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)", text)
+    if not match:
+        match = re.search(r"(?:^|\s|:)\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*$", text, re.MULTILINE)
     if not match:
         match = re.search(r"(0?\.\d+|1\.0{0,})", text)
     if match:

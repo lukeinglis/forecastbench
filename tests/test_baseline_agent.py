@@ -102,6 +102,26 @@ class TestParseProbability:
         assert result == pytest.approx(0.99)
 
 
+class TestParseProbabilityPriority:
+    """Tests for priority regex matching explicit probability markers."""
+
+    def test_explicit_probability_is(self) -> None:
+        assert _parse_probability("My probability is 0.75") == pytest.approx(0.75)
+
+    def test_explicit_probability_over_version_decimal(self) -> None:
+        text = "Running v0.95 of the model, probability: 0.3"
+        assert _parse_probability(text) == pytest.approx(0.3)
+
+    def test_no_number_fallback(self) -> None:
+        assert _parse_probability("no number here") == pytest.approx(0.5)
+
+    def test_probability_equals(self) -> None:
+        assert _parse_probability("Probability = 0.8") == pytest.approx(0.8)
+
+    def test_probability_colon_no_space(self) -> None:
+        assert _parse_probability("probability:0.42") == pytest.approx(0.42)
+
+
 class TestForecastSync:
     @patch("baseline_agent.litellm")
     def test_calls_litellm_completion(self, mock_litellm: MagicMock) -> None:
