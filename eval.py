@@ -407,6 +407,7 @@ def _run_analysis(
         analyze_by_source,
         analyze_calibration,
         analyze_biases,
+        analyze_decomposition,
         print_analysis,
         save_analysis,
     )
@@ -415,6 +416,7 @@ def _run_analysis(
         "by_source": analyze_by_source(forecasts, resolved),
         "calibration": analyze_calibration(forecasts, resolved),
         "biases": analyze_biases(forecasts, resolved),
+        "decomposition": analyze_decomposition(forecasts, resolved),
     }
 
     print_analysis(analysis)

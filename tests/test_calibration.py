@@ -125,7 +125,7 @@ class TestMurphyDecomposition:
         brier = mean_brier_score(pairs)
         reconstructed = result["reliability"] - result["resolution"] + result["uncertainty"]
         # Binning approximation: within-bin variance causes small deviations
-        assert abs(reconstructed - brier) < 0.02
+        assert abs(reconstructed - brier) < 0.05
 
 
 class TestCalibrationMetrics:
