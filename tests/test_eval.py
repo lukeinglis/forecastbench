@@ -5,9 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 from fetch_data import QuestionSet, Question, ResolvedQuestion
-from eval import split_held_out, save_result, load_previous_results, run_eval
+from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync
 from score import ScoringResult
 
 
@@ -234,3 +235,86 @@ class TestDifficultyAdjustmentWiring:
 
         eval_result = asyncio.run(run_eval(_dummy_forecaster, n_held_out=2, raw=False))
         assert eval_result.scoring.difficulty_adjusted is False
+
+
+def _raising_forecaster(question: Question, resolution_date: str | None = None) -> float:
+    raise RuntimeError("LLM API timeout")
+
+
+class TestForecastErrorFallback:
+    def test_multi_horizon_error_returns_half(self) -> None:
+        """A forecaster that raises on multi-horizon question should produce 0.5 fallback."""
+        q = Question(
+            id="mh1", source="acled", question="MH?",
+            resolution_dates=["2024-01-01"],
+        )
+        with patch("eval._read_cache", return_value=None), \
+             patch("eval._write_cache"):
+            forecasts = _run_sync(_raising_forecaster, [q], "test_slug")
+        assert forecasts["mh1_2024-01-01"] == 0.5
+
+    def test_multi_horizon_error_logs_warning(self) -> None:
+        """The 0.5 fallback should log a warning with question_id."""
+        import eval as eval_mod
+
+        q = Question(
+            id="mh2", source="acled", question="MH?",
+            resolution_dates=["2024-06-01"],
+        )
+        log_events: list[dict[str, object]] = []
+        original_logger = eval_mod.logger
+
+        class CapturingLogger:
+            def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+                def log_method(event: str, **kwargs: object) -> None:
+                    log_events.append({"event": event, **kwargs})
+                return log_method
+
+        eval_mod.logger = CapturingLogger()  # type: ignore[assignment]
+        try:
+            with patch("eval._read_cache", return_value=None), \
+                 patch("eval._write_cache"):
+                _run_sync(_raising_forecaster, [q], "test_slug")
+        finally:
+            eval_mod.logger = original_logger  # type: ignore[assignment]
+
+        fallback_events = [e for e in log_events if e["event"] == "forecast_error_fallback"]
+        assert len(fallback_events) == 1
+        assert fallback_events[0]["question_id"] == "mh2"
+
+
+class TestDifficultyAdjustmentLogging:
+    def test_skip_message_includes_reason(self, tmp_path: Path, monkeypatch: object, caplog: object) -> None:
+        """difficulty_adjustment_skipped log should include reason field."""
+        import eval as eval_mod
+
+        resolved = _make_resolved_questions()
+        question_sets = _make_question_sets(resolved)
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+        _write_fake_result(results_dir, "peer_a", {"q0": 0.9, "q1": 0.1, "q2": 0.8})
+
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, resolved))  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")  # type: ignore[attr-defined]
+
+        log_events: list[dict[str, object]] = []
+        original_logger = eval_mod.logger
+
+        class CapturingLogger:
+            def __getattr__(self, name: str):  # type: ignore[no-untyped-def]
+                def log_method(event: str, **kwargs: object) -> None:
+                    log_events.append({"event": event, **kwargs})
+                return log_method
+
+        monkeypatch.setattr(eval_mod, "logger", CapturingLogger())  # type: ignore[attr-defined]
+        try:
+            asyncio.run(run_eval(_dummy_forecaster, n_held_out=2, raw=False))
+        finally:
+            monkeypatch.setattr(eval_mod, "logger", original_logger)  # type: ignore[attr-defined]
+
+        skip_events = [e for e in log_events if e["event"] == "difficulty_adjustment_skipped"]
+        assert len(skip_events) == 1
+        assert skip_events[0]["reason"] == "need_at_least_2_prior_results"
+        assert skip_events[0]["note"] == "scores_not_difficulty_adjusted_this_run"
