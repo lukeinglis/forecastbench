@@ -8,7 +8,7 @@ from typing import Any
 
 from fetch_data import ResolvedQuestion
 from logging_config import get_logger
-from score import brier_score, brier_index
+from score import brier_score, brier_index, murphy_decomposition
 
 logger = get_logger("analyze")
 
@@ -62,6 +62,61 @@ def analyze_calibration(
     return bins
 
 
+def calibration_metrics(
+    pairs: list[tuple[float, int]],
+    n_bins: int = 10,
+) -> dict[str, float]:
+    """Compute calibration summary metrics: ECE, MCE, and sharpness.
+
+    Reference:
+        Gneiting, T. & Raftery, A. E. (2007). 'Strictly Proper Scoring
+        Rules, Prediction, and Estimation.' Journal of the American
+        Statistical Association, 102(477), 359-378.
+
+    Args:
+        pairs: List of (forecast_probability, binary_outcome) tuples.
+        n_bins: Number of equally-spaced bins in [0, 1]. Default 10.
+
+    Returns:
+        Dict with keys: ece, mce, sharpness.
+    """
+    if not pairs:
+        return {"ece": 0.0, "mce": 0.0, "sharpness": 0.0}
+
+    n = len(pairs)
+    forecasts_list = [f for f, _ in pairs]
+    mean_f = sum(forecasts_list) / n
+    sharpness = sum((f - mean_f) ** 2 for f in forecasts_list) / n
+
+    bin_width = 1.0 / n_bins
+    ece = 0.0
+    mce = 0.0
+    for i in range(n_bins):
+        low = i * bin_width
+        high = (i + 1) * bin_width
+        in_bin = [
+            (f, o) for f, o in pairs
+            if low <= f < high or (i == n_bins - 1 and f == high)
+        ]
+        if not in_bin:
+            continue
+        n_k = len(in_bin)
+        f_k = sum(f for f, _ in in_bin) / n_k
+        o_k = sum(o for _, o in in_bin) / n_k
+        gap = abs(f_k - o_k)
+        ece += (n_k / n) * gap
+        mce = max(mce, gap)
+
+    logger.info(
+        "calibration_metrics",
+        ece=round(ece, 6),
+        mce=round(mce, 6),
+        sharpness=round(sharpness, 6),
+    )
+
+    return {"ece": ece, "mce": mce, "sharpness": sharpness}
+
+
 def analyze_biases(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
@@ -98,6 +153,21 @@ def analyze_biases(
     }
 
 
+def analyze_decomposition(
+    forecasts: dict[str, float],
+    resolved: list[ResolvedQuestion],
+    n_bins: int = 10,
+) -> dict[str, dict[str, float]]:
+    """Run Murphy decomposition and calibration metrics on forecast/outcome pairs."""
+    pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
+    if not pairs:
+        return {"murphy": {}, "calibration": {}}
+
+    murphy = murphy_decomposition(pairs, n_bins=n_bins)
+    cal = calibration_metrics(pairs, n_bins=n_bins)
+    return {"murphy": murphy, "calibration": cal}
+
+
 def print_analysis(analysis: dict[str, Any]) -> None:
     if "by_source" in analysis:
         for source, stats in analysis["by_source"].items():
@@ -130,6 +200,26 @@ def print_analysis(analysis: dict[str, Any]) -> None:
             bias=round(b["bias"], 4),
             direction=direction,
         )
+
+    if "decomposition" in analysis:
+        decomp = analysis["decomposition"]
+        if "murphy" in decomp and decomp["murphy"]:
+            m = decomp["murphy"]
+            logger.info(
+                "murphy_decomposition_result",
+                reliability=round(m["reliability"], 6),
+                resolution=round(m["resolution"], 6),
+                uncertainty=round(m["uncertainty"], 6),
+                brier_check=round(m["brier_check"], 6),
+            )
+        if "calibration" in decomp and decomp["calibration"]:
+            c = decomp["calibration"]
+            logger.info(
+                "calibration_metrics_result",
+                ece=round(c["ece"], 6),
+                mce=round(c["mce"], 6),
+                sharpness=round(c["sharpness"], 6),
+            )
 
 
 def save_analysis(analysis: dict[str, Any], path: str | Path) -> None:

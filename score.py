@@ -77,6 +77,78 @@ def brier_index(mean_bs: float) -> float:
     return (1.0 - math.sqrt(mean_bs)) * 100.0
 
 
+def murphy_decomposition(
+    pairs: list[tuple[float, int]],
+    n_bins: int = 10,
+) -> dict[str, float]:
+    """Decompose the Brier score into reliability, resolution, and uncertainty.
+
+    Uses Murphy's additive partition: Brier = REL - RES + UNC.
+
+    Reference:
+        Murphy, A. H. (1973). 'A New Vector Partition of the Probability
+        Score.' Journal of Applied Meteorology, 12(4), 595-600.
+
+    Args:
+        pairs: List of (forecast_probability, binary_outcome) tuples.
+        n_bins: Number of equally-spaced bins in [0, 1]. Default 10.
+
+    Returns:
+        Dict with keys: reliability, resolution, uncertainty, brier_check.
+    """
+    if not pairs:
+        raise ValueError("Cannot decompose empty list of pairs")
+
+    for f, o in pairs:
+        _validate_forecast(f)
+        _validate_outcome(o)
+
+    n = len(pairs)
+    base_rate = sum(o for _, o in pairs) / n
+
+    bin_width = 1.0 / n_bins
+    bins: list[tuple[float, float, list[tuple[float, int]]]] = []
+    for i in range(n_bins):
+        low = i * bin_width
+        high = (i + 1) * bin_width
+        in_bin = [
+            (f, o) for f, o in pairs
+            if low <= f < high or (i == n_bins - 1 and f == high)
+        ]
+        if in_bin:
+            bins.append((low, high, in_bin))
+
+    reliability = 0.0
+    resolution = 0.0
+    for _, _, bin_pairs in bins:
+        n_k = len(bin_pairs)
+        f_k = sum(f for f, _ in bin_pairs) / n_k
+        o_k = sum(o for _, o in bin_pairs) / n_k
+        reliability += n_k * (f_k - o_k) ** 2
+        resolution += n_k * (o_k - base_rate) ** 2
+
+    reliability /= n
+    resolution /= n
+    uncertainty = base_rate * (1.0 - base_rate)
+    brier_check = reliability - resolution + uncertainty
+
+    logger.info(
+        "murphy_decomposition",
+        reliability=round(reliability, 6),
+        resolution=round(resolution, 6),
+        uncertainty=round(uncertainty, 6),
+        brier_check=round(brier_check, 6),
+        n_bins_used=len(bins),
+    )
+
+    return {
+        "reliability": reliability,
+        "resolution": resolution,
+        "uncertainty": uncertainty,
+        "brier_check": brier_check,
+    }
+
+
 def _is_market_question(q: ResolvedQuestion) -> bool:
     source_lower = q.source.lower()
     return any(s in source_lower for s in MARKET_SOURCES)
