@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from fetch_data import Question
+from logging_config import get_logger
+
+logger = get_logger("dummy_forecaster")
 
 
 def forecast(question: Question, resolution_date: str | None = None) -> float:
     """Return 0.5 regardless of the question."""
+    logger.debug("dummy_forecast", question_id=question.id, probability=0.5)
     return 0.5
 
 

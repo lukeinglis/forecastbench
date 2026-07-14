@@ -13,6 +13,9 @@ from typing import NamedTuple
 from uuid import uuid4
 
 from fetch_data import MARKET_SOURCES, ResolvedQuestion
+from logging_config import get_logger
+
+logger = get_logger("score")
 
 
 class AdjustmentResult(NamedTuple):
@@ -37,14 +40,17 @@ class ScoringResult:
 
 def _validate_forecast(forecast: float) -> float:
     if math.isnan(forecast) or math.isinf(forecast):
+        logger.warning("invalid_forecast", value=forecast, reason="not_finite")
         raise ValueError(f"Forecast must be finite, got {forecast}")
     if forecast < 0.0 or forecast > 1.0:
+        logger.warning("invalid_forecast", value=forecast, reason="out_of_range")
         raise ValueError(f"Forecast must be in [0, 1], got {forecast}")
     return forecast
 
 
 def _validate_outcome(outcome: int) -> int:
     if outcome not in (0, 1):
+        logger.warning("invalid_outcome", value=outcome)
         raise ValueError(f"Outcome must be 0 or 1, got {outcome}")
     return outcome
 
@@ -175,6 +181,13 @@ def adjust_for_difficulty(
     if not all_forecasts or not resolved:
         return AdjustmentResult(adjusted_scores={}, question_effects={})
 
+    logger.info(
+        "difficulty_adjustment_start",
+        n_forecasters=len(all_forecasts),
+        n_questions=len(resolved),
+        market_weight=market_weight,
+    )
+
     outcomes = {q.id: q.outcome for q in resolved}
     dataset_qids = [q.id for q in resolved if not _is_market_question(q)]
     market_qids = [q.id for q in resolved if _is_market_question(q)]
@@ -239,6 +252,8 @@ def score_forecasts(
     When difficulty_adjusted=True and all_forecasts is provided,
     applies the ForecastBench two-way fixed-effects adjustment.
     """
+    logger.info("scoring_start", n_questions=len(resolved), difficulty_adjusted=difficulty_adjusted)
+
     if not resolved:
         raise ValueError("No resolved questions to score")
 
@@ -314,7 +329,7 @@ def score_forecasts(
     else:
         overall_bs = 0.0
 
-    return ScoringResult(
+    result = ScoringResult(
         dataset_brier=ds_brier,
         dataset_index=ds_index,
         market_brier=mk_brier,
@@ -327,3 +342,14 @@ def score_forecasts(
         difficulty_adjusted=difficulty_adjusted and all_forecasts is not None and len(all_forecasts or {}) > 1,
         question_effects=question_effects,
     )
+
+    logger.info(
+        "scoring_complete",
+        overall_brier=result.overall_brier,
+        overall_index=result.overall_index,
+        n_dataset=n_dataset,
+        n_market=n_market,
+        n_missing=n_missing,
+    )
+
+    return result

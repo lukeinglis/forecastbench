@@ -17,7 +17,10 @@ import litellm  # noqa: E402
 litellm.suppress_debug_info = True
 
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions  # noqa: E402
+from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, score_forecasts  # noqa: E402
+
+logger = get_logger("eval")
 
 CACHE_DIR = Path(".cache/forecasts")
 RESULTS_DIR = Path("results")
@@ -251,9 +254,9 @@ async def run_eval(
             for prev in previous:
                 slug = prev["model_slug"]
                 all_forecasts[str(slug)] = prev["forecasts"]  # type: ignore[assignment]
-            print(f"Difficulty adjustment: using {len(all_forecasts)} peer forecasters from results/")
+            logger.info("difficulty_adjustment_enabled", n_peers=len(all_forecasts))
         else:
-            print(f"Difficulty adjustment: skipped (need 2+ results, found {len(previous)})")
+            logger.info("difficulty_adjustment_skipped", n_results=len(previous))
 
     result = score_forecasts(
         forecasts, expanded_resolved,
@@ -264,7 +267,7 @@ async def run_eval(
 
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
     result_path = save_result(result, forecasts, model_slug, question_sets_used, n_held_out)
-    print(f"Results saved to {result_path}")
+    logger.info("results_saved", path=str(result_path))
 
     return EvalResult(scoring=result, forecasts=forecasts, resolved=iteration_resolved, model_slug=model_slug)
 
@@ -347,18 +350,26 @@ async def _run_async(
 
 
 def _print_results(result: ScoringResult) -> None:
-    print("=" * 50)
-    print("ForecastBench Backtest Results")
-    print("=" * 50)
-    print(f"Dataset:  Brier={result.dataset_brier:.4f}  Index={result.dataset_index:.1f}%  (n={result.n_dataset})")
-    print(f"Market:   Brier={result.market_brier:.4f}  Index={result.market_index:.1f}%  (n={result.n_market})")
-    print(f"Overall:  Brier={result.overall_brier:.4f}  Index={result.overall_index:.1f}%")
-    print(f"Missing forecasts (defaulted to 0.5): {result.n_missing}")
-    print("=" * 50)
+    logger.info(
+        "eval_results",
+        dataset_brier=round(result.dataset_brier, 4),
+        dataset_index=round(result.dataset_index, 1),
+        n_dataset=result.n_dataset,
+        market_brier=round(result.market_brier, 4),
+        market_index=round(result.market_index, 1),
+        n_market=result.n_market,
+        overall_brier=round(result.overall_brier, 4),
+        overall_index=round(result.overall_index, 1),
+        n_missing=result.n_missing,
+    )
 
 
 def main() -> None:
     import argparse
+
+    configure_logging()
+    run_id = generate_run_id()
+    logger.info("eval_start", run_id=run_id)
 
     parser = argparse.ArgumentParser(description="ForecastBench evaluation")
     parser.add_argument(
@@ -410,7 +421,7 @@ def _run_analysis(
 
     analysis_path = Path(f".cache/analysis/{model_slug}/analysis.json")
     save_analysis(analysis, analysis_path)
-    print(f"\nAnalysis saved to {analysis_path}")
+    logger.info("analysis_saved", path=str(analysis_path))
 
 
 if __name__ == "__main__":

@@ -9,6 +9,9 @@ import litellm
 
 from cutoff import CutoffEnvironment
 from fetch_data import Question
+from logging_config import get_logger
+
+logger = get_logger("baseline_agent")
 
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
@@ -78,7 +81,10 @@ def _parse_probability(text: str) -> float:
         match = re.search(r"(0?\.\d+|1\.0{0,})", text)
     if match:
         prob = float(match.group(1))
-        return max(0.01, min(0.99, prob))
+        clamped = max(0.01, min(0.99, prob))
+        logger.debug("parsed_probability", raw_match=match.group(1), parsed=clamped)
+        return clamped
+    logger.debug("parsed_probability", raw_match=None, parsed=0.5, fallback=True)
     return 0.5
 
 
@@ -86,30 +92,44 @@ def forecast(
     question: Question,
     resolution_date: str | None = None,
 ) -> float:
+    logger.info("forecast_start", question_id=question.id, model=MODEL)
     prompt = _build_prompt(question, resolution_date=resolution_date)
-    response = litellm.completion(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        timeout=60,
-    )
+    try:
+        response = litellm.completion(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            timeout=60,
+        )
+    except Exception:
+        logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
+        raise
     text = response.choices[0].message.content or ""
-    return _parse_probability(text)
+    prob = _parse_probability(text)
+    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    return prob
 
 
 async def aforecast(
     question: Question,
     resolution_date: str | None = None,
 ) -> float:
+    logger.info("forecast_start", question_id=question.id, model=MODEL, async_mode=True)
     prompt = _build_prompt(question, resolution_date=resolution_date)
-    response = await litellm.acompletion(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
-        timeout=60,
-    )
+    try:
+        response = await litellm.acompletion(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            timeout=60,
+        )
+    except Exception:
+        logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
+        raise
     text = response.choices[0].message.content or ""
-    return _parse_probability(text)
+    prob = _parse_probability(text)
+    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    return prob
 
 
 if __name__ == "__main__":
