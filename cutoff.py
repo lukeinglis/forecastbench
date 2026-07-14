@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from fetch_data import Question
+from logging_config import get_logger
+
+logger = get_logger("cutoff")
 
 
 class CutoffEnvironment:
@@ -15,6 +18,7 @@ class CutoffEnvironment:
 
     def __init__(self, freeze_datetime: str) -> None:
         self.freeze_datetime = freeze_datetime
+        logger.info("cutoff_environment_created", cutoff_date=freeze_datetime)
 
     def frame_temporal_context(self, question: Question) -> str:
         return (
@@ -25,4 +29,5 @@ class CutoffEnvironment:
     def prepare_question(self, question: Question) -> Question:
         temporal_context = self.frame_temporal_context(question)
         new_background = f"{temporal_context}\n\n{question.background}" if question.background else temporal_context
+        logger.debug("cutoff_applied", question_id=question.id, cutoff_date=self.freeze_datetime)
         return question.model_copy(update={"background": new_background})

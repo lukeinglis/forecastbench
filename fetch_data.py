@@ -9,6 +9,10 @@ from typing import Any
 import requests
 from pydantic import BaseModel, field_validator
 
+from logging_config import get_logger
+
+logger = get_logger("fetch_data")
+
 
 REPO_OWNER = "forecastingresearch"
 REPO_NAME = "forecastbench-datasets"
@@ -171,7 +175,7 @@ def fetch_all_question_sets() -> list[QuestionSet]:
             qs = fetch_question_set(f)
             result.append(qs)
         except Exception as e:
-            print(f"Warning: failed to fetch question set {f}: {e}")
+            logger.warning("fetch_question_set_failed", filename=f, error=str(e))
     return result
 
 
@@ -185,7 +189,7 @@ def fetch_all_resolutions() -> dict[str, Resolution]:
             for r in res_list:
                 resolutions[r.id] = r
         except Exception as e:
-            print(f"Warning: failed to fetch resolution {f}: {e}")
+            logger.warning("fetch_resolution_failed", filename=f, error=str(e))
     return resolutions
 
 

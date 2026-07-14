@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from fetch_data import ResolvedQuestion
-from score import brier_score, brier_index
+from logging_config import get_logger
+from score import brier_score, brier_index, murphy_decomposition
+
+logger = get_logger("analyze")
 
 
 def analyze_by_source(
@@ -61,6 +64,61 @@ def analyze_calibration(
     return bins
 
 
+def calibration_metrics(
+    pairs: list[tuple[float, int]],
+    n_bins: int = 10,
+) -> dict[str, float]:
+    """Compute calibration summary metrics: ECE, MCE, and sharpness.
+
+    Reference:
+        Gneiting, T. & Raftery, A. E. (2007). 'Strictly Proper Scoring
+        Rules, Prediction, and Estimation.' Journal of the American
+        Statistical Association, 102(477), 359-378.
+
+    Args:
+        pairs: List of (forecast_probability, binary_outcome) tuples.
+        n_bins: Number of equally-spaced bins in [0, 1]. Default 10.
+
+    Returns:
+        Dict with keys: ece, mce, sharpness.
+    """
+    if not pairs:
+        return {"ece": 0.0, "mce": 0.0, "sharpness": 0.0}
+
+    n = len(pairs)
+    forecasts_list = [f for f, _ in pairs]
+    mean_f = sum(forecasts_list) / n
+    sharpness = sum((f - mean_f) ** 2 for f in forecasts_list) / n
+
+    bin_width = 1.0 / n_bins
+    ece = 0.0
+    mce = 0.0
+    for i in range(n_bins):
+        low = i * bin_width
+        high = (i + 1) * bin_width
+        in_bin = [
+            (f, o) for f, o in pairs
+            if low <= f < high or (i == n_bins - 1 and f == high)
+        ]
+        if not in_bin:
+            continue
+        n_k = len(in_bin)
+        f_k = sum(f for f, _ in in_bin) / n_k
+        o_k = sum(o for _, o in in_bin) / n_k
+        gap = abs(f_k - o_k)
+        ece += (n_k / n) * gap
+        mce = max(mce, gap)
+
+    logger.info(
+        "calibration_metrics",
+        ece=round(ece, 6),
+        mce=round(mce, 6),
+        sharpness=round(sharpness, 6),
+    )
+
+    return {"ece": ece, "mce": mce, "sharpness": sharpness}
+
+
 def analyze_biases(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
@@ -97,31 +155,73 @@ def analyze_biases(
     }
 
 
+def analyze_decomposition(
+    forecasts: dict[str, float],
+    resolved: list[ResolvedQuestion],
+    n_bins: int = 10,
+) -> dict[str, dict[str, float]]:
+    """Run Murphy decomposition and calibration metrics on forecast/outcome pairs."""
+    pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
+    if not pairs:
+        return {"murphy": {}, "calibration": {}}
+
+    murphy = murphy_decomposition(pairs, n_bins=n_bins)
+    cal = calibration_metrics(pairs, n_bins=n_bins)
+    return {"murphy": murphy, "calibration": cal}
+
+
 def print_analysis(analysis: dict[str, Any]) -> None:
     if "by_source" in analysis:
-        print("\n--- Performance by Source ---")
         for source, stats in analysis["by_source"].items():
-            print(f"  {source:20s}  Brier={stats['brier']:.4f}  Index={stats['index']:.1f}%  n={stats['count']}")
+            logger.info(
+                "source_performance",
+                source=source,
+                brier=round(stats["brier"], 4),
+                index=round(stats["index"], 1),
+                count=stats["count"],
+            )
 
     if "calibration" in analysis:
-        print("\n--- Calibration ---")
         for b in analysis["calibration"]:
-            print(
-                f"  [{b['bin_low']:.1f}, {b['bin_high']:.1f})  "
-                f"predicted={b['mean_predicted']:.3f}  observed={b['mean_observed']:.3f}  n={b['count']}"
+            logger.info(
+                "calibration_bin",
+                bin_low=b["bin_low"],
+                bin_high=b["bin_high"],
+                mean_predicted=round(b["mean_predicted"], 3),
+                mean_observed=round(b["mean_observed"], 3),
+                count=b["count"],
             )
 
     if "biases" in analysis:
         b = analysis["biases"]
-        print("\n--- Bias Analysis ---")
-        print(f"  Mean forecast:  {b['mean_forecast']:.4f}")
-        print(f"  Mean outcome:   {b['mean_outcome']:.4f}")
         direction = "optimistic" if b["bias"] > 0 else "pessimistic"
-        print(f"  Bias:           {b['bias']:+.4f} ({direction})")
-        if b["low_bin"]["count"] > 0:
-            print(f"  Low  (<0.3):    predicted={b['low_bin']['mean_predicted']:.3f}  observed={b['low_bin']['mean_observed']:.3f}  n={b['low_bin']['count']}")
-        if b["high_bin"]["count"] > 0:
-            print(f"  High (>0.7):    predicted={b['high_bin']['mean_predicted']:.3f}  observed={b['high_bin']['mean_observed']:.3f}  n={b['high_bin']['count']}")
+        logger.info(
+            "bias_analysis",
+            mean_forecast=round(b["mean_forecast"], 4),
+            mean_outcome=round(b["mean_outcome"], 4),
+            bias=round(b["bias"], 4),
+            direction=direction,
+        )
+
+    if "decomposition" in analysis:
+        decomp = analysis["decomposition"]
+        if "murphy" in decomp and decomp["murphy"]:
+            m = decomp["murphy"]
+            logger.info(
+                "murphy_decomposition_result",
+                reliability=round(m["reliability"], 6),
+                resolution=round(m["resolution"], 6),
+                uncertainty=round(m["uncertainty"], 6),
+                brier_check=round(m["brier_check"], 6),
+            )
+        if "calibration" in decomp and decomp["calibration"]:
+            c = decomp["calibration"]
+            logger.info(
+                "calibration_metrics_result",
+                ece=round(c["ece"], 6),
+                mce=round(c["mce"], 6),
+                sharpness=round(c["sharpness"], 6),
+            )
 
 
 def save_analysis(analysis: dict[str, Any], path: str | Path) -> None:
@@ -291,12 +391,12 @@ def compare_results(results_dir: str | Path = "results") -> None:
     """Print a comparison table of all saved results."""
     p = Path(results_dir)
     if not p.exists():
-        print("No results directory found.")
+        logger.warning("compare_results_no_dir", path=str(p))
         return
 
     files = sorted(p.glob("*.json"))
     if not files:
-        print("No result files found.")
+        logger.warning("compare_results_no_files", path=str(p))
         return
 
     rows: list[dict[str, Any]] = []
@@ -320,20 +420,22 @@ def compare_results(results_dir: str | Path = "results") -> None:
             continue
 
     if not rows:
-        print("No valid result files found.")
+        logger.warning("compare_results_no_valid", path=str(p))
         return
 
-    print(f"\n{'Model':<35s} {'Date':<11s} {'Brier':>7s} {'Index':>7s} {'DS Brier':>9s} {'MK Brier':>9s} {'N':>6s} {'Miss':>5s} {'Adj':>4s}")
-    print("-" * 101)
     for r in sorted(rows, key=lambda x: x["overall_brier"]):
-        n = r["n_dataset"] + r["n_market"]
-        date = r["timestamp"][:8] if len(r["timestamp"]) >= 8 else r["timestamp"]
-        print(
-            f"{r['model']:<35s} {date:<11s} {r['overall_brier']:>7.4f} {r['overall_index']:>6.1f}% "
-            f"{r['dataset_brier']:>9.4f} {r['market_brier']:>9.4f} {n:>6d} {r['n_missing']:>5d} "
-            f"{'yes' if r['adjusted'] else 'no':>4s}"
+        logger.info(
+            "compare_result",
+            model=r["model"],
+            timestamp=r["timestamp"],
+            overall_brier=r["overall_brier"],
+            overall_index=r["overall_index"],
+            dataset_brier=r["dataset_brier"],
+            market_brier=r["market_brier"],
+            n=r["n_dataset"] + r["n_market"],
+            n_missing=r["n_missing"],
+            adjusted=r["adjusted"],
         )
-    print()
 
 
 def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], list[ResolvedQuestion]]:
