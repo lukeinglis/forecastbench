@@ -129,6 +129,7 @@ def _write_cache(model_slug: str, question_id: str, probability: float) -> None:
 def save_result(
     result: ScoringResult,
     forecasts: dict[str, float],
+    outcomes: dict[str, int],
     model_slug: str,
     question_sets_used: list[str],
     n_held_out: int,
@@ -151,6 +152,7 @@ def save_result(
             "difficulty_adjusted": result.difficulty_adjusted,
         },
         "forecasts": forecasts,
+        "outcomes": outcomes,
         "metadata": {
             "n_questions": result.n_dataset + result.n_market,
             "n_held_out": n_held_out,
@@ -268,8 +270,9 @@ async def run_eval(
     )
     _print_results(result)
 
+    outcomes = {q.id: q.outcome for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
-    result_path = save_result(result, forecasts, model_slug, question_sets_used, n_held_out)
+    result_path = save_result(result, forecasts, outcomes, model_slug, question_sets_used, n_held_out)
     logger.info("results_saved", path=str(result_path))
 
     return EvalResult(scoring=result, forecasts=forecasts, resolved=iteration_resolved, model_slug=model_slug)
