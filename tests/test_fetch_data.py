@@ -11,7 +11,6 @@ import requests
 
 from fetch_data import (
     Question,
-    QuestionSet,
     Resolution,
     _cache_path,
     _fetch_json,
@@ -193,7 +192,6 @@ class TestFetchResolutionShapes:
 
 class TestFetchJsonCaching:
     def test_first_call_fetches_and_caches(self, tmp_path: Path) -> None:
-        cache_file = tmp_path / "test_cache.json"
         payload = {"key": "value"}
 
         mock_resp = MagicMock()
