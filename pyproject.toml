@@ -37,3 +37,7 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m \"not integration\""
+markers = [
+    "integration: tests that fetch real data from the ForecastBench repo (may be slow)",
+]

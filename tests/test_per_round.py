@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from fetch_data import Question, QuestionSet, Resolution
 from eval import (
     run_eval,
@@ -200,6 +202,69 @@ class TestListRounds:
         counts = {r[0]: r[1] for r in rounds}
         assert counts["2026-07-05-llm"] == 500
         assert counts["2026-06-21-llm"] == 492
+
+
+class TestRoundWithZeroResolvedQuestions:
+    def test_raises_on_no_resolved_questions(self, tmp_path: Path, monkeypatch: object) -> None:
+        import eval as eval_mod
+
+        round_qs = _make_round_question_set()
+
+        monkeypatch.setattr(eval_mod, "fetch_question_set", lambda f: round_qs)  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "fetch_all_resolutions", lambda: {})  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", tmp_path / "results")  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")  # type: ignore[attr-defined]
+
+        with pytest.raises(ValueError, match="No resolved questions"):
+            asyncio.run(run_eval(_dummy_forecaster, round_name="2026-07-05-llm"))
+
+
+class TestRoundWithNonExistentName:
+    def test_raises_on_bad_round_name(self, tmp_path: Path, monkeypatch: object) -> None:
+        import eval as eval_mod
+        from requests.exceptions import HTTPError
+
+        def _raise_not_found(f: str) -> QuestionSet:
+            raise HTTPError("404 Not Found")
+
+        monkeypatch.setattr(eval_mod, "fetch_question_set", _raise_not_found)  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", tmp_path / "results")  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")  # type: ignore[attr-defined]
+
+        with pytest.raises(HTTPError):
+            asyncio.run(run_eval(_dummy_forecaster, round_name="9999-99-99-llm"))
+
+
+class TestRoundWithMixedSources:
+    def test_mixed_market_and_dataset_questions(self, tmp_path: Path, monkeypatch: object) -> None:
+        import eval as eval_mod
+
+        mixed_qs = QuestionSet(
+            forecast_due_date="2026-07-05",
+            question_set="2026-07-05-llm",
+            questions=[
+                Question(id="d1", source="acled", question="Dataset Q1"),
+                Question(id="d2", source="acled", question="Dataset Q2"),
+                Question(id="m1", source="metaculus", question="Market Q1"),
+                Question(id="m2", source="polymarket", question="Market Q2"),
+            ],
+        )
+        resolutions = {
+            "d1": Resolution(id="d1", outcome=1, resolution_date="2026-07-19"),
+            "d2": Resolution(id="d2", outcome=0, resolution_date="2026-07-19"),
+            "m1": Resolution(id="m1", outcome=1, resolution_date="2026-07-19"),
+            "m2": Resolution(id="m2", outcome=0, resolution_date="2026-07-19"),
+        }
+
+        monkeypatch.setattr(eval_mod, "fetch_question_set", lambda f: mixed_qs)  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "fetch_all_resolutions", lambda: resolutions)  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", tmp_path / "results")  # type: ignore[attr-defined]
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")  # type: ignore[attr-defined]
+
+        result = asyncio.run(run_eval(_dummy_forecaster, round_name="2026-07-05-llm"))
+        assert result.scoring.n_dataset == 2
+        assert result.scoring.n_market == 2
+        assert result.scoring.overall_brier == pytest.approx(0.25)
 
 
 class TestByRoundComparison:
