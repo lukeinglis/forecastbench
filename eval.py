@@ -16,7 +16,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard  # noqa: E402
+from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, score_forecasts  # noqa: E402
 
@@ -564,11 +564,20 @@ def main() -> None:
         help="Show leaderboard comparison after scoring",
     )
     parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Clear cached data and fetch fresh from ForecastBench repo",
+    )
+    parser.add_argument(
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
     )
     args = parser.parse_args()
+
+    if args.refresh:
+        logger.info("cache_refresh_requested")
+        refresh_cache()
 
     if args.list_rounds:
         rounds = list_rounds()
