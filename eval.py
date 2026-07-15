@@ -9,14 +9,14 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, Protocol, Union
+from typing import Any, NamedTuple, Protocol, Union
 
 os.environ.setdefault("LITELLM_LOG", "ERROR")
 import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files  # noqa: E402
+from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, score_forecasts  # noqa: E402
 
@@ -27,11 +27,23 @@ RESULTS_DIR = Path("results")
 
 
 class SyncForecaster(Protocol):
-    def __call__(self, question: Question, resolution_date: str | None = None) -> float: ...
+    def __call__(
+        self, question: Question,
+        resolution_date: str | None = ...,
+        source: str | None = ...,
+        resolution_dates: Any = ...,
+        prompt_variant: str = ...,
+    ) -> float: ...
 
 
 class AsyncForecaster(Protocol):
-    async def __call__(self, question: Question, resolution_date: str | None = None) -> float: ...
+    async def __call__(
+        self, question: Question,
+        resolution_date: str | None = ...,
+        source: str | None = ...,
+        resolution_dates: Any = ...,
+        prompt_variant: str = ...,
+    ) -> float: ...
 
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
@@ -235,6 +247,7 @@ async def run_eval(
     n_held_out: int = 2,
     raw: bool = False,
     round_name: str | None = None,
+    prompt_variant: str = "zero-shot",
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -266,9 +279,9 @@ async def run_eval(
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug)  # type: ignore[arg-type]
+        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
     else:
-        forecasts = _run_sync(forecaster, questions, model_slug)  # type: ignore[arg-type]
+        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
 
@@ -309,6 +322,7 @@ def _run_sync(
     forecaster: SyncForecaster,
     questions: list[Question],
     model_slug: str,
+    prompt_variant: str = "zero-shot",
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
@@ -320,7 +334,11 @@ def _run_sync(
                     forecasts[composite_key] = cached
                     continue
                 try:
-                    prob = forecaster(q, resolution_date=date_str)
+                    prob = forecaster(
+                        q, resolution_date=date_str,
+                        source=q.source, resolution_dates=q.resolution_dates,
+                        prompt_variant=prompt_variant,
+                    )
                 except Exception:
                     logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=date_str, exc_info=True)
                     prob = 0.5
@@ -331,7 +349,10 @@ def _run_sync(
             if cached is not None:
                 forecasts[q.id] = cached
                 continue
-            prob = forecaster(q)
+            prob = forecaster(
+                q, source=q.source, resolution_dates=q.resolution_dates,
+                prompt_variant=prompt_variant,
+            )
             forecasts[q.id] = prob
             _write_cache(model_slug, q.id, prob)
     return forecasts
@@ -341,6 +362,7 @@ async def _run_async(
     forecaster: AsyncForecaster,
     questions: list[Question],
     model_slug: str,
+    prompt_variant: str = "zero-shot",
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
 
@@ -357,10 +379,13 @@ async def _run_async(
             return cache_key, cached
         async with semaphore:
             try:
-                if resolution_date is not None:
-                    prob = await forecaster(q, resolution_date=resolution_date)
-                else:
-                    prob = await forecaster(q)
+                prob = await forecaster(
+                    q,
+                    resolution_date=resolution_date,
+                    source=q.source,
+                    resolution_dates=q.resolution_dates,
+                    prompt_variant=prompt_variant,
+                )
             except Exception:
                 logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=resolution_date, exc_info=True)
                 return cache_key, 0.5
@@ -406,6 +431,88 @@ def list_rounds() -> list[tuple[str, int]]:
     return rounds
 
 
+def print_leaderboard_comparison(
+    user_index: float,
+    leaderboard_name: str = "baseline",
+) -> None:
+    """Fetch the leaderboard and show where the user's score ranks."""
+    try:
+        rows = fetch_leaderboard(leaderboard_name)
+    except Exception:
+        logger.warning("leaderboard_fetch_failed", name=leaderboard_name, exc_info=True)
+        print("  (Could not fetch leaderboard data)")
+        return
+
+    entries: list[tuple[int, str, float]] = []
+    for row in rows:
+        try:
+            rank = int(row.get("Rank", "0"))
+            model = row.get("Model", "Unknown")
+            overall_str = row.get("Overall", "").strip().rstrip("%")
+            overall = float(overall_str)
+            entries.append((rank, model, overall))
+        except (ValueError, TypeError):
+            continue
+
+    if not entries:
+        print("  (No parseable leaderboard entries)")
+        return
+
+    entries.sort(key=lambda e: e[2], reverse=True)
+
+    user_rank = 1
+    for _, _, score in entries:
+        if score >= user_index:
+            user_rank += 1
+        else:
+            break
+
+    top_5 = entries[:5]
+    user_pos = user_rank - 1
+    context_start = max(0, user_pos - 2)
+    context_end = min(len(entries), user_pos + 3)
+    context = entries[context_start:context_end]
+    bottom = [e for e in entries if e[2] <= 50.5]
+    bottom_entry = bottom[-1] if bottom else entries[-1]
+
+    shown_ranks: set[int] = set()
+    display_entries: list[tuple[int | None, str, float, bool]] = []
+
+    for rank, model, score in top_5:
+        display_entries.append((rank, model, score, False))
+        shown_ranks.add(rank)
+
+    needs_sep_before_context = True
+    for rank, model, score in context:
+        if rank not in shown_ranks:
+            if needs_sep_before_context and display_entries:
+                display_entries.append((None, "", 0.0, False))
+                needs_sep_before_context = False
+            display_entries.append((rank, model, score, False))
+            shown_ranks.add(rank)
+
+    user_entry_idx: int = len(display_entries)
+    for idx, (_r, _m, score, _u) in enumerate(display_entries):
+        if score < user_index:
+            user_entry_idx = idx
+            break
+    display_entries.insert(user_entry_idx, (None, ">>> Your result <<<", user_index, True))
+
+    if bottom_entry[0] not in shown_ranks:
+        display_entries.append((None, "", 0.0, False))
+        display_entries.append((bottom_entry[0], bottom_entry[1], bottom_entry[2], False))
+
+    print(f"\nLeaderboard comparison ({leaderboard_name}):")
+    print(f"  {'Rank':<6s} {'Model':<35s} {'Overall':>8s}")
+    for e_rank, e_model, e_score, e_is_user in display_entries:
+        if e_model == "" and e_rank is None:
+            print(f"  {'...':<6s}")
+            continue
+        rank_str = "---" if e_is_user or e_rank is None else str(e_rank)
+        score_str = f"{e_score:.1f}%"
+        print(f"  {rank_str:<6s} {e_model:<35s} {score_str:>8s}")
+
+
 def _print_results(result: ScoringResult) -> None:
     logger.info(
         "eval_results",
@@ -446,6 +553,17 @@ def main() -> None:
         help="Evaluate a single round (e.g. 2026-07-05-llm or 2026-07-05)",
     )
     parser.add_argument(
+        "--prompt",
+        choices=["zero-shot", "zero-shot-fv", "dataset"],
+        default="zero-shot",
+        help="Prompt variant: zero-shot (default), zero-shot-fv (with freeze values), dataset (multi-horizon)",
+    )
+    parser.add_argument(
+        "--leaderboard",
+        action="store_true",
+        help="Show leaderboard comparison after scoring",
+    )
+    parser.add_argument(
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
@@ -473,7 +591,14 @@ def main() -> None:
         from dummy_forecaster import forecast
         forecaster = forecast
 
-    eval_result = asyncio.run(run_eval(forecaster, raw=args.raw, round_name=round_name))
+    eval_result = asyncio.run(run_eval(
+        forecaster, raw=args.raw, round_name=round_name,
+        prompt_variant=args.prompt,
+    ))
+
+    if args.leaderboard:
+        print(f"\nYour result:  Overall Index = {eval_result.scoring.overall_index:.1f}%")
+        print_leaderboard_comparison(eval_result.scoring.overall_index)
 
     if args.agent != "dummy":
         _run_analysis(eval_result.forecasts, eval_result.resolved, eval_result.model_slug)

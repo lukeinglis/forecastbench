@@ -18,7 +18,10 @@ REPO_OWNER = "forecastingresearch"
 REPO_NAME = "forecastbench-datasets"
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/datasets"
 API_BASE = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/contents/datasets"
+LEADERBOARD_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/main/leaderboards/csv"
 CACHE_DIR = Path(".cache")
+
+LEADERBOARD_NAMES = frozenset({"baseline", "tournament", "dataset", "preliminary"})
 
 MARKET_SOURCES = frozenset({"metaculus", "polymarket", "manifold", "infer"})
 
@@ -227,6 +230,38 @@ def join_resolved_questions(
                     )
                 )
     return resolved
+
+
+def _fetch_text(url: str, cache_key: str) -> str:
+    _ensure_cache_dir()
+    cached = _cache_path(cache_key)
+    if cached.exists():
+        return cached.read_text()
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    text = resp.text
+    cached.write_text(text)
+    return text
+
+
+def fetch_leaderboard(name: str = "baseline") -> list[dict[str, str]]:
+    """Fetch a leaderboard CSV and return as list of dicts.
+
+    Supported names: baseline, tournament, dataset, preliminary.
+    """
+    import csv
+    import io
+
+    if name not in LEADERBOARD_NAMES:
+        raise ValueError(f"Unknown leaderboard {name!r}, expected one of {sorted(LEADERBOARD_NAMES)}")
+    url = f"{LEADERBOARD_BASE}/leaderboard_{name}.csv"
+    text = _fetch_text(url, f"lb_{name}.csv")
+    reader = csv.DictReader(io.StringIO(text))
+    rows: list[dict[str, str]] = []
+    for row in reader:
+        rows.append(dict(row))
+    logger.info("leaderboard_fetched", name=name, n_entries=len(rows))
+    return rows
 
 
 def load_data() -> tuple[list[QuestionSet], list[ResolvedQuestion]]:

@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fetch_data import ResolvedQuestion
+from fetch_data import ResolvedQuestion, fetch_leaderboard
 from logging_config import get_logger
 from score import brier_score, brier_index, murphy_decomposition
 
@@ -446,6 +446,77 @@ def compare_by_round(results_dir: str | Path = "results") -> None:
         )
 
 
+def compare_to_leaderboard(
+    results_dir: str | Path = "results",
+    leaderboard_name: str = "baseline",
+) -> None:
+    """Compare all saved results against the leaderboard."""
+    p = Path(results_dir)
+    if not p.exists():
+        print("No results directory found. Run eval first.")
+        return
+
+    files = sorted(p.glob("*.json"))
+    if not files:
+        print("No result files found.")
+        return
+
+    try:
+        lb_rows = fetch_leaderboard(leaderboard_name)
+    except Exception:
+        logger.warning("leaderboard_fetch_failed", name=leaderboard_name, exc_info=True)
+        print("Could not fetch leaderboard data.")
+        return
+
+    lb_entries: list[tuple[int, str, float]] = []
+    for row in lb_rows:
+        try:
+            rank = int(row.get("Rank", "0"))
+            model = row.get("Model", "Unknown")
+            overall_str = row.get("Overall", "").strip().rstrip("%")
+            overall = float(overall_str)
+            lb_entries.append((rank, model, overall))
+        except (ValueError, TypeError):
+            continue
+
+    if not lb_entries:
+        print("No parseable leaderboard entries.")
+        return
+
+    lb_entries.sort(key=lambda e: e[2], reverse=True)
+
+    local_results: list[tuple[str, str, float]] = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+            sr = data["scoring_result"]
+            model = data["model_slug"]
+            meta = data.get("metadata", {})
+            round_name = meta.get("round", "")
+            label = f"{model} ({round_name})" if round_name else model
+            overall_index = float(sr["overall_index"])
+            local_results.append((f.name, label, overall_index))
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+
+    if not local_results:
+        print("No valid result files found.")
+        return
+
+    print(f"\nLeaderboard comparison ({leaderboard_name}, {len(lb_entries)} entries):")
+    print(f"\n  {'Result':<40s} {'Index':>7s} {'Rank':>6s}")
+    print(f"  {'-' * 55}")
+
+    for _fname, label, index in sorted(local_results, key=lambda x: x[2], reverse=True):
+        rank = 1
+        for _, _, lb_score in lb_entries:
+            if lb_score >= index:
+                rank += 1
+            else:
+                break
+        print(f"  {label:<40s} {index:>6.1f}% {rank:>5d}/{len(lb_entries)}")
+
+
 def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], list[ResolvedQuestion]]:
     """Load forecasts from a result file and re-join with resolved questions."""
     from fetch_data import Resolution, load_data, join_resolved_questions
@@ -475,10 +546,13 @@ if __name__ == "__main__":
     parser.add_argument("--horizons", metavar="RESULT", help="Show horizon breakdown from a result file")
     parser.add_argument("--decompose", metavar="RESULT", help="Show Brier decomposition from a result file")
     parser.add_argument("--versus", nargs=2, metavar=("A", "B"), help="Paired comparison of two result files")
+    parser.add_argument("--leaderboard", action="store_true", help="Compare saved results against the ForecastBench leaderboard")
     parser.add_argument("--top-n", type=int, default=50, help="Number of worst questions to show")
     args = parser.parse_args()
 
-    if args.compare:
+    if args.leaderboard:
+        compare_to_leaderboard(args.results_dir)
+    elif args.compare:
         compare_results(args.results_dir)
     elif args.by_round:
         compare_by_round(args.results_dir)
