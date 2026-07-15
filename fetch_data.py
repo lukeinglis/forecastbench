@@ -149,13 +149,13 @@ def _fetch_json(url: str, cache_key: str, max_age_hours: float | None = None) ->
 
 def list_question_set_files() -> list[str]:
     """List available question set JSON filenames from the GitHub repo."""
-    data = _fetch_json(f"{API_BASE}/question_sets", "question_sets_listing.json", max_age_hours=1)
+    data = _fetch_json(f"{API_BASE}/question_sets", "question_sets_listing.json", max_age_hours=24)
     return [item["name"] for item in data if item["name"].endswith(".json")]
 
 
 def list_resolution_files() -> list[str]:
     """List available resolution JSON filenames from the GitHub repo."""
-    data = _fetch_json(f"{API_BASE}/resolution_sets", "resolution_sets_listing.json", max_age_hours=1)
+    data = _fetch_json(f"{API_BASE}/resolution_sets", "resolution_sets_listing.json", max_age_hours=24)
     return [item["name"] for item in data if item["name"].endswith(".json")]
 
 
