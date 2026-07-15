@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import time
+
 from pathlib import Path
 from typing import Any
 
@@ -128,18 +128,12 @@ def _cache_path(filename: str) -> Path:
     return CACHE_DIR / filename.replace("/", "_")
 
 
-def _fetch_json(url: str, cache_key: str, max_age_hours: float | None = None) -> Any:
+def _fetch_json(url: str, cache_key: str) -> Any:
     _ensure_cache_dir()
     cached = _cache_path(cache_key)
     if cached.exists():
-        if max_age_hours is None:
-            logger.debug("cache_hit", cache_key=cache_key)
-            return json.loads(cached.read_text())
-        age_hours = (time.time() - cached.stat().st_mtime) / 3600
-        if age_hours < max_age_hours:
-            logger.debug("cache_hit", cache_key=cache_key, age_hours=round(age_hours, 1))
-            return json.loads(cached.read_text())
-        logger.info("cache_expired", cache_key=cache_key, age_hours=round(age_hours, 1))
+        logger.debug("cache_hit", cache_key=cache_key)
+        return json.loads(cached.read_text())
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     data = resp.json()
@@ -149,13 +143,13 @@ def _fetch_json(url: str, cache_key: str, max_age_hours: float | None = None) ->
 
 def list_question_set_files() -> list[str]:
     """List available question set JSON filenames from the GitHub repo."""
-    data = _fetch_json(f"{API_BASE}/question_sets", "question_sets_listing.json", max_age_hours=24)
+    data = _fetch_json(f"{API_BASE}/question_sets", "question_sets_listing.json")
     return [item["name"] for item in data if item["name"].endswith(".json")]
 
 
 def list_resolution_files() -> list[str]:
     """List available resolution JSON filenames from the GitHub repo."""
-    data = _fetch_json(f"{API_BASE}/resolution_sets", "resolution_sets_listing.json", max_age_hours=24)
+    data = _fetch_json(f"{API_BASE}/resolution_sets", "resolution_sets_listing.json")
     return [item["name"] for item in data if item["name"].endswith(".json")]
 
 
@@ -169,7 +163,7 @@ def fetch_question_set(filename: str) -> QuestionSet:
 def fetch_resolution(filename: str) -> list[Resolution]:
     """Fetch and parse a single resolution file."""
     url = f"{RAW_BASE}/resolution_sets/{filename}"
-    data = _fetch_json(url, f"res_{filename}", max_age_hours=24)
+    data = _fetch_json(url, f"res_{filename}")
     if isinstance(data, list):
         return [Resolution.model_validate(r) for r in data]
     if isinstance(data, dict) and "resolutions" in data:
@@ -240,18 +234,12 @@ def join_resolved_questions(
     return resolved
 
 
-def _fetch_text(url: str, cache_key: str, max_age_hours: float | None = None) -> str:
+def _fetch_text(url: str, cache_key: str) -> str:
     _ensure_cache_dir()
     cached = _cache_path(cache_key)
     if cached.exists():
-        if max_age_hours is None:
-            logger.debug("cache_hit", cache_key=cache_key)
-            return cached.read_text()
-        age_hours = (time.time() - cached.stat().st_mtime) / 3600
-        if age_hours < max_age_hours:
-            logger.debug("cache_hit", cache_key=cache_key, age_hours=round(age_hours, 1))
-            return cached.read_text()
-        logger.info("cache_expired", cache_key=cache_key, age_hours=round(age_hours, 1))
+        logger.debug("cache_hit", cache_key=cache_key)
+        return cached.read_text()
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     text = resp.text
@@ -270,7 +258,7 @@ def fetch_leaderboard(name: str = "baseline") -> list[dict[str, str]]:
     if name not in LEADERBOARD_NAMES:
         raise ValueError(f"Unknown leaderboard {name!r}, expected one of {sorted(LEADERBOARD_NAMES)}")
     url = f"{LEADERBOARD_BASE}/leaderboard_{name}.csv"
-    text = _fetch_text(url, f"lb_{name}.csv", max_age_hours=24)
+    text = _fetch_text(url, f"lb_{name}.csv")
     reader = csv.DictReader(io.StringIO(text))
     rows: list[dict[str, str]] = []
     for row in reader:

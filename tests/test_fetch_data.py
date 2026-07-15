@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-import time
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -380,15 +380,11 @@ class TestCompareResults:
 # ---------------------------------------------------------------------------
 
 
-class TestFetchJsonTTL:
-    def test_no_ttl_caches_forever(self, tmp_path: Path) -> None:
+class TestFetchJsonCacheForever:
+    def test_old_cache_still_used(self, tmp_path: Path) -> None:
         payload = {"forever": True}
         cache_file = tmp_path / "forever.json"
         cache_file.write_text(json.dumps(payload))
-        # Set mtime to 30 days ago
-        old_time = time.time() - 30 * 24 * 3600
-        import os
-        os.utime(cache_file, (old_time, old_time))
 
         with (
             patch("fetch_data.CACHE_DIR", tmp_path),
@@ -399,50 +395,23 @@ class TestFetchJsonTTL:
         assert result == payload
         mock_get.assert_not_called()
 
-    def test_expired_cache_refetches(self, tmp_path: Path) -> None:
-        old_payload = {"old": True}
-        new_payload = {"new": True}
-        cache_file = tmp_path / "expiring.json"
-        cache_file.write_text(json.dumps(old_payload))
-        # Set mtime to 25 hours ago
-        old_time = time.time() - 25 * 3600
-        import os
-        os.utime(cache_file, (old_time, old_time))
+    def test_refresh_cache_forces_refetch(self, tmp_path: Path) -> None:
+        from fetch_data import refresh_cache
 
-        mock_resp = MagicMock()
-        mock_resp.json.return_value = new_payload
-        mock_resp.raise_for_status = MagicMock()
+        (tmp_path / "question_sets_listing.json").write_text(json.dumps({"old": True}))
+        (tmp_path / "resolution_sets_listing.json").write_text(json.dumps([]))
+        (tmp_path / "res_round1.json").write_text(json.dumps([]))
+        (tmp_path / "lb_baseline.csv").write_text("header\n")
+        (tmp_path / "qs_immutable.json").write_text(json.dumps({"keep": True}))
 
-        with (
-            patch("fetch_data.CACHE_DIR", tmp_path),
-            patch("fetch_data.requests.get", return_value=mock_resp) as mock_get,
-        ):
-            result = _fetch_json("https://example.com/data.json", "expiring.json", max_age_hours=24)
+        with patch("fetch_data.CACHE_DIR", tmp_path):
+            refresh_cache()
 
-        assert result == new_payload
-        mock_get.assert_called_once()
-
-    def test_fresh_cache_with_ttl_uses_cache(self, tmp_path: Path) -> None:
-        payload = {"fresh": True}
-        cache_file = tmp_path / "fresh.json"
-        cache_file.write_text(json.dumps(payload))
-        # mtime is now (just created), well within 24h TTL
-
-        with (
-            patch("fetch_data.CACHE_DIR", tmp_path),
-            patch("fetch_data.requests.get") as mock_get,
-        ):
-            result = _fetch_json("https://example.com/data.json", "fresh.json", max_age_hours=24)
-
-        assert result == payload
-        mock_get.assert_not_called()
-
-    def test_fetch_resolution_uses_24h_ttl(self) -> None:
-        with patch("fetch_data._fetch_json") as mock_fetch:
-            mock_fetch.return_value = [{"id": "r1", "outcome": 1}]
-            fetch_resolution("test.json")
-            mock_fetch.assert_called_once()
-            assert mock_fetch.call_args.kwargs["max_age_hours"] == 24
+        assert not (tmp_path / "question_sets_listing.json").exists()
+        assert not (tmp_path / "resolution_sets_listing.json").exists()
+        assert not (tmp_path / "res_round1.json").exists()
+        assert not (tmp_path / "lb_baseline.csv").exists()
+        assert (tmp_path / "qs_immutable.json").exists()
 
 
 # ---------------------------------------------------------------------------
