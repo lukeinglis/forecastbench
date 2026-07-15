@@ -16,7 +16,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions  # noqa: E402
+from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, score_forecasts  # noqa: E402
 
@@ -133,9 +133,17 @@ def save_result(
     model_slug: str,
     question_sets_used: list[str],
     n_held_out: int,
+    round_name: str | None = None,
 ) -> Path:
-    """Save run result to results/{timestamp}_{model_slug}.json."""
+    """Save run result to results/{timestamp}_{model_slug}[_{round}].json."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    metadata: dict[str, object] = {
+        "n_questions": result.n_dataset + result.n_market,
+        "n_held_out": n_held_out,
+        "question_sets_used": question_sets_used,
+    }
+    if round_name is not None:
+        metadata["round"] = round_name
     payload = {
         "timestamp": timestamp,
         "model_slug": model_slug,
@@ -153,14 +161,14 @@ def save_result(
         },
         "forecasts": forecasts,
         "outcomes": outcomes,
-        "metadata": {
-            "n_questions": result.n_dataset + result.n_market,
-            "n_held_out": n_held_out,
-            "question_sets_used": question_sets_used,
-        },
+        "metadata": metadata,
     }
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    path = RESULTS_DIR / f"{timestamp}_{model_slug}.json"
+    if round_name is not None:
+        safe_round = re.sub(r"[^\w\-.]", "_", round_name)
+        path = RESULTS_DIR / f"{timestamp}_{model_slug}_{safe_round}.json"
+    else:
+        path = RESULTS_DIR / f"{timestamp}_{model_slug}.json"
     path.write_text(json.dumps(payload, indent=2))
     return path
 
@@ -226,17 +234,33 @@ async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
     raw: bool = False,
+    round_name: str | None = None,
 ) -> EvalResult:
-    """Run the full evaluation pipeline."""
-    question_sets, resolved = load_data()
-    iteration_set, _held_out = split_held_out(question_sets, n_held_out)
+    """Run the full evaluation pipeline.
 
-    resolutions_by_id = {q.id: q for q in resolved}
-    iteration_resolved = join_resolved_questions(
-        iteration_set,
-        {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
-         for q_id, r in resolutions_by_id.items()},
-    )
+    When round_name is set, only that single question set is evaluated
+    (no held-out split). Otherwise, all question sets are loaded and the
+    most recent n_held_out sets are held out.
+    """
+    if round_name is not None:
+        logger.info("round_eval_start", round=round_name)
+        filename = round_name if round_name.endswith(".json") else round_name + ".json"
+        question_set = fetch_question_set(filename)
+        resolutions = fetch_all_resolutions()
+        iteration_resolved = join_resolved_questions(
+            [question_set], resolutions,
+        )
+        iteration_set = [question_set]
+        logger.info("round_eval_loaded", round=round_name, n_questions=len(iteration_resolved))
+    else:
+        question_sets, resolved = load_data()
+        iteration_set, _held_out = split_held_out(question_sets, n_held_out)
+        resolutions_by_id = {q.id: q for q in resolved}
+        iteration_resolved = join_resolved_questions(
+            iteration_set,
+            {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
+             for q_id, r in resolutions_by_id.items()},
+        )
 
     questions = [_build_question(q) for q in iteration_resolved]
     model_slug = _model_slug()
@@ -272,7 +296,10 @@ async def run_eval(
 
     outcomes = {q.id: q.outcome for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
-    result_path = save_result(result, forecasts, outcomes, model_slug, question_sets_used, n_held_out)
+    result_path = save_result(
+        result, forecasts, outcomes, model_slug,
+        question_sets_used, n_held_out, round_name=round_name,
+    )
     logger.info("results_saved", path=str(result_path))
 
     return EvalResult(scoring=result, forecasts=forecasts, resolved=iteration_resolved, model_slug=model_slug)
@@ -357,6 +384,28 @@ async def _run_async(
     return {qid: prob for qid, prob in results}
 
 
+def _normalize_round_name(name: str) -> str:
+    """Ensure round name has the -llm suffix and no .json extension."""
+    name = name.removesuffix(".json")
+    if not name.endswith(("-llm", "-human")):
+        name = name + "-llm"
+    return name
+
+
+def list_rounds() -> list[tuple[str, int]]:
+    """List available rounds with question counts."""
+    filenames = list_question_set_files()
+    rounds: list[tuple[str, int]] = []
+    for fname in sorted(filenames, reverse=True):
+        try:
+            qs = fetch_question_set(fname)
+            round_name = fname.removesuffix(".json")
+            rounds.append((round_name, len(qs.questions)))
+        except Exception:
+            logger.warning("list_rounds_fetch_failed", filename=fname)
+    return rounds
+
+
 def _print_results(result: ScoringResult) -> None:
     logger.info(
         "eval_results",
@@ -391,7 +440,31 @@ def main() -> None:
         action="store_true",
         help="Disable difficulty adjustment, use raw Brier scores",
     )
+    parser.add_argument(
+        "--round",
+        metavar="ROUND",
+        help="Evaluate a single round (e.g. 2026-07-05-llm or 2026-07-05)",
+    )
+    parser.add_argument(
+        "--list-rounds",
+        action="store_true",
+        help="List available rounds with question counts and exit",
+    )
     args = parser.parse_args()
+
+    if args.list_rounds:
+        rounds = list_rounds()
+        if not rounds:
+            print("No rounds available.")
+        else:
+            print("Available rounds:")
+            for name, count in rounds:
+                print(f"  {name:<25s} {count:>4d} questions")
+        return
+
+    round_name: str | None = None
+    if args.round:
+        round_name = _normalize_round_name(args.round)
 
     if args.agent == "baseline":
         from baseline_agent import aforecast
@@ -400,7 +473,7 @@ def main() -> None:
         from dummy_forecaster import forecast
         forecaster = forecast
 
-    eval_result = asyncio.run(run_eval(forecaster, raw=args.raw))
+    eval_result = asyncio.run(run_eval(forecaster, raw=args.raw, round_name=round_name))
 
     if args.agent != "dummy":
         _run_analysis(eval_result.forecasts, eval_result.resolved, eval_result.model_slug)

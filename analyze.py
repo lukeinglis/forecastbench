@@ -401,6 +401,51 @@ def compare_results(results_dir: str | Path = "results") -> None:
         )
 
 
+def compare_by_round(results_dir: str | Path = "results") -> None:
+    """Print a per-round score table grouped by round name."""
+    p = Path(results_dir)
+    if not p.exists():
+        logger.warning("compare_by_round_no_dir", path=str(p))
+        return
+
+    files = sorted(p.glob("*.json"))
+    if not files:
+        logger.warning("compare_by_round_no_files", path=str(p))
+        return
+
+    rows: list[dict[str, Any]] = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+            sr = data["scoring_result"]
+            meta = data.get("metadata", {})
+            round_name = meta.get("round")
+            if round_name is None:
+                continue
+            rows.append({
+                "round": round_name,
+                "model": data["model_slug"],
+                "overall_brier": sr["overall_brier"],
+                "overall_index": sr["overall_index"],
+                "n": sr["n_dataset"] + sr["n_market"],
+            })
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    if not rows:
+        print("No per-round results found. Run eval with --round to generate them.")
+        return
+
+    rows.sort(key=lambda x: (x["round"], x["overall_brier"]))
+    print(f"\n{'Round':<25s} {'Model':<20s} {'Brier':>7s} {'Index':>7s} {'N':>5s}")
+    print("-" * 68)
+    for r in rows:
+        print(
+            f"{r['round']:<25s} {r['model']:<20s} "
+            f"{r['overall_brier']:>7.3f} {r['overall_index']:>6.1f}% {r['n']:>5d}"
+        )
+
+
 def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], list[ResolvedQuestion]]:
     """Load forecasts from a result file and re-join with resolved questions."""
     from fetch_data import Resolution, load_data, join_resolved_questions
@@ -424,6 +469,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="ForecastBench analysis tools")
     parser.add_argument("--compare", action="store_true", help="Compare all saved results")
+    parser.add_argument("--by-round", action="store_true", help="Show per-round score comparison")
     parser.add_argument("--results-dir", default="results", help="Results directory")
     parser.add_argument("--worst", metavar="RESULT", help="Show worst questions from a result file")
     parser.add_argument("--horizons", metavar="RESULT", help="Show horizon breakdown from a result file")
@@ -434,6 +480,8 @@ if __name__ == "__main__":
 
     if args.compare:
         compare_results(args.results_dir)
+    elif args.by_round:
+        compare_by_round(args.results_dir)
     elif args.worst:
         forecasts, resolved = _load_result_forecasts(args.worst)
         worst = analyze_worst_questions(forecasts, resolved, top_n=args.top_n)
