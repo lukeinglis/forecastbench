@@ -290,7 +290,8 @@ def fetch_superforecaster_forecasts() -> list[dict[str, object]]:
         "2024-07-21/2024-07-21.ForecastBench.human_super_individual.json"
     )
     data = _fetch_json(url, "superforecaster_individual.json")
-    return data.get("forecasts", [])
+    result: list[dict[str, object]] = data.get("forecasts", [])
+    return result
 
 
 def superforecaster_medians(forecasts: list[dict[str, object]]) -> dict[str, float]:
@@ -300,7 +301,7 @@ def superforecaster_medians(forecasts: list[dict[str, object]]) -> dict[str, flo
     by_question: dict[str, list[float]] = {}
     for entry in forecasts:
         qid = str(entry["id"])
-        prob = entry.get("forecast")
+        prob: Any = entry.get("forecast")
         if prob is not None:
             by_question.setdefault(qid, []).append(float(prob))
     return {qid: median(probs) for qid, probs in by_question.items() if probs}

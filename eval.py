@@ -18,7 +18,7 @@ litellm.suppress_debug_info = True
 
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
-from score import ScoringResult, score_forecasts  # noqa: E402
+from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
 
 logger = get_logger("eval")
 
@@ -514,6 +514,7 @@ def print_leaderboard_comparison(
 
 
 def _print_results(result: ScoringResult) -> None:
+    bss = brier_skill_score(result.overall_brier)
     logger.info(
         "eval_results",
         dataset_brier=round(result.dataset_brier, 4),
@@ -524,6 +525,7 @@ def _print_results(result: ScoringResult) -> None:
         n_market=result.n_market,
         overall_brier=round(result.overall_brier, 4),
         overall_index=round(result.overall_index, 1),
+        brier_skill_score=round(bss, 4),
         n_missing=result.n_missing,
     )
 
@@ -560,13 +562,21 @@ def main() -> None:
     )
     parser.add_argument(
         "--leaderboard",
-        action="store_true",
-        help="Show leaderboard comparison after scoring",
+        nargs="?",
+        const="baseline",
+        default=None,
+        choices=["baseline", "tournament", "dataset", "preliminary"],
+        help="Compare against leaderboard (default: baseline)",
     )
     parser.add_argument(
         "--refresh",
         action="store_true",
         help="Clear cached data and fetch fresh from ForecastBench repo",
+    )
+    parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="Show bootstrap confidence intervals for Brier scores",
     )
     parser.add_argument(
         "--list-rounds",
@@ -605,9 +615,18 @@ def main() -> None:
         prompt_variant=args.prompt,
     ))
 
-    if args.leaderboard:
+    if args.ci:
+        from score import bootstrap_ci
+        pairs = [
+            (eval_result.forecasts.get(q.id, 0.5), q.outcome)
+            for q in eval_result.resolved
+        ]
+        lo, hi = bootstrap_ci(pairs)
+        logger.info("bootstrap_ci", lower=round(lo, 4), upper=round(hi, 4), ci="95%")
+
+    if args.leaderboard is not None:
         print(f"\nYour result:  Overall Index = {eval_result.scoring.overall_index:.1f}%")
-        print_leaderboard_comparison(eval_result.scoring.overall_index)
+        print_leaderboard_comparison(eval_result.scoring.overall_index, leaderboard_name=args.leaderboard)
 
     if args.agent != "dummy":
         _run_analysis(eval_result.forecasts, eval_result.resolved, eval_result.model_slug)

@@ -517,6 +517,56 @@ def compare_to_leaderboard(
         print(f"  {label:<40s} {index:>6.1f}% {rank:>5d}/{len(lb_entries)}")
 
 
+def compare_to_superforecasters(
+    forecasts: dict[str, float],
+    resolved: list[ResolvedQuestion],
+    sf_medians: dict[str, float],
+) -> dict[str, object]:
+    """Compare our forecasts to superforecaster medians on shared questions."""
+    shared_ids = set(forecasts.keys()) & set(sf_medians.keys())
+    outcome_map = {q.id: q.outcome for q in resolved}
+    shared_ids &= set(outcome_map.keys())
+
+    if not shared_ids:
+        return {"n_shared": 0, "our_mean_brier": 0.0, "sf_mean_brier": 0.0, "n_we_won": 0, "n_they_won": 0}
+
+    our_briers: list[float] = []
+    sf_briers: list[float] = []
+    n_we_won = 0
+    n_they_won = 0
+
+    for qid in sorted(shared_ids):
+        outcome = outcome_map[qid]
+        our_bs = brier_score(forecasts[qid], outcome)
+        sf_bs = brier_score(sf_medians[qid], outcome)
+        our_briers.append(our_bs)
+        sf_briers.append(sf_bs)
+        if our_bs < sf_bs:
+            n_we_won += 1
+        elif sf_bs < our_bs:
+            n_they_won += 1
+
+    our_mean = sum(our_briers) / len(our_briers)
+    sf_mean = sum(sf_briers) / len(sf_briers)
+
+    logger.info(
+        "superforecaster_comparison",
+        n_shared=len(shared_ids),
+        our_mean_brier=round(our_mean, 4),
+        sf_mean_brier=round(sf_mean, 4),
+        n_we_won=n_we_won,
+        n_they_won=n_they_won,
+    )
+
+    return {
+        "n_shared": len(shared_ids),
+        "our_mean_brier": our_mean,
+        "sf_mean_brier": sf_mean,
+        "n_we_won": n_we_won,
+        "n_they_won": n_they_won,
+    }
+
+
 def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], list[ResolvedQuestion]]:
     """Load forecasts from a result file and re-join with resolved questions."""
     from fetch_data import Resolution, load_data, join_resolved_questions
@@ -547,10 +597,23 @@ if __name__ == "__main__":
     parser.add_argument("--decompose", metavar="RESULT", help="Show Brier decomposition from a result file")
     parser.add_argument("--versus", nargs=2, metavar=("A", "B"), help="Paired comparison of two result files")
     parser.add_argument("--leaderboard", action="store_true", help="Compare saved results against the ForecastBench leaderboard")
+    parser.add_argument("--superforecaster", metavar="RESULT", help="Compare a result file against superforecaster medians")
     parser.add_argument("--top-n", type=int, default=50, help="Number of worst questions to show")
     args = parser.parse_args()
 
-    if args.leaderboard:
+    if args.superforecaster:
+        from fetch_data import fetch_superforecaster_forecasts, superforecaster_medians
+        forecasts, resolved = _load_result_forecasts(args.superforecaster)
+        sf_raw = fetch_superforecaster_forecasts()
+        sf_meds = superforecaster_medians(sf_raw)
+        result = compare_to_superforecasters(forecasts, resolved, sf_meds)
+        print("\nSuperforecaster Comparison:")
+        print(f"  Shared questions:  {result['n_shared']}")
+        print(f"  Our mean Brier:    {result['our_mean_brier']:.4f}")
+        print(f"  SF mean Brier:     {result['sf_mean_brier']:.4f}")
+        print(f"  We won:            {result['n_we_won']}")
+        print(f"  They won:          {result['n_they_won']}")
+    elif args.leaderboard:
         compare_to_leaderboard(args.results_dir)
     elif args.compare:
         compare_results(args.results_dir)
