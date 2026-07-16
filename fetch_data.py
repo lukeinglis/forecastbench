@@ -315,7 +315,7 @@ def refresh_cache() -> None:
     """
     if not CACHE_DIR.exists():
         return
-    patterns = ["question_sets_listing.json", "resolution_sets_listing.json"]
+    patterns = ["question_sets_listing.json", "resolution_sets_listing.json", "latest_round.txt"]
     for name in patterns:
         path = CACHE_DIR / name
         if path.exists():
