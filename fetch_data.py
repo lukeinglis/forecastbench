@@ -81,6 +81,7 @@ class Resolution(BaseModel):
     id: str
     outcome: int | None = None
     resolution_date: str | None = None
+    resolved: bool | None = None
 
     @field_validator("id", mode="before")
     @classmethod
@@ -144,7 +145,18 @@ def _fetch_json(url: str, cache_key: str) -> Any:
 def list_question_set_files() -> list[str]:
     """List available question set JSON filenames from the GitHub repo."""
     data = _fetch_json(f"{API_BASE}/question_sets", "question_sets_listing.json")
-    return [item["name"] for item in data if item["name"].endswith(".json")]
+    return [
+        item["name"]
+        for item in data
+        if item["name"].endswith(".json") and item["name"] != "latest-llm.json"
+    ]
+
+
+def get_latest_round() -> str:
+    """Get the name of the current/latest round from the ForecastBench repo."""
+    url = f"{RAW_BASE}/question_sets/latest-llm.json"
+    text = _fetch_text(url, "latest_round.txt")
+    return text.strip().replace(".json", "")
 
 
 def list_resolution_files() -> list[str]:
@@ -206,7 +218,7 @@ def join_resolved_questions(
     resolved = []
     for qs in question_sets:
         for q in qs.questions:
-            if q.id in resolutions and resolutions[q.id].outcome is not None:
+            if q.id in resolutions and resolutions[q.id].outcome is not None and getattr(resolutions[q.id], "resolved", None) is not False:
                 r = resolutions[q.id]
                 resolved.append(
                     ResolvedQuestion(
@@ -265,6 +277,33 @@ def fetch_leaderboard(name: str = "baseline") -> list[dict[str, str]]:
         rows.append(dict(row))
     logger.info("leaderboard_fetched", name=name, n_entries=len(rows))
     return rows
+
+
+def fetch_superforecaster_forecasts() -> list[dict[str, object]]:
+    """Fetch individual superforecaster forecasts from the July 2024 round.
+
+    Returns list of forecast entries, each with: id, source, forecast, reasoning, searches, user_id.
+    """
+    url = (
+        "https://media.githubusercontent.com/media/forecastingresearch/"
+        "forecastbench-datasets/main/datasets/forecast_sets/"
+        "2024-07-21/2024-07-21.ForecastBench.human_super_individual.json"
+    )
+    data = _fetch_json(url, "superforecaster_individual.json")
+    return data.get("forecasts", [])
+
+
+def superforecaster_medians(forecasts: list[dict[str, object]]) -> dict[str, float]:
+    """Compute median forecast per question from individual superforecaster entries."""
+    from statistics import median
+
+    by_question: dict[str, list[float]] = {}
+    for entry in forecasts:
+        qid = str(entry["id"])
+        prob = entry.get("forecast")
+        if prob is not None:
+            by_question.setdefault(qid, []).append(float(prob))
+    return {qid: median(probs) for qid, probs in by_question.items() if probs}
 
 
 def refresh_cache() -> None:

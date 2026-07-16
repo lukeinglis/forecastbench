@@ -96,13 +96,19 @@ def _build_prompt(
         else ""
     )
 
+    effective_resolution_date = resolution_date
+    if not effective_resolution_date and is_market:
+        effective_resolution_date = getattr(prepared, "market_info_close_datetime", None)
     resolution_date_section = (
-        f"Target resolution date: {resolution_date}\n\n"
-        if resolution_date
+        f"Target resolution date: {effective_resolution_date}\n\n"
+        if effective_resolution_date
         else ""
     )
 
     background_section = f"Background: {prepared.background}\n" if prepared.background else ""
+    mrc = getattr(prepared, "market_info_resolution_criteria", None)
+    if mrc and mrc != "N/A":
+        background_section = background_section + "\n" + mrc
     criteria_section = (
         f"Resolution Criteria: {prepared.resolution_criteria}\n"
         if prepared.resolution_criteria

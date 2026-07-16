@@ -309,6 +309,48 @@ class TestForecastAsync:
         assert result == pytest.approx(0.42)
 
 
+class TestMarketInfoResolutionCriteria:
+    def test_appended_when_present_and_not_na(self) -> None:
+        q = _make_question()
+        q = q.model_copy(update={"market_info_resolution_criteria": "Resolves based on official data."})
+        prompt = _build_prompt(q)
+        assert "Resolves based on official data." in prompt
+
+    def test_not_appended_when_na(self) -> None:
+        q = _make_question()
+        q = q.model_copy(update={"market_info_resolution_criteria": "N/A"})
+        prompt = _build_prompt(q)
+        assert prompt.count("N/A") == 0 or "market_info_resolution_criteria" not in prompt
+
+    def test_not_appended_when_none(self) -> None:
+        q = _make_question()
+        q = q.model_copy(update={"market_info_resolution_criteria": None})
+        prompt = _build_prompt(q)
+        assert "market_info_resolution_criteria" not in prompt
+
+
+class TestMarketCloseAsResolutionDate:
+    def test_market_close_used_when_no_resolution_date(self) -> None:
+        q = _make_question(source="metaculus")
+        q = q.model_copy(update={"market_info_close_datetime": "2024-12-31T23:59:00Z"})
+        prompt = _build_prompt(q, resolution_date=None)
+        assert "2024-12-31T23:59:00Z" in prompt
+        assert "resolution date" in prompt.lower()
+
+    def test_explicit_resolution_date_takes_precedence(self) -> None:
+        q = _make_question(source="metaculus")
+        q = q.model_copy(update={"market_info_close_datetime": "2024-12-31T23:59:00Z"})
+        prompt = _build_prompt(q, resolution_date="2024-11-01")
+        assert "2024-11-01" in prompt
+        assert "2024-12-31T23:59:00Z" not in prompt
+
+    def test_not_used_for_dataset_sources(self) -> None:
+        q = _make_question(source="fred")
+        q = q.model_copy(update={"market_info_close_datetime": "2024-12-31T23:59:00Z"})
+        prompt = _build_prompt(q, resolution_date=None)
+        assert "2024-12-31T23:59:00Z" not in prompt
+
+
 class TestModelConfig:
     def test_default_model(self) -> None:
         assert "claude" in MODEL.lower() or "sonnet" in MODEL.lower()
