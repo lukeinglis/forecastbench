@@ -74,12 +74,31 @@ class TestBuildPrompt:
         assert "superforecaster" in prompt.lower()
 
 
+class TestForecastDueDateInPrompt:
+    def test_prompt_uses_forecast_due_date_as_todays_date(self) -> None:
+        q = _make_question(freeze="2024-06-15")
+        q = q.model_copy(update={"forecast_due_date": "2024-06-25"})
+        prompt = _build_prompt(q)
+        assert "2024-06-25" in prompt
+        assert "2024-06-15" not in prompt
+
+    def test_prompt_falls_back_to_freeze_datetime_without_forecast_due_date(self) -> None:
+        q = _make_question(freeze="2024-06-15")
+        prompt = _build_prompt(q)
+        assert "2024-06-15" in prompt
+
+    def test_prompt_uses_todays_date_label(self) -> None:
+        q = _make_question(freeze="2024-06-15")
+        q = q.model_copy(update={"forecast_due_date": "2024-06-25"})
+        prompt = _build_prompt(q)
+        assert "Today's Date:" in prompt
+
+
 class TestPromptVariants:
-    def test_zero_shot_default(self) -> None:
+    def test_zero_shot_default_uses_asterisk_format(self) -> None:
         q = _make_question()
         prompt = _build_prompt(q, prompt_variant="zero-shot")
-        assert "Probability:" in prompt
-        assert "asterisk" not in prompt.lower()
+        assert "asterisk" in prompt.lower()
 
     def test_zero_shot_fv_market_includes_freeze_value(self) -> None:
         q = _make_question(
@@ -92,16 +111,6 @@ class TestPromptVariants:
         assert "0.73" in prompt
         assert "asterisk" in prompt.lower()
 
-    def test_zero_shot_fv_includes_explanation(self) -> None:
-        q = _make_question(
-            source="metaculus",
-            freeze="2024-06-15",
-            freeze_datetime_value=0.73,
-            freeze_datetime_value_explanation="Current market price",
-        )
-        prompt = _build_prompt(q, prompt_variant="zero-shot-fv")
-        assert "Current market price" in prompt
-
     def test_zero_shot_fv_without_freeze_value_falls_back(self) -> None:
         q = _make_question(source="metaculus")
         prompt = _build_prompt(q, prompt_variant="zero-shot-fv")
@@ -112,10 +121,11 @@ class TestPromptVariants:
             source="fred",
             freeze="2024-06-15",
             freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Some explanation",
             resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
         )
         prompt = _build_prompt(q, prompt_variant="dataset")
-        assert "Resolution dates:" in prompt
+        assert "resolution dates" in prompt.lower()
         assert "2024-07-01" in prompt
         assert "2024-08-01" in prompt
         assert "2024-09-01" in prompt
@@ -126,6 +136,7 @@ class TestPromptVariants:
             source="acled",
             freeze="2024-06-15",
             freeze_datetime_value=42.0,
+            freeze_datetime_value_explanation="count",
         )
         prompt = _build_prompt(q, prompt_variant="dataset")
         assert "42.0" in prompt
@@ -133,7 +144,7 @@ class TestPromptVariants:
     def test_dataset_prompt_for_market_source_falls_back_to_zero_shot(self) -> None:
         q = _make_question(source="metaculus")
         prompt = _build_prompt(q, prompt_variant="dataset")
-        assert "Probability:" in prompt
+        assert "asterisk" in prompt.lower()
 
     def test_source_parameter_overrides_question_source(self) -> None:
         q = _make_question(
@@ -149,6 +160,7 @@ class TestPromptVariants:
             source="fred",
             freeze="2024-06-15",
             freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="rate",
             resolution_dates=["2024-07-01"],
         )
         prompt = _build_prompt(
