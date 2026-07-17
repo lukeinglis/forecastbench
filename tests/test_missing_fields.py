@@ -276,7 +276,7 @@ class TestMultiHorizonSyncPath:
 
         tmp = P(str(tmp_path))
 
-        def dummy(q: Question, resolution_date: str | None = None) -> float:
+        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.6
 
         q = Question(
@@ -297,7 +297,7 @@ class TestMultiHorizonSyncPath:
 
         tmp = P(str(tmp_path))
 
-        def dummy(q: Question, resolution_date: str | None = None) -> float:
+        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.5
 
         q = Question(
@@ -318,7 +318,7 @@ class TestMultiHorizonSyncPath:
         tmp = P(str(tmp_path))
         calls: list[str | None] = []
 
-        def tracking_fn(q: Question, resolution_date: str | None = None) -> float:
+        def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             calls.append(resolution_date)
             return 0.5
 
@@ -339,7 +339,7 @@ class TestMultiHorizonSyncPath:
         tmp = P(str(tmp_path))
         call_count = 0
 
-        def counting_fn(q: Question, resolution_date: str | None = None) -> float:
+        def counting_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             nonlocal call_count
             call_count += 1
             return 0.7

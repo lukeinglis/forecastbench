@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -11,11 +12,14 @@ import requests
 
 from fetch_data import (
     Question,
+    QuestionSet,
     Resolution,
     _cache_path,
     _fetch_json,
     fetch_question_set,
     fetch_resolution,
+    join_resolved_questions,
+    refresh_cache,
 )
 
 
@@ -371,3 +375,181 @@ class TestCompareResults:
 
         (tmp_path / "partial.json").write_text(json.dumps({"model_slug": "x"}))
         compare_results(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# TTL-based caching
+# ---------------------------------------------------------------------------
+
+
+class TestFetchJsonCacheForever:
+    def test_old_cache_still_used(self, tmp_path: Path) -> None:
+        payload = {"forever": True}
+        cache_file = tmp_path / "forever.json"
+        cache_file.write_text(json.dumps(payload))
+
+        with (
+            patch("fetch_data.CACHE_DIR", tmp_path),
+            patch("fetch_data.requests.get") as mock_get,
+        ):
+            result = _fetch_json("https://example.com/data.json", "forever.json")
+
+        assert result == payload
+        mock_get.assert_not_called()
+
+    def test_refresh_cache_forces_refetch(self, tmp_path: Path) -> None:
+        from fetch_data import refresh_cache
+
+        (tmp_path / "question_sets_listing.json").write_text(json.dumps({"old": True}))
+        (tmp_path / "resolution_sets_listing.json").write_text(json.dumps([]))
+        (tmp_path / "res_round1.json").write_text(json.dumps([]))
+        (tmp_path / "lb_baseline.csv").write_text("header\n")
+        (tmp_path / "qs_immutable.json").write_text(json.dumps({"keep": True}))
+
+        with patch("fetch_data.CACHE_DIR", tmp_path):
+            refresh_cache()
+
+        assert not (tmp_path / "question_sets_listing.json").exists()
+        assert not (tmp_path / "resolution_sets_listing.json").exists()
+        assert not (tmp_path / "res_round1.json").exists()
+        assert not (tmp_path / "lb_baseline.csv").exists()
+        assert (tmp_path / "qs_immutable.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# refresh_cache
+# ---------------------------------------------------------------------------
+
+
+class TestRefreshCache:
+    def test_deletes_listings_and_resolutions(self, tmp_path: Path) -> None:
+        (tmp_path / "question_sets_listing.json").write_text("{}")
+        (tmp_path / "resolution_sets_listing.json").write_text("{}")
+        (tmp_path / "res_2024-01-01.json").write_text("{}")
+        (tmp_path / "res_2024-02-01.json").write_text("{}")
+        (tmp_path / "lb_baseline.csv").write_text("")
+        # Should NOT be deleted
+        (tmp_path / "qs_round1.json").write_text("{}")
+
+        with patch("fetch_data.CACHE_DIR", tmp_path):
+            refresh_cache()
+
+        assert not (tmp_path / "question_sets_listing.json").exists()
+        assert not (tmp_path / "resolution_sets_listing.json").exists()
+        assert not (tmp_path / "res_2024-01-01.json").exists()
+        assert not (tmp_path / "res_2024-02-01.json").exists()
+        assert not (tmp_path / "lb_baseline.csv").exists()
+        assert (tmp_path / "qs_round1.json").exists()
+
+    def test_noop_when_cache_dir_missing(self, tmp_path: Path) -> None:
+        with patch("fetch_data.CACHE_DIR", tmp_path / "nonexistent"):
+            refresh_cache()
+
+    def test_preserves_question_set_caches(self, tmp_path: Path) -> None:
+        (tmp_path / "qs_2024-01-01-llm.json").write_text("{}")
+        (tmp_path / "qs_2024-02-01-llm.json").write_text("{}")
+
+        with patch("fetch_data.CACHE_DIR", tmp_path):
+            refresh_cache()
+
+        assert (tmp_path / "qs_2024-01-01-llm.json").exists()
+        assert (tmp_path / "qs_2024-02-01-llm.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Resolution.resolved field filtering in join_resolved_questions
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedFieldFiltering:
+    def _make_qs(self, question_id: str = "q1") -> QuestionSet:
+        return QuestionSet(
+            forecast_due_date="2024-06-01",
+            question_set="round_1",
+            questions=[
+                Question(id=question_id, source="metaculus", question="Will X?")
+            ],
+        )
+
+    def test_resolved_false_excluded(self) -> None:
+        qs = self._make_qs()
+        resolutions = {
+            "q1": Resolution(id="q1", outcome=1, resolved=False),
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 0
+
+    def test_resolved_true_included(self) -> None:
+        qs = self._make_qs()
+        resolutions = {
+            "q1": Resolution(id="q1", outcome=1, resolved=True),
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 1
+        assert result[0].id == "q1"
+
+    def test_resolved_none_included(self) -> None:
+        qs = self._make_qs()
+        resolutions = {
+            "q1": Resolution(id="q1", outcome=0, resolved=None),
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 1
+
+    def test_resolved_missing_included(self) -> None:
+        qs = self._make_qs()
+        resolutions = {
+            "q1": Resolution(id="q1", outcome=1),
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 1
+
+    def test_resolved_field_parsed_from_dict(self) -> None:
+        r = Resolution.model_validate({"id": "q1", "resolved_to": 0.8, "resolved": False})
+        assert r.resolved is False
+        assert r.outcome == 1
+
+
+# ---------------------------------------------------------------------------
+# list_question_set_files excludes latest-llm.json
+# ---------------------------------------------------------------------------
+
+
+class TestListQuestionSetFilesFiltering:
+    @patch("fetch_data._fetch_json")
+    def test_excludes_latest_llm_json(self, mock_fetch: MagicMock) -> None:
+        mock_fetch.return_value = [
+            {"name": "2026-06-01-llm.json"},
+            {"name": "latest-llm.json"},
+            {"name": "2026-07-05-llm.json"},
+        ]
+        from fetch_data import list_question_set_files
+
+        result = list_question_set_files()
+        assert "latest-llm.json" not in result
+        assert len(result) == 2
+        assert "2026-06-01-llm.json" in result
+        assert "2026-07-05-llm.json" in result
+
+
+# ---------------------------------------------------------------------------
+# get_latest_round
+# ---------------------------------------------------------------------------
+
+
+class TestGetLatestRound:
+    @patch("fetch_data._fetch_text")
+    def test_returns_round_name(self, mock_fetch: MagicMock) -> None:
+        mock_fetch.return_value = "2026-07-05-llm.json\n"
+        from fetch_data import get_latest_round
+
+        result = get_latest_round()
+        assert result == "2026-07-05-llm"
+
+    @patch("fetch_data._fetch_text")
+    def test_strips_whitespace(self, mock_fetch: MagicMock) -> None:
+        mock_fetch.return_value = "  2026-07-05-llm.json  \n"
+        from fetch_data import get_latest_round
+
+        result = get_latest_round()
+        assert result == "2026-07-05-llm"

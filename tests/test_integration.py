@@ -25,7 +25,7 @@ pytestmark = pytest.mark.integration
 REAL_ROUND = "2026-07-05-llm"
 
 
-def _dummy_forecaster(question: object, resolution_date: str | None = None) -> float:
+def _dummy_forecaster(question: object, resolution_date: str | None = None, **kwargs: object) -> float:
     return 0.5
 
 

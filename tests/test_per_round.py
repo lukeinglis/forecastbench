@@ -19,7 +19,7 @@ from eval import (
 from score import ScoringResult
 
 
-def _dummy_forecaster(question: Question, resolution_date: str | None = None) -> float:
+def _dummy_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
     return 0.5
 
 

@@ -175,7 +175,7 @@ def _write_fake_result(results_dir: Path, slug: str, forecasts: dict[str, float]
     (results_dir / f"20240101T000000Z_{slug}.json").write_text(json.dumps(payload))
 
 
-def _dummy_forecaster(question: Question, resolution_date: str | None = None) -> float:
+def _dummy_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
     return 0.5
 
 
@@ -239,7 +239,7 @@ class TestDifficultyAdjustmentWiring:
         assert eval_result.scoring.difficulty_adjusted is False
 
 
-def _raising_forecaster(question: Question, resolution_date: str | None = None) -> float:
+def _raising_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
     raise RuntimeError("LLM API timeout")
 
 

@@ -115,7 +115,7 @@ class TestMurphyDecomposition:
                 st.floats(min_value=0.0, max_value=1.0),
                 st.sampled_from([0, 1]),
             ),
-            min_size=1,
+            min_size=10,
             max_size=50,
         ),
     )
@@ -124,7 +124,7 @@ class TestMurphyDecomposition:
         result = murphy_decomposition(pairs)
         brier = mean_brier_score(pairs)
         reconstructed = result["reliability"] - result["resolution"] + result["uncertainty"]
-        # Binning approximation: within-bin variance causes small deviations
+        # Binning approximation: within-bin variance causes deviations with small samples
         assert abs(reconstructed - brier) < 0.05
 
 

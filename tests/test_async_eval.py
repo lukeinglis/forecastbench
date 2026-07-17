@@ -75,7 +75,7 @@ class TestCaching:
 
 class TestSyncPath:
     def test_sync_forecaster_backward_compatible(self, tmp_path: Path) -> None:
-        def dummy(q: Question) -> float:
+        def dummy(q: Question, **kwargs: object) -> float:
             return 0.5
 
         questions = [_make_question(f"q{i}") for i in range(3)]
@@ -87,7 +87,7 @@ class TestSyncPath:
     def test_sync_uses_cache(self, tmp_path: Path) -> None:
         call_count = 0
 
-        def counting_fn(q: Question) -> float:
+        def counting_fn(q: Question, **kwargs: object) -> float:
             nonlocal call_count
             call_count += 1
             return 0.7
@@ -104,7 +104,7 @@ class TestSyncPath:
 
 class TestAsyncPath:
     async def test_async_forecaster_runs(self, tmp_path: Path) -> None:
-        async def async_fn(q: Question) -> float:
+        async def async_fn(q: Question, **kwargs: object) -> float:
             return 0.6
 
         questions = [_make_question(f"q{i}") for i in range(3)]
@@ -118,7 +118,7 @@ class TestAsyncPath:
         current = 0
         lock = asyncio.Lock()
 
-        async def tracking_fn(q: Question) -> float:
+        async def tracking_fn(q: Question, **kwargs: object) -> float:
             nonlocal max_concurrent, current
             async with lock:
                 current += 1
@@ -141,7 +141,7 @@ class TestAsyncPath:
     async def test_cache_hit_skips_api_call(self, tmp_path: Path) -> None:
         call_count = 0
 
-        async def counting_fn(q: Question) -> float:
+        async def counting_fn(q: Question, **kwargs: object) -> float:
             nonlocal call_count
             call_count += 1
             return 0.7
@@ -158,7 +158,7 @@ class TestAsyncPath:
         assert call_count == 1
 
     async def test_cache_miss_writes_cache(self, tmp_path: Path) -> None:
-        async def fn(q: Question) -> float:
+        async def fn(q: Question, **kwargs: object) -> float:
             return 0.65
 
         with patch("eval.CACHE_DIR", tmp_path):
@@ -168,7 +168,7 @@ class TestAsyncPath:
         assert cached == pytest.approx(0.65)
 
     async def test_failed_forecast_returns_fallback(self, tmp_path: Path) -> None:
-        async def failing_fn(q: Question) -> float:
+        async def failing_fn(q: Question, **kwargs: object) -> float:
             raise RuntimeError("API error")
 
         with patch("eval.CACHE_DIR", tmp_path):
@@ -178,7 +178,7 @@ class TestAsyncPath:
         assert forecasts["q1"] == pytest.approx(0.5)
 
     async def test_empty_question_list(self, tmp_path: Path) -> None:
-        async def fn(q: Question) -> float:
+        async def fn(q: Question, **kwargs: object) -> float:
             return 0.5
 
         with patch("eval.CACHE_DIR", tmp_path):

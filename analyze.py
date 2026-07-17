@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from fetch_data import ResolvedQuestion
+from fetch_data import ResolvedQuestion, fetch_leaderboard
 from logging_config import get_logger
 from score import brier_score, brier_index, murphy_decomposition
 
@@ -446,6 +446,127 @@ def compare_by_round(results_dir: str | Path = "results") -> None:
         )
 
 
+def compare_to_leaderboard(
+    results_dir: str | Path = "results",
+    leaderboard_name: str = "baseline",
+) -> None:
+    """Compare all saved results against the leaderboard."""
+    p = Path(results_dir)
+    if not p.exists():
+        print("No results directory found. Run eval first.")
+        return
+
+    files = sorted(p.glob("*.json"))
+    if not files:
+        print("No result files found.")
+        return
+
+    try:
+        lb_rows = fetch_leaderboard(leaderboard_name)
+    except Exception:
+        logger.warning("leaderboard_fetch_failed", name=leaderboard_name, exc_info=True)
+        print("Could not fetch leaderboard data.")
+        return
+
+    lb_entries: list[tuple[int, str, float]] = []
+    for row in lb_rows:
+        try:
+            rank = int(row.get("Rank", "0"))
+            model = row.get("Model", "Unknown")
+            overall_str = row.get("Overall", "").strip().rstrip("%")
+            overall = float(overall_str)
+            lb_entries.append((rank, model, overall))
+        except (ValueError, TypeError):
+            continue
+
+    if not lb_entries:
+        print("No parseable leaderboard entries.")
+        return
+
+    lb_entries.sort(key=lambda e: e[2], reverse=True)
+
+    local_results: list[tuple[str, str, float]] = []
+    for f in files:
+        try:
+            data = json.loads(f.read_text())
+            sr = data["scoring_result"]
+            model = data["model_slug"]
+            meta = data.get("metadata", {})
+            round_name = meta.get("round", "")
+            label = f"{model} ({round_name})" if round_name else model
+            overall_index = float(sr["overall_index"])
+            local_results.append((f.name, label, overall_index))
+        except (json.JSONDecodeError, KeyError, ValueError):
+            continue
+
+    if not local_results:
+        print("No valid result files found.")
+        return
+
+    print(f"\nLeaderboard comparison ({leaderboard_name}, {len(lb_entries)} entries):")
+    print(f"\n  {'Result':<40s} {'Index':>7s} {'Rank':>6s}")
+    print(f"  {'-' * 55}")
+
+    for _fname, label, index in sorted(local_results, key=lambda x: x[2], reverse=True):
+        rank = 1
+        for _, _, lb_score in lb_entries:
+            if lb_score >= index:
+                rank += 1
+            else:
+                break
+        print(f"  {label:<40s} {index:>6.1f}% {rank:>5d}/{len(lb_entries)}")
+
+
+def compare_to_superforecasters(
+    forecasts: dict[str, float],
+    resolved: list[ResolvedQuestion],
+    sf_medians: dict[str, float],
+) -> dict[str, object]:
+    """Compare our forecasts to superforecaster medians on shared questions."""
+    shared_ids = set(forecasts.keys()) & set(sf_medians.keys())
+    outcome_map = {q.id: q.outcome for q in resolved}
+    shared_ids &= set(outcome_map.keys())
+
+    if not shared_ids:
+        return {"n_shared": 0, "our_mean_brier": 0.0, "sf_mean_brier": 0.0, "n_we_won": 0, "n_they_won": 0}
+
+    our_briers: list[float] = []
+    sf_briers: list[float] = []
+    n_we_won = 0
+    n_they_won = 0
+
+    for qid in sorted(shared_ids):
+        outcome = outcome_map[qid]
+        our_bs = brier_score(forecasts[qid], outcome)
+        sf_bs = brier_score(sf_medians[qid], outcome)
+        our_briers.append(our_bs)
+        sf_briers.append(sf_bs)
+        if our_bs < sf_bs:
+            n_we_won += 1
+        elif sf_bs < our_bs:
+            n_they_won += 1
+
+    our_mean = sum(our_briers) / len(our_briers)
+    sf_mean = sum(sf_briers) / len(sf_briers)
+
+    logger.info(
+        "superforecaster_comparison",
+        n_shared=len(shared_ids),
+        our_mean_brier=round(our_mean, 4),
+        sf_mean_brier=round(sf_mean, 4),
+        n_we_won=n_we_won,
+        n_they_won=n_they_won,
+    )
+
+    return {
+        "n_shared": len(shared_ids),
+        "our_mean_brier": our_mean,
+        "sf_mean_brier": sf_mean,
+        "n_we_won": n_we_won,
+        "n_they_won": n_they_won,
+    }
+
+
 def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], list[ResolvedQuestion]]:
     """Load forecasts from a result file and re-join with resolved questions."""
     from fetch_data import Resolution, load_data, join_resolved_questions
@@ -475,10 +596,26 @@ if __name__ == "__main__":
     parser.add_argument("--horizons", metavar="RESULT", help="Show horizon breakdown from a result file")
     parser.add_argument("--decompose", metavar="RESULT", help="Show Brier decomposition from a result file")
     parser.add_argument("--versus", nargs=2, metavar=("A", "B"), help="Paired comparison of two result files")
+    parser.add_argument("--leaderboard", action="store_true", help="Compare saved results against the ForecastBench leaderboard")
+    parser.add_argument("--superforecaster", metavar="RESULT", help="Compare a result file against superforecaster medians")
     parser.add_argument("--top-n", type=int, default=50, help="Number of worst questions to show")
     args = parser.parse_args()
 
-    if args.compare:
+    if args.superforecaster:
+        from fetch_data import fetch_superforecaster_forecasts, superforecaster_medians
+        forecasts, resolved = _load_result_forecasts(args.superforecaster)
+        sf_raw = fetch_superforecaster_forecasts()
+        sf_meds = superforecaster_medians(sf_raw)
+        result = compare_to_superforecasters(forecasts, resolved, sf_meds)
+        print("\nSuperforecaster Comparison:")
+        print(f"  Shared questions:  {result['n_shared']}")
+        print(f"  Our mean Brier:    {result['our_mean_brier']:.4f}")
+        print(f"  SF mean Brier:     {result['sf_mean_brier']:.4f}")
+        print(f"  We won:            {result['n_we_won']}")
+        print(f"  They won:          {result['n_they_won']}")
+    elif args.leaderboard:
+        compare_to_leaderboard(args.results_dir)
+    elif args.compare:
         compare_results(args.results_dir)
     elif args.by_round:
         compare_by_round(args.results_dir)

@@ -77,6 +77,46 @@ def brier_index(mean_bs: float) -> float:
     return (1.0 - math.sqrt(mean_bs)) * 100.0
 
 
+def brier_skill_score(forecaster_brier: float, reference_brier: float = 0.25) -> float:
+    """Brier Skill Score: improvement over reference forecaster.
+
+    BSS = 1 - (forecaster_brier / reference_brier)
+    Positive = better than reference, 0 = same, negative = worse.
+    Reference defaults to 0.25 (always-0.5 forecaster).
+    """
+    if reference_brier == 0:
+        return 0.0
+    return 1.0 - (forecaster_brier / reference_brier)
+
+
+def bootstrap_ci(
+    pairs: list[tuple[float, int]],
+    n_replicates: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Bootstrap confidence interval for mean Brier score.
+
+    Returns (lower, upper) bounds of the CI.
+    """
+    import random
+
+    rng = random.Random(seed)
+    n = len(pairs)
+    if n == 0:
+        return (0.0, 0.0)
+    means = []
+    for _ in range(n_replicates):
+        sample = rng.choices(pairs, k=n)
+        mean_bs = sum((f - o) ** 2 for f, o in sample) / n
+        means.append(mean_bs)
+    means.sort()
+    alpha = (1 - ci) / 2
+    lo = means[int(alpha * n_replicates)]
+    hi = means[int((1 - alpha) * n_replicates)]
+    return (lo, hi)
+
+
 def murphy_decomposition(
     pairs: list[tuple[float, int]],
     n_bins: int = 10,
