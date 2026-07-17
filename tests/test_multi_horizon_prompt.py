@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from baseline_agent import (
-    EXTRACTION_MODEL,
     FORECAST_EXTRACTION_PROMPT,
     _extract_probabilities,
     _extract_with_llm,
@@ -62,6 +61,24 @@ class TestExtractProbabilities:
         result = _extract_probabilities("*0.3* *0.5*", 3)
         assert result is None
 
+    def test_double_count_takes_last_n(self) -> None:
+        text = "Reasoning: *0.1* *0.2* *0.3*\nAnswer: { *0.4*, *0.5*, *0.6* }"
+        result = _extract_probabilities(text, 3)
+        assert result is not None
+        assert result == pytest.approx([0.4, 0.5, 0.6])
+
+    def test_triple_count_takes_last_n(self) -> None:
+        text = "Draft: *0.1* *0.2*\nRevised: *0.3* *0.4*\nFinal: *0.5* *0.6*"
+        result = _extract_probabilities(text, 2)
+        assert result is not None
+        assert result == pytest.approx([0.5, 0.6])
+
+    def test_decimal_overflow_takes_last_n(self) -> None:
+        text = "Step 1: 0.3, 0.4. Step 2: 0.5, 0.6. Final: 0.7, 0.8."
+        result = _extract_probabilities(text, 2)
+        assert result is not None
+        assert result == pytest.approx([0.7, 0.8])
+
     def test_decimal_format(self) -> None:
         text = "My estimates are 0.3, 0.5, and 0.7 for the three dates."
         result = _extract_probabilities(text, 3)
@@ -110,8 +127,9 @@ class TestExtractionPrompt:
         assert "*0.3* *0.5* *0.7*" in formatted
         assert "Extract only probabilities" in formatted
 
-    def test_extraction_model_default(self) -> None:
-        assert "gemini" in EXTRACTION_MODEL or "flash" in EXTRACTION_MODEL
+    def test_extraction_model_defaults_to_forecast_model(self) -> None:
+        import baseline_agent
+        assert baseline_agent.EXTRACTION_MODEL == baseline_agent.MODEL
 
 
 class TestExtractWithLlm:
@@ -125,7 +143,8 @@ class TestExtractWithLlm:
         assert result == pytest.approx([0.3, 0.5, 0.7])
         mock_litellm.acompletion.assert_called_once()
         call_kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert call_kwargs["model"] == EXTRACTION_MODEL
+        import baseline_agent
+        assert call_kwargs["model"] == baseline_agent.EXTRACTION_MODEL
         assert call_kwargs["temperature"] == 0.0
 
     @patch("baseline_agent.litellm")

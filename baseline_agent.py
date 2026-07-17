@@ -17,7 +17,7 @@ logger = get_logger("baseline_agent")
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
-EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "vertex_ai/gemini-2.5-flash")
+EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", MODEL)
 
 FORECAST_EXTRACTION_PROMPT = """You are extracting probabilities from text.
 
@@ -278,15 +278,25 @@ async def aforecast(
 
 
 def _extract_probabilities(text: str, n_expected: int) -> list[float] | None:
-    """Try to extract exactly n_expected probabilities from text using regex."""
+    """Try to extract exactly n_expected probabilities from text using regex.
+
+    When the model repeats probabilities in reasoning and a final answer block,
+    takes the LAST n_expected matches (the final answer set).
+    """
     asterisk_matches = re.findall(r"\*\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*", text)
     if len(asterisk_matches) == n_expected:
         return [max(0.01, min(0.99, float(m))) for m in asterisk_matches]
+    if len(asterisk_matches) > n_expected and len(asterisk_matches) % n_expected == 0:
+        last_n = asterisk_matches[-n_expected:]
+        return [max(0.01, min(0.99, float(m))) for m in last_n]
 
     all_decimals = re.findall(r"(?<!\d)(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)(?!\d)", text)
     valid = [float(d) for d in all_decimals if 0 <= float(d) <= 1]
     if len(valid) == n_expected:
         return [max(0.01, min(0.99, v)) for v in valid]
+    if len(valid) > n_expected:
+        last_n = valid[-n_expected:]
+        return [max(0.01, min(0.99, v)) for v in last_n]
 
     return None
 
