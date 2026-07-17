@@ -123,41 +123,32 @@ class TestBuildQuestionPropagatesNewFields:
 
 
 class TestPromptSourceIntro:
-    def test_source_intro_included_when_present(self) -> None:
+    def test_source_intro_not_in_upstream_prompt(self) -> None:
         q = _make_question_with_fields(freeze_datetime=None)
         prompt = _build_prompt(q)
-        assert "Source Context: We would like you to predict" in prompt
+        assert "Source Context:" not in prompt
 
     def test_source_intro_omitted_when_none(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q)
         assert "Source Context:" not in prompt
 
-    def test_source_intro_appears_before_question(self) -> None:
-        q = _make_question_with_fields(freeze_datetime=None)
-        prompt = _build_prompt(q)
-        source_idx = prompt.index("Source Context:")
-        question_idx = prompt.index("Question:")
-        assert source_idx < question_idx
-
 
 class TestPromptResolutionDate:
     def test_resolution_date_included_when_provided(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
-        assert "Target resolution date: 2025-07-15" in prompt
+        assert "2025-07-15" in prompt
 
     def test_resolution_date_omitted_when_none(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q)
-        assert "Target resolution date:" not in prompt
+        assert "Question resolution date:" in prompt
 
-    def test_resolution_date_appears_before_question(self) -> None:
+    def test_resolution_date_uses_upstream_label(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
-        rd_idx = prompt.index("Target resolution date:")
-        q_idx = prompt.index("Question:")
-        assert rd_idx < q_idx
+        assert "Question resolution date:" in prompt
 
 
 class TestHasMultiHorizon:

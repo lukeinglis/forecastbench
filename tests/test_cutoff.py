@@ -48,6 +48,33 @@ class TestTemporalFraming:
             assert word not in bg, f"Simulated ignorance word '{word}' found in prepared question"
 
 
+class TestDisplayDate:
+    def test_display_date_shown_in_temporal_context(self) -> None:
+        env = CutoffEnvironment("2024-06-15", display_date="2024-06-25")
+        q = _make_question()
+        context = env.frame_temporal_context(q)
+        assert "2024-06-25" in context
+        assert "2024-06-15" not in context
+
+    def test_display_date_defaults_to_freeze_datetime(self) -> None:
+        env = CutoffEnvironment("2024-06-15")
+        q = _make_question()
+        context = env.frame_temporal_context(q)
+        assert "2024-06-15" in context
+
+    def test_cutoff_enforcement_uses_freeze_datetime_not_display_date(self) -> None:
+        env = CutoffEnvironment("2024-06-15", display_date="2024-06-25")
+        assert env.freeze_datetime == "2024-06-15"
+        assert env.display_date == "2024-06-25"
+
+    def test_prepared_question_uses_display_date(self) -> None:
+        env = CutoffEnvironment("2024-06-15", display_date="2024-06-25")
+        q = _make_question(background="Original background")
+        prepared = env.prepare_question(q)
+        assert "2024-06-25" in prepared.background
+        assert "2024-06-15" not in prepared.background
+
+
 class TestPrepareQuestion:
     def test_prepared_question_has_temporal_context(self) -> None:
         env = CutoffEnvironment("2024-06-15")

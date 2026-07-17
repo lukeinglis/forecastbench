@@ -43,6 +43,7 @@ class Question(BaseModel):
     market_info_open_datetime: str | None = None
     market_info_close_datetime: str | None = None
     market_info_resolution_criteria: str | None = None
+    forecast_due_date: str | None = None
 
     @field_validator("id", mode="before")
     @classmethod

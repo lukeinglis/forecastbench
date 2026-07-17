@@ -16,13 +16,14 @@ class CutoffEnvironment:
     a 52% performance gap.
     """
 
-    def __init__(self, freeze_datetime: str) -> None:
+    def __init__(self, freeze_datetime: str, display_date: str | None = None) -> None:
         self.freeze_datetime = freeze_datetime
-        logger.info("cutoff_environment_created", cutoff_date=freeze_datetime)
+        self.display_date = display_date or freeze_datetime
+        logger.info("cutoff_environment_created", cutoff_date=freeze_datetime, display_date=self.display_date)
 
     def frame_temporal_context(self, question: Question) -> str:
         return (
-            f"Current date: {self.freeze_datetime}. "
+            f"Today's Date: {self.display_date}. "
             "You should forecast based on information available as of this date."
         )
 

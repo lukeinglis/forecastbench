@@ -9,6 +9,7 @@ dependencies = [
     "litellm>=1.0",
     "tqdm>=4.60",
     "structlog>=24.0",
+    "google-cloud-aiplatform>=1.161.0",
 ]
 
 [project.optional-dependencies]

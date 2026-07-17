@@ -221,8 +221,9 @@ def split_held_out(
     return iteration_set, held_out_set
 
 
-def _build_question(q: Question | ResolvedQuestion) -> Question:
+def _build_question(q: Question | ResolvedQuestion, forecast_due_date: str | None = None) -> Question:
     """Build a Question from a ResolvedQuestion or Question-like object."""
+    fdd = forecast_due_date or getattr(q, "forecast_due_date", None)
     return Question(
         id=q.id,
         source=q.source,
@@ -239,6 +240,7 @@ def _build_question(q: Question | ResolvedQuestion) -> Question:
         market_info_open_datetime=getattr(q, "market_info_open_datetime", None),
         market_info_close_datetime=getattr(q, "market_info_close_datetime", None),
         market_info_resolution_criteria=getattr(q, "market_info_resolution_criteria", None),
+        forecast_due_date=fdd,
     )
 
 
@@ -248,6 +250,7 @@ async def run_eval(
     raw: bool = False,
     round_name: str | None = None,
     prompt_variant: str = "zero-shot",
+    multi_horizon: bool = False,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -279,7 +282,7 @@ async def run_eval(
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
+        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon)  # type: ignore[arg-type]
     else:
         forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
 
@@ -363,6 +366,7 @@ async def _run_async(
     questions: list[Question],
     model_slug: str,
     prompt_variant: str = "zero-shot",
+    multi_horizon: bool = False,
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
 
@@ -392,21 +396,60 @@ async def _run_async(
         _write_cache(model_slug, cache_key, prob)
         return cache_key, prob
 
-    tasks = []
+    async def _forecast_multi_horizon(
+        q: Question,
+    ) -> list[tuple[str, float]]:
+        dates = [d for d in q.resolution_dates if d and str(d).upper() != "N/A"]
+        composite_keys = [f"{q.id}_{d}" for d in dates]
+        cached_values = {k: _read_cache(model_slug, k) for k in composite_keys}
+        if all(v is not None for v in cached_values.values()):
+            return [(k, v) for k, v in cached_values.items()]  # type: ignore[misc]
+
+        async with semaphore:
+            try:
+                from baseline_agent import aforecast_multi_horizon
+                probs = await aforecast_multi_horizon(
+                    q,
+                    resolution_dates=dates,
+                    source=q.source,
+                    prompt_variant=prompt_variant,
+                )
+            except Exception:
+                logger.warning("multi_horizon_error_fallback", question_id=q.id, exc_info=True)
+                probs = [0.5] * len(dates)
+
+        results: list[tuple[str, float]] = []
+        for key, prob in zip(composite_keys, probs):
+            _write_cache(model_slug, key, prob)
+            results.append((key, prob))
+        return results
+
+    tasks: list[Any] = []
+    multi_tasks: list[Any] = []
+
     for q in questions:
         if _has_multi_horizon(q):
-            for date_str in q.resolution_dates:
-                composite_key = f"{q.id}_{date_str}"
-                tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
+            if multi_horizon:
+                multi_tasks.append(_forecast_multi_horizon(q))
+            else:
+                for date_str in q.resolution_dates:
+                    composite_key = f"{q.id}_{date_str}"
+                    tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
         else:
             tasks.append(_forecast_one(q, q.id))
 
-    if tasks:
-        results = await tqdm_asyncio.gather(*tasks, desc="Forecasting")
-    else:
-        results = []
+    all_results: list[tuple[str, float]] = []
 
-    return {qid: prob for qid, prob in results}
+    if tasks:
+        single_results = await tqdm_asyncio.gather(*tasks, desc="Forecasting")
+        all_results.extend(single_results)
+
+    if multi_tasks:
+        multi_results = await tqdm_asyncio.gather(*multi_tasks, desc="Multi-horizon")
+        for batch in multi_results:
+            all_results.extend(batch)
+
+    return {qid: prob for qid, prob in all_results}
 
 
 def _normalize_round_name(name: str) -> str:
@@ -579,6 +622,12 @@ def main() -> None:
         help="Show bootstrap confidence intervals for Brier scores",
     )
     parser.add_argument(
+        "--multi-horizon",
+        action="store_true",
+        default=False,
+        help="Use single-call multi-horizon forecasting for dataset questions (baseline agent only)",
+    )
+    parser.add_argument(
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
@@ -613,6 +662,7 @@ def main() -> None:
     eval_result = asyncio.run(run_eval(
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
+        multi_horizon=args.multi_horizon and args.agent == "baseline",
     ))
 
     if args.ci:
