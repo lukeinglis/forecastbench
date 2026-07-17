@@ -43,7 +43,7 @@ ZERO_SHOT_FV_MARKET_PROMPT = """You are an expert superforecaster with a track r
 
 Question: {question}
 
-{background_section}{criteria_section}{freeze_value_section}
+{background_section}{criteria_section}{freeze_value_section}{resolution_date_section}
 
 Think step-by-step:
 1. Identify the base rate for this type of event
