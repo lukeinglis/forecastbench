@@ -344,7 +344,8 @@ def _run_sync(
                     )
                 except Exception:
                     logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=date_str, exc_info=True)
-                    prob = 0.5
+                    forecasts[composite_key] = 0.5
+                    continue
                 forecasts[composite_key] = prob
                 _write_cache(model_slug, composite_key, prob)
         else:
@@ -416,12 +417,16 @@ async def _run_async(
                 )
             except Exception:
                 logger.warning("multi_horizon_error_fallback", question_id=q.id, exc_info=True)
-                probs = [0.5] * len(dates)
+                probs = None
 
         results: list[tuple[str, float]] = []
-        for key, prob in zip(composite_keys, probs):
-            _write_cache(model_slug, key, prob)
-            results.append((key, prob))
+        if probs is None:
+            for key in composite_keys:
+                results.append((key, 0.5))
+        else:
+            for key, prob in zip(composite_keys, probs):
+                _write_cache(model_slug, key, prob)
+                results.append((key, prob))
         return results
 
     tasks: list[Any] = []

@@ -336,10 +336,11 @@ async def aforecast_multi_horizon(
     source: str | None = None,
     prompt_variant: str = "dataset",
     forecast_due_date: str | None = None,
-) -> list[float]:
+) -> list[float] | None:
     """Forecast multiple horizons in a single LLM call.
 
-    Returns a list of probabilities, one per resolution date.
+    Returns a list of probabilities on success, or None on fallback so the
+    caller knows not to cache placeholder values.
     """
     n_horizons = len(resolution_dates)
     logger.info(
@@ -370,7 +371,7 @@ async def aforecast_multi_horizon(
             model=MODEL,
             exc_info=True,
         )
-        return [0.5] * n_horizons
+        return None
 
     text = response.choices[0].message.content or ""
 
@@ -400,7 +401,7 @@ async def aforecast_multi_horizon(
         question_id=question.id,
         n_horizons=n_horizons,
     )
-    return [0.5] * n_horizons
+    return None
 
 
 if __name__ == "__main__":

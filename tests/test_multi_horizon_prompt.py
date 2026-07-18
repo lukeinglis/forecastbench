@@ -223,7 +223,7 @@ class TestAforecastMultiHorizon:
 
     @patch("baseline_agent.litellm")
     async def test_fallback_to_default(self, mock_litellm: MagicMock) -> None:
-        """When both regex and LLM extraction fail, returns [0.5] * n."""
+        """When both regex and LLM extraction fail, returns None (caller uses 0.5)."""
         main_response = _mock_response("I cannot determine the probabilities.")
         extraction_response = _mock_response("I don't know")
         mock_litellm.acompletion = AsyncMock(
@@ -235,7 +235,7 @@ class TestAforecastMultiHorizon:
 
         result = await aforecast_multi_horizon(q, dates, source="fred")
 
-        assert result == [0.5, 0.5, 0.5]
+        assert result is None
 
     @patch("baseline_agent.litellm")
     async def test_api_error_returns_default(self, mock_litellm: MagicMock) -> None:
@@ -246,7 +246,7 @@ class TestAforecastMultiHorizon:
 
         result = await aforecast_multi_horizon(q, dates, source="fred")
 
-        assert result == [0.5, 0.5]
+        assert result is None
 
     @patch("baseline_agent.litellm")
     async def test_prompt_contains_all_dates(self, mock_litellm: MagicMock) -> None:
