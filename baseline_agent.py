@@ -17,7 +17,7 @@ logger = get_logger("baseline_agent")
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
-EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", MODEL)
+EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 
 FORECAST_EXTRACTION_PROMPT = """You are extracting probabilities from text.
 
