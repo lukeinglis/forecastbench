@@ -8,8 +8,13 @@ import pytest
 
 from baseline_agent import (
     FORECAST_EXTRACTION_PROMPT,
+    _asterisk_extract,
+    _decimal_extract,
+    _extract_answer_block,
     _extract_probabilities,
     _extract_with_llm,
+    _parse_probs_from_text,
+    _tokenize_and_extract,
     aforecast_multi_horizon,
 )
 from fetch_data import Question
@@ -74,7 +79,7 @@ class TestExtractProbabilities:
         assert result == pytest.approx([0.5, 0.6])
 
     def test_decimal_overflow_takes_last_n(self) -> None:
-        text = "Step 1: 0.3, 0.4. Step 2: 0.5, 0.6. Final: 0.7, 0.8."
+        text = "Draft: 0.3, 0.4, 0.5\n\nFinal: 0.7, 0.8"
         result = _extract_probabilities(text, 2)
         assert result is not None
         assert result == pytest.approx([0.7, 0.8])
@@ -111,6 +116,158 @@ class TestExtractProbabilities:
         result = _extract_probabilities("*0.75*", 1)
         assert result is not None
         assert result == pytest.approx([0.75])
+
+
+class TestExtractAnswerBlock:
+    def test_finds_answer_marker(self) -> None:
+        text = "Some reasoning here.\n\nAnswer: *0.3* *0.5* *0.7*"
+        block = _extract_answer_block(text)
+        assert block is not None
+        assert "*0.3*" in block
+        assert "reasoning" not in block
+
+    def test_case_insensitive(self) -> None:
+        text = "Reasoning.\n\nanswer: *0.4*"
+        block = _extract_answer_block(text)
+        assert block is not None
+        assert "*0.4*" in block
+
+    def test_answer_with_curly_braces(self) -> None:
+        text = "Reasoning.\n\nAnswer: {\n*0.3*\n*0.5*\n*0.7*\n}"
+        block = _extract_answer_block(text)
+        assert block is not None
+        assert "*0.3*" in block
+
+    def test_falls_back_to_last_paragraph(self) -> None:
+        text = "First paragraph reasoning.\n\n*0.3* *0.5* *0.7*"
+        block = _extract_answer_block(text)
+        assert block is not None
+        assert "*0.3*" in block
+
+    def test_single_paragraph_returns_none(self) -> None:
+        text = "Just one paragraph with *0.3* in it."
+        block = _extract_answer_block(text)
+        assert block is None
+
+
+class TestParseFromAnswerBlock:
+    def test_asterisk_format(self) -> None:
+        result = _parse_probs_from_text("*0.3* *0.5* *0.7*", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_decimal_format(self) -> None:
+        result = _parse_probs_from_text("0.3 0.5 0.7", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_wrong_count_returns_none(self) -> None:
+        result = _parse_probs_from_text("*0.3* *0.5*", 3)
+        assert result is None
+
+
+class TestTokenizeAndExtract:
+    def test_asterisk_tokens(self) -> None:
+        result = _tokenize_and_extract("*0.3* *0.5* *0.7*", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_comma_separated(self) -> None:
+        result = _tokenize_and_extract("*0.3*, *0.5*, *0.7*", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_curly_braces(self) -> None:
+        result = _tokenize_and_extract("{ *0.3* *0.5* *0.7* }", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_overflow_takes_last_n(self) -> None:
+        text = "0.1 0.2 0.3 0.4 0.5 0.6"
+        result = _tokenize_and_extract(text, 3)
+        assert result == pytest.approx([0.4, 0.5, 0.6])
+
+    def test_non_prob_tokens_skipped(self) -> None:
+        text = "The value is *0.42* and also *0.58*"
+        result = _tokenize_and_extract(text, 2)
+        assert result == pytest.approx([0.42, 0.58])
+
+
+class TestAsteriskExtract:
+    def test_exact_count(self) -> None:
+        result = _asterisk_extract("*0.3* *0.5* *0.7*", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_non_multiple_overflow(self) -> None:
+        text = " ".join(f"*0.{i}*" for i in range(1, 10))
+        result = _asterisk_extract(text, 3)
+        assert result is not None
+        assert len(result) == 3
+        assert result == pytest.approx([0.7, 0.8, 0.9])
+
+
+class TestDecimalExtract:
+    def test_exact_count(self) -> None:
+        result = _decimal_extract("values: 0.3 0.5 0.7", 3)
+        assert result == pytest.approx([0.3, 0.5, 0.7])
+
+    def test_overflow_takes_last_n(self) -> None:
+        text = "0.1, 0.2, 0.3, 0.4, 0.5"
+        result = _decimal_extract(text, 3)
+        assert result == pytest.approx([0.3, 0.4, 0.5])
+
+
+class TestExtractProbabilitiesIntegration:
+    def test_answer_block_with_reasoning(self) -> None:
+        text = (
+            "I need to estimate the probability that...\n\n"
+            "Key considerations:\n"
+            "- Current value: 19,500\n"
+            "- Target: 20,000\n\n"
+            "Estimates based on drift-diffusion model:\n\n"
+            "Answer: {\n"
+            "2026-07-12: *0.42*\n"
+            "2026-08-04: *0.58*\n"
+            "2026-10-03: *0.72*\n"
+            "2027-01-01: *0.82*\n"
+            "2027-07-05: *0.90*\n"
+            "2029-07-04: *0.96*\n"
+            "2031-07-04: *0.98*\n"
+            "2036-07-02: *0.99*\n"
+            "}"
+        )
+        result = _extract_probabilities(text, 8)
+        assert result is not None
+        assert len(result) == 8
+        assert result == pytest.approx([0.42, 0.58, 0.72, 0.82, 0.90, 0.96, 0.98, 0.99])
+
+    def test_inline_reasoning_then_answer(self) -> None:
+        text = (
+            "... reasoning with probabilities mentioned inline like *0.35* ...\n\n"
+            "Answer:\n"
+            "*0.35*\n"
+            "*0.40*\n"
+            "*0.30*\n"
+            "*0.25*\n"
+            "*0.45*\n"
+            "*0.55*\n"
+            "*0.62*\n"
+            "*0.70*"
+        )
+        result = _extract_probabilities(text, 8)
+        assert result is not None
+        assert len(result) == 8
+        assert result == pytest.approx([0.35, 0.40, 0.30, 0.25, 0.45, 0.55, 0.62, 0.70])
+
+    def test_non_multiple_overflow_11_for_8(self) -> None:
+        text = (
+            "Draft: *0.1* *0.2* *0.3*\n"
+            "Final: *0.42* *0.58* *0.72* *0.82* *0.90* *0.96* *0.98* *0.99*"
+        )
+        result = _extract_probabilities(text, 8)
+        assert result is not None
+        assert len(result) == 8
+        assert result == pytest.approx([0.42, 0.58, 0.72, 0.82, 0.90, 0.96, 0.98, 0.99])
+
+    def test_strategies_priority_order(self) -> None:
+        text = "Answer: *0.4* *0.5* *0.6*"
+        result = _extract_probabilities(text, 3)
+        assert result == pytest.approx([0.4, 0.5, 0.6])
 
 
 class TestExtractionPrompt:

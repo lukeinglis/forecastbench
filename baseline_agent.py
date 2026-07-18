@@ -277,26 +277,106 @@ async def aforecast(
     return prob
 
 
-def _extract_probabilities(text: str, n_expected: int) -> list[float] | None:
-    """Try to extract exactly n_expected probabilities from text using regex.
+def _clamp(v: float) -> float:
+    return max(0.01, min(0.99, v))
 
-    When the model repeats probabilities in reasoning and a final answer block,
-    takes the LAST n_expected matches (the final answer set).
-    """
-    asterisk_matches = re.findall(r"\*\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*", text)
-    if len(asterisk_matches) == n_expected:
-        return [max(0.01, min(0.99, float(m))) for m in asterisk_matches]
-    if len(asterisk_matches) > n_expected and len(asterisk_matches) % n_expected == 0:
-        last_n = asterisk_matches[-n_expected:]
-        return [max(0.01, min(0.99, float(m))) for m in last_n]
 
-    all_decimals = re.findall(r"(?<!\d)(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)(?!\d)", text)
+def _extract_answer_block(text: str) -> str | None:
+    """Extract text after an 'Answer:' marker, or fall back to the last paragraph."""
+    match = re.search(r"(?i)answer\s*:\s*", text)
+    if match:
+        return text[match.end():]
+    paragraphs = text.strip().split("\n\n")
+    if len(paragraphs) > 1:
+        return paragraphs[-1]
+    return None
+
+
+_ASTERISK_RE = re.compile(r"\*\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*")
+_DECIMAL_RE = re.compile(r"(?<!\d)(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)(?!\d)")
+_TOKEN_RE = re.compile(r"(?:\*)?(\d*\.?\d+)(?:\*)?")
+
+
+def _parse_probs_from_text(text: str, n_expected: int) -> list[float] | None:
+    """Extract probabilities from a focused text block (e.g. Answer section)."""
+    asterisks = _ASTERISK_RE.findall(text)
+    if len(asterisks) == n_expected:
+        return [_clamp(float(m)) for m in asterisks]
+    decimals = _DECIMAL_RE.findall(text)
+    valid = [float(d) for d in decimals if 0 <= float(d) <= 1]
+    if len(valid) == n_expected:
+        return [_clamp(v) for v in valid]
+    return None
+
+
+def _tokenize_and_extract(text: str, n_expected: int) -> list[float] | None:
+    """Upstream approach: split into tokens, fullmatch each for a probability."""
+    probabilities: list[float] = []
+    for token in text.strip().replace(",", " ").replace("{", " ").replace("}", " ").split():
+        m = _TOKEN_RE.fullmatch(token.strip())
+        if m is None:
+            continue
+        val = float(m.group(1))
+        if 0 <= val <= 1:
+            probabilities.append(val)
+    if len(probabilities) == n_expected:
+        return [_clamp(p) for p in probabilities]
+    if len(probabilities) > n_expected:
+        return [_clamp(p) for p in probabilities[-n_expected:]]
+    return None
+
+
+def _asterisk_extract(text: str, n_expected: int) -> list[float] | None:
+    """Find asterisk-wrapped probabilities in the full text."""
+    matches = _ASTERISK_RE.findall(text)
+    if len(matches) == n_expected:
+        return [_clamp(float(m)) for m in matches]
+    if len(matches) > n_expected:
+        return [_clamp(float(m)) for m in matches[-n_expected:]]
+    return None
+
+
+def _decimal_extract(text: str, n_expected: int) -> list[float] | None:
+    """Find any decimal probabilities in the full text."""
+    all_decimals = _DECIMAL_RE.findall(text)
     valid = [float(d) for d in all_decimals if 0 <= float(d) <= 1]
     if len(valid) == n_expected:
-        return [max(0.01, min(0.99, v)) for v in valid]
+        return [_clamp(v) for v in valid]
     if len(valid) > n_expected:
-        last_n = valid[-n_expected:]
-        return [max(0.01, min(0.99, v)) for v in last_n]
+        return [_clamp(v) for v in valid[-n_expected:]]
+    return None
+
+
+def _extract_probabilities(text: str, n_expected: int) -> list[float] | None:
+    """Multi-strategy extraction of probabilities from model response text.
+
+    Strategies tried in order:
+    1. Answer-block extraction (text after 'Answer:' or last paragraph)
+    2. Upstream tokenize-and-fullmatch on full text
+    3. Asterisk regex on full text with take-last-N
+    4. Decimal regex on full text with take-last-N
+    """
+    answer_block = _extract_answer_block(text)
+    if answer_block:
+        probs = _parse_probs_from_text(answer_block, n_expected)
+        if probs:
+            logger.debug("extract_probabilities", method="answer_block", n=len(probs))
+            return probs
+
+    probs = _tokenize_and_extract(text, n_expected)
+    if probs:
+        logger.debug("extract_probabilities", method="tokenize", n=len(probs))
+        return probs
+
+    probs = _asterisk_extract(text, n_expected)
+    if probs:
+        logger.debug("extract_probabilities", method="asterisk", n=len(probs))
+        return probs
+
+    probs = _decimal_extract(text, n_expected)
+    if probs:
+        logger.debug("extract_probabilities", method="decimal", n=len(probs))
+        return probs
 
     return None
 
@@ -315,6 +395,7 @@ async def _extract_with_llm(text: str, n_expected: int) -> list[float] | None:
             timeout=30,
         )
         result_text = response.choices[0].message.content or ""
+        logger.debug("extraction_llm_response", response_text=result_text[:200])
         parsed = ast.literal_eval(result_text.strip())
         if isinstance(parsed, list) and len(parsed) == n_expected:
             if all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in parsed):
