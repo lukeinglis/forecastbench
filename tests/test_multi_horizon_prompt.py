@@ -284,9 +284,9 @@ class TestExtractionPrompt:
         assert "*0.3* *0.5* *0.7*" in formatted
         assert "Extract only probabilities" in formatted
 
-    def test_extraction_model_defaults_to_forecast_model(self) -> None:
+    def test_extraction_model_defaults_to_openai(self) -> None:
         import baseline_agent
-        assert baseline_agent.EXTRACTION_MODEL == baseline_agent.MODEL
+        assert "openai" in baseline_agent.EXTRACTION_MODEL or "gpt" in baseline_agent.EXTRACTION_MODEL
 
 
 class TestExtractWithLlm:
