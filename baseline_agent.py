@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import litellm
@@ -18,6 +20,25 @@ logger = get_logger("baseline_agent")
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
 
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
+
+RESPONSE_LOG_DIR = Path(".cache/response_logs")
+
+
+def _save_response_log(question_id: str, response_text: str, outcome: str, n_expected: int) -> None:
+    """Save raw model response for diagnostic analysis. Does not affect scoring."""
+    try:
+        RESPONSE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = RESPONSE_LOG_DIR / f"{question_id}.json"
+        log_file.write_text(json.dumps({
+            "question_id": question_id,
+            "outcome": outcome,
+            "n_expected": n_expected,
+            "response_length": len(response_text),
+            "response": response_text,
+        }, indent=2))
+    except Exception:
+        pass
+
 
 FORECAST_EXTRACTION_PROMPT = """You are extracting probabilities from text.
 
@@ -464,6 +485,7 @@ async def aforecast_multi_horizon(
             n_horizons=n_horizons,
             method="regex",
         )
+        _save_response_log(question.id, text, "regex_success", n_horizons)
         return probs
 
     logger.info("multi_horizon_regex_failed", question_id=question.id, trying="llm_extraction")
@@ -475,6 +497,7 @@ async def aforecast_multi_horizon(
             n_horizons=n_horizons,
             method="llm_extraction",
         )
+        _save_response_log(question.id, text, "llm_success", n_horizons)
         return probs
 
     logger.warning(
@@ -482,6 +505,7 @@ async def aforecast_multi_horizon(
         question_id=question.id,
         n_horizons=n_horizons,
     )
+    _save_response_log(question.id, text, "fallback", n_horizons)
     return None
 
 
