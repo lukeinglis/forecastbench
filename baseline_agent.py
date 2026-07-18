@@ -8,7 +8,6 @@ import re
 
 import litellm
 
-from cutoff import CutoffEnvironment
 from fetch_data import Question
 
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
@@ -66,19 +65,16 @@ def _build_prompt(
     today_date = getattr(question, "forecast_due_date", None) or question.freeze_datetime
 
     if question.freeze_datetime:
-        env = CutoffEnvironment(question.freeze_datetime)
-        prepared = env.prepare_question(question)
         temporal_context = f"Today's Date: {today_date}. " if today_date else ""
         temporal_context += (
             f"You should forecast based on information available as of {question.freeze_datetime}."
         )
     else:
-        prepared = question
         temporal_context = f"Today's Date: {today_date}." if today_date else ""
 
     source_context = (
-        f"Source Context: {prepared.source_intro}\n\n"
-        if getattr(prepared, "source_intro", None)
+        f"Source Context: {question.source_intro}\n\n"
+        if getattr(question, "source_intro", None)
         else ""
     )
 
@@ -88,16 +84,16 @@ def _build_prompt(
         else ""
     )
 
-    background_section = f"Background: {prepared.background}\n" if prepared.background else ""
+    background_section = f"Background: {question.background}\n" if question.background else ""
     criteria_section = (
-        f"Resolution Criteria: {prepared.resolution_criteria}\n"
-        if prepared.resolution_criteria
+        f"Resolution Criteria: {question.resolution_criteria}\n"
+        if question.resolution_criteria
         else ""
     )
 
     return PROMPT_TEMPLATE.format(
         temporal_context=temporal_context,
-        question=prepared.question,
+        question=question.question,
         background_section=background_section,
         criteria_section=criteria_section,
         source_context=source_context,
@@ -144,7 +140,7 @@ def _build_dataset_prompt(
 
 
 def _parse_probabilities(text: str, n_horizons: int) -> list[float]:
-    matches = re.findall(r"\*?(0?\.\d+|1\.0+)\*?", text)
+    matches = re.findall(r"\*(0?\.\d+|1\.0+)\*", text)
     if len(matches) == n_horizons:
         return [max(0.01, min(0.99, float(m))) for m in matches]
 
@@ -171,7 +167,13 @@ def _parse_probabilities(text: str, n_horizons: int) -> list[float]:
 
 
 def _parse_probability(text: str) -> float:
-    return _parse_probabilities(text, 1)[0]
+    match = re.search(r"(?:^|\s|:)\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*$", text, re.MULTILINE)
+    if not match:
+        match = re.search(r"(0?\.\d+|1\.0{0,})", text)
+    if match:
+        prob = float(match.group(1))
+        return max(0.01, min(0.99, prob))
+    return 0.5
 
 
 def forecast(

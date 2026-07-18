@@ -146,29 +146,40 @@ class TestBuildDatasetPrompt:
 
 class TestParseProbability:
     def test_extracts_decimal(self) -> None:
-        assert _parse_probability("*0.73*") == pytest.approx(0.73)
+        assert _parse_probability("I estimate 0.73") == pytest.approx(0.73)
 
     def test_extracts_from_probability_line(self) -> None:
-        text = "After analysis...\n\n*0.65*"
+        text = "After analysis...\n\nProbability: 0.65"
         assert _parse_probability(text) == pytest.approx(0.65)
 
     def test_extracts_leading_zero_optional(self) -> None:
-        assert _parse_probability("*.85*") == pytest.approx(0.85)
+        assert _parse_probability("The answer is .85") == pytest.approx(0.85)
 
     def test_clamps_to_lower_bound(self) -> None:
-        result = _parse_probabilities("*0.001*", 1)
-        assert result[0] == pytest.approx(0.01)
+        assert _parse_probability("Probability: 0.001") == pytest.approx(0.01)
 
     def test_clamps_to_upper_bound(self) -> None:
-        result = _parse_probabilities("*1.0*", 1)
-        assert result[0] == pytest.approx(0.99)
+        assert _parse_probability("Probability: 0.999") == pytest.approx(0.99)
 
-    def test_extracts_zero(self) -> None:
-        result = _parse_probability("*0.0*")
+    def test_fallback_on_no_number(self) -> None:
+        assert _parse_probability("I cannot determine") == pytest.approx(0.5)
+
+    def test_fallback_on_empty(self) -> None:
+        assert _parse_probability("") == pytest.approx(0.5)
+
+    def test_extracts_from_verbose_response(self) -> None:
+        text = """Let me think about this step by step.
+        Base rate is around 30%. Adjusting for factors...
+        My final estimate is 0.42."""
+        result = _parse_probability(text)
         assert 0.01 <= result <= 0.99
 
+    def test_extracts_zero(self) -> None:
+        result = _parse_probability("Probability: 0")
+        assert result == pytest.approx(0.01)
+
     def test_extracts_one(self) -> None:
-        result = _parse_probability("*1.0*")
+        result = _parse_probability("Probability: 1.0")
         assert result == pytest.approx(0.99)
 
 
@@ -178,9 +189,12 @@ class TestParseProbabilities:
         result = _parse_probabilities(text, 3)
         assert result == [pytest.approx(0.65), pytest.approx(0.70), pytest.approx(0.80)]
 
-    def test_extracts_plain_decimals(self) -> None:
+    @patch("baseline_agent.litellm")
+    def test_plain_decimals_trigger_llm_fallback(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.completion.return_value = _mock_response("[0.65, 0.70, 0.80]")
         text = "0.65 0.70 0.80"
         result = _parse_probabilities(text, 3)
+        mock_litellm.completion.assert_called_once()
         assert result == [pytest.approx(0.65), pytest.approx(0.70), pytest.approx(0.80)]
 
     def test_extracts_mixed_formats(self) -> None:
@@ -226,11 +240,19 @@ class TestParseProbabilities:
         assert result[0] == pytest.approx(0.10)
         assert result[7] == pytest.approx(0.80)
 
+    @patch("baseline_agent.litellm")
+    def test_ignores_stray_numbers_in_reasoning(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.completion.return_value = _mock_response("[0.40, 0.60]")
+        text = "The base rate is 0.30 and after adjusting by 0.10 I get *0.40*"
+        result = _parse_probabilities(text, 2)
+        mock_litellm.completion.assert_called_once()
+        assert result == [pytest.approx(0.40), pytest.approx(0.60)]
+
 
 class TestForecastSync:
     @patch("baseline_agent.litellm")
     def test_calls_litellm_completion(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _mock_response("*0.73*")
+        mock_litellm.completion.return_value = _mock_response("Probability: 0.73")
         from baseline_agent import forecast
 
         q = _make_question()
@@ -244,7 +266,7 @@ class TestForecastSync:
 
     @patch("baseline_agent.litellm")
     def test_forecast_returns_float(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.completion.return_value = _mock_response("*0.55*")
+        mock_litellm.completion.return_value = _mock_response("Probability: 0.55")
         from baseline_agent import forecast
 
         q = _make_question()
@@ -283,7 +305,7 @@ class TestForecastMulti:
 class TestForecastAsync:
     @patch("baseline_agent.litellm")
     async def test_calls_litellm_acompletion(self, mock_litellm: MagicMock) -> None:
-        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.65*"))
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("Probability: 0.65"))
         from baseline_agent import aforecast
 
         q = _make_question()

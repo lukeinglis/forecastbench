@@ -9,7 +9,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NamedTuple, Protocol, Union
+from typing import Any, NamedTuple, Protocol, Union
 
 os.environ.setdefault("LITELLM_LOG", "ERROR")
 import litellm  # noqa: E402
@@ -32,6 +32,8 @@ class AsyncForecaster(Protocol):
 
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
+
+MultiForecaster = Any
 
 
 class EvalResult(NamedTuple):
@@ -222,6 +224,8 @@ async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
     raw: bool = False,
+    multi_forecaster: MultiForecaster | None = None,
+    async_multi_forecaster: MultiForecaster | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline."""
     question_sets, resolved = load_data()
@@ -238,9 +242,9 @@ async def run_eval(
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug)  # type: ignore[arg-type]
+        forecasts = await _run_async(forecaster, questions, model_slug, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
     else:
-        forecasts = _run_sync(forecaster, questions, model_slug)  # type: ignore[arg-type]
+        forecasts = _run_sync(forecaster, questions, model_slug, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
 
@@ -274,32 +278,44 @@ def _run_sync(
     forecaster: SyncForecaster,
     questions: list[Question],
     model_slug: str,
+    multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
-    from baseline_agent import forecast_multi
-
     forecasts: dict[str, float] = {}
     for q in questions:
-        if _has_multi_horizon(q):
+        if _has_multi_horizon(q) and multi_forecaster is not None:
             dates = [d for d in q.resolution_dates if d]
-            all_cached = True
+            uncached_dates: list[str] = []
             for date_str in dates:
                 composite_key = f"{q.id}_{date_str}"
                 cached = _read_cache(model_slug, composite_key)
                 if cached is not None:
                     forecasts[composite_key] = cached
                 else:
-                    all_cached = False
-            if all_cached:
+                    uncached_dates.append(date_str)
+            if not uncached_dates:
                 continue
             try:
-                probs = forecast_multi(q, resolution_dates=dates)
+                probs = multi_forecaster(q, resolution_dates=uncached_dates)
             except Exception:
-                probs = [0.5] * len(dates)
-            for date_str, prob in zip(dates, probs):
+                probs = [0.5] * len(uncached_dates)
+            for date_str, prob in zip(uncached_dates, probs):
                 composite_key = f"{q.id}_{date_str}"
-                if composite_key not in forecasts:
-                    forecasts[composite_key] = prob
-                    _write_cache(model_slug, composite_key, prob)
+                forecasts[composite_key] = prob
+                _write_cache(model_slug, composite_key, prob)
+        elif _has_multi_horizon(q):
+            dates = [d for d in q.resolution_dates if d]
+            for date_str in dates:
+                composite_key = f"{q.id}_{date_str}"
+                cached = _read_cache(model_slug, composite_key)
+                if cached is not None:
+                    forecasts[composite_key] = cached
+                    continue
+                try:
+                    prob = forecaster(q, resolution_date=date_str)
+                except Exception:
+                    prob = 0.5
+                forecasts[composite_key] = prob
+                _write_cache(model_slug, composite_key, prob)
         else:
             cached = _read_cache(model_slug, q.id)
             if cached is not None:
@@ -315,9 +331,9 @@ async def _run_async(
     forecaster: AsyncForecaster,
     questions: list[Question],
     model_slug: str,
+    async_multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
-    from baseline_agent import aforecast_multi
 
     concurrency = max(1, int(os.getenv("FORECAST_CONCURRENCY", "10")))
     semaphore = asyncio.Semaphore(concurrency)
@@ -358,26 +374,31 @@ async def _run_async(
         if not uncached_dates:
             return list(cached_results.items())
 
+        assert async_multi_forecaster is not None
         async with semaphore:
             try:
-                probs = await aforecast_multi(q, resolution_dates=dates)
+                probs = await async_multi_forecaster(q, resolution_dates=uncached_dates)
             except Exception:
-                probs = [0.5] * len(dates)
+                probs = [0.5] * len(uncached_dates)
 
         results = list(cached_results.items())
-        for date_str, prob in zip(dates, probs):
+        for date_str, prob in zip(uncached_dates, probs):
             composite_key = f"{q.id}_{date_str}"
-            if composite_key not in cached_results:
-                _write_cache(model_slug, composite_key, prob)
-                results.append((composite_key, prob))
+            _write_cache(model_slug, composite_key, prob)
+            results.append((composite_key, prob))
         return results
 
     single_tasks = []
     multi_tasks = []
     for q in questions:
-        if _has_multi_horizon(q):
+        if _has_multi_horizon(q) and async_multi_forecaster is not None:
             dates = [d for d in q.resolution_dates if d]
             multi_tasks.append(_forecast_multi_horizon(q, dates))
+        elif _has_multi_horizon(q):
+            dates = [d for d in q.resolution_dates if d]
+            for date_str in dates:
+                composite_key = f"{q.id}_{date_str}"
+                single_tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
         else:
             single_tasks.append(_forecast_one(q, q.id))
 
@@ -422,13 +443,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.agent == "baseline":
-        from baseline_agent import aforecast
+        from baseline_agent import aforecast, aforecast_multi
         forecaster: Forecaster = aforecast
+        eval_result = asyncio.run(run_eval(forecaster, raw=args.raw, async_multi_forecaster=aforecast_multi))
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
-
-    eval_result = asyncio.run(run_eval(forecaster, raw=args.raw))
+        eval_result = asyncio.run(run_eval(forecaster, raw=args.raw))
 
     if args.agent != "dummy":
         _run_analysis(eval_result.forecasts, eval_result.resolved, eval_result.model_slug)
