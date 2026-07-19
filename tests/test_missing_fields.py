@@ -12,6 +12,7 @@ from eval import (
     _build_question,
     _has_multi_horizon,
     _expand_resolved_for_horizons,
+    _run_async,
     _run_sync,
     _write_cache,
 )
@@ -270,6 +271,9 @@ class TestMultiHorizonSyncPath:
         def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.6
 
+        def mock_fm(q: Question, resolution_dates: list[str]) -> list[float]:
+            return [0.6] * len(resolution_dates)
+
         q = Question(
             id="q1",
             source="acled",
@@ -277,7 +281,7 @@ class TestMultiHorizonSyncPath:
             resolution_dates=["2024-07-28", "2025-01-17"],
         )
         with patch("eval.CACHE_DIR", tmp):
-            forecasts = _run_sync(dummy, [q], "test")
+            forecasts = _run_sync(dummy, [q], "test", multi_forecaster=mock_fm)
 
         assert "q1_2024-07-28" in forecasts
         assert "q1_2025-01-17" in forecasts
@@ -303,7 +307,61 @@ class TestMultiHorizonSyncPath:
         assert "m1" in forecasts
         assert len(forecasts) == 1
 
-    def test_multi_horizon_passes_resolution_date_to_forecaster(self, tmp_path: object) -> None:
+    def test_multi_horizon_calls_forecast_multi(self, tmp_path: object) -> None:
+        from pathlib import Path as P
+
+        tmp = P(str(tmp_path))
+        multi_calls: list[list[str]] = []
+
+        def mock_forecast_multi(q: Question, resolution_dates: list[str]) -> list[float]:
+            multi_calls.append(resolution_dates)
+            return [0.5] * len(resolution_dates)
+
+        def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+            return 0.5
+
+        q = Question(
+            id="q1",
+            source="acled",
+            question="Test?",
+            resolution_dates=["2024-07-28", "2025-01-17"],
+        )
+        with patch("eval.CACHE_DIR", tmp):
+            _run_sync(tracking_fn, [q], "test", multi_forecaster=mock_forecast_multi)
+
+        assert len(multi_calls) == 1
+        assert multi_calls[0] == ["2024-07-28", "2025-01-17"]
+
+    def test_multi_horizon_uses_cache(self, tmp_path: object) -> None:
+        from pathlib import Path as P
+
+        tmp = P(str(tmp_path))
+        multi_called = False
+
+        def mock_forecast_multi(q: Question, resolution_dates: list[str]) -> list[float]:
+            nonlocal multi_called
+            multi_called = True
+            return [0.7] * len(resolution_dates)
+
+        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+            return 0.7
+
+        with patch("eval.CACHE_DIR", tmp):
+            _write_cache("test", "q1_2024-07-28", 0.99)
+            _write_cache("test", "q1_2025-01-17", 0.88)
+            q = Question(
+                id="q1",
+                source="acled",
+                question="Test?",
+                resolution_dates=["2024-07-28", "2025-01-17"],
+            )
+            forecasts = _run_sync(dummy, [q], "test", multi_forecaster=mock_forecast_multi)
+
+        assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
+        assert forecasts["q1_2025-01-17"] == pytest.approx(0.88)
+        assert not multi_called
+
+    def test_multi_horizon_fallback_to_per_date_without_multi_forecaster(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
@@ -320,20 +378,21 @@ class TestMultiHorizonSyncPath:
             resolution_dates=["2024-07-28", "2025-01-17"],
         )
         with patch("eval.CACHE_DIR", tmp):
-            _run_sync(tracking_fn, [q], "test")
+            forecasts = _run_sync(tracking_fn, [q], "test")
 
         assert calls == ["2024-07-28", "2025-01-17"]
+        assert "q1_2024-07-28" in forecasts
+        assert "q1_2025-01-17" in forecasts
 
-    def test_multi_horizon_uses_cache(self, tmp_path: object) -> None:
+    def test_multi_horizon_sends_only_uncached_dates(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
-        call_count = 0
+        sent_dates: list[list[str]] = []
 
-        def counting_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
-            nonlocal call_count
-            call_count += 1
-            return 0.7
+        def mock_fm(q: Question, resolution_dates: list[str]) -> list[float]:
+            sent_dates.append(resolution_dates)
+            return [0.7] * len(resolution_dates)
 
         with patch("eval.CACHE_DIR", tmp):
             _write_cache("test", "q1_2024-07-28", 0.99)
@@ -343,11 +402,63 @@ class TestMultiHorizonSyncPath:
                 question="Test?",
                 resolution_dates=["2024-07-28", "2025-01-17"],
             )
-            forecasts = _run_sync(counting_fn, [q], "test")
+            forecasts = _run_sync(lambda q, **kw: 0.5, [q], "test", multi_forecaster=mock_fm)
 
+        assert sent_dates == [["2025-01-17"]]
         assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
         assert forecasts["q1_2025-01-17"] == pytest.approx(0.7)
-        assert call_count == 1
+
+
+class TestMultiHorizonAsyncPath:
+    async def test_async_fallback_to_per_date_without_multi_forecaster(self, tmp_path: object) -> None:
+        from pathlib import Path as P
+
+        tmp = P(str(tmp_path))
+        calls: list[str | None] = []
+
+        async def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+            calls.append(resolution_date)
+            return 0.5
+
+        q = Question(
+            id="q1",
+            source="acled",
+            question="Test?",
+            resolution_dates=["2024-07-28", "2025-01-17"],
+        )
+        with patch("eval.CACHE_DIR", tmp):
+            forecasts = await _run_async(tracking_fn, [q], "test")
+
+        assert set(calls) == {"2024-07-28", "2025-01-17"}
+        assert "q1_2024-07-28" in forecasts
+        assert "q1_2025-01-17" in forecasts
+
+    async def test_async_multi_sends_only_uncached_dates(self, tmp_path: object) -> None:
+        from pathlib import Path as P
+
+        tmp = P(str(tmp_path))
+        sent_dates: list[list[str]] = []
+
+        async def mock_afm(q: Question, resolution_dates: list[str]) -> list[float]:
+            sent_dates.append(resolution_dates)
+            return [0.7] * len(resolution_dates)
+
+        async def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+            return 0.5
+
+        with patch("eval.CACHE_DIR", tmp):
+            _write_cache("test", "q1_2024-07-28", 0.99)
+            q = Question(
+                id="q1",
+                source="acled",
+                question="Test?",
+                resolution_dates=["2024-07-28", "2025-01-17"],
+            )
+            forecasts = await _run_async(dummy, [q], "test", async_multi_forecaster=mock_afm)
+
+        assert sent_dates == [["2025-01-17"]]
+        assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
+        assert forecasts["q1_2025-01-17"] == pytest.approx(0.7)
 
 
 class TestMultiHorizonEndToEnd:

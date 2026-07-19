@@ -18,7 +18,6 @@ logger = get_logger("baseline_agent")
 
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
-
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 
 RESPONSE_LOG_DIR = Path(".cache/response_logs")
@@ -148,6 +147,16 @@ Output your answer (a number between 0 and 1) with an asterisk at the beginning 
 Do not output anything else.
 Answer: {{ Insert answer here }}"""
 
+DATASET_PROMPT_TEMPLATE = """You are an expert superforecaster, familiar with the research on forecasting. Your goal is to predict the probability of the resolution of the question at each of the resolution dates.
+
+Today's Date: {today_date}
+{data_availability_context}
+Question: {question}
+
+{background_section}{criteria_section}{freeze_value_section}Question resolution dates: {list_of_resolution_dates}
+
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. (For example, if there are n resolution dates, you would output different *p* for each resolution date) Do not output anything else."""
+
 
 def _build_prompt(
     question: Question,
@@ -215,6 +224,71 @@ def _build_prompt(
     )
 
 
+def _build_dataset_prompt(
+    question: Question,
+    resolution_dates: list[str],
+) -> str:
+    today_date = getattr(question, "forecast_due_date", None) or question.freeze_datetime or ""
+
+    data_availability_context = (
+        f"You should forecast based on information available as of {question.freeze_datetime}."
+        if question.freeze_datetime
+        else ""
+    )
+
+    background_section = f"Question Background: {question.background}\n" if question.background else ""
+    criteria_section = (
+        f"Resolution Criteria: {question.resolution_criteria}\n"
+        if question.resolution_criteria
+        else ""
+    )
+
+    freeze_value_section = ""
+    if question.freeze_datetime_value is not None:
+        freeze_value_section = f"Current value on {question.freeze_datetime}: {question.freeze_datetime_value}\n"
+        if question.freeze_datetime_value_explanation:
+            freeze_value_section += f"Value Explanation: {question.freeze_datetime_value_explanation}\n"
+
+    list_of_resolution_dates = ", ".join(resolution_dates)
+
+    return DATASET_PROMPT_TEMPLATE.format(
+        today_date=today_date,
+        data_availability_context=data_availability_context,
+        question=question.question,
+        background_section=background_section,
+        criteria_section=criteria_section,
+        freeze_value_section=freeze_value_section,
+        list_of_resolution_dates=list_of_resolution_dates,
+    )
+
+
+def _parse_probabilities(text: str, n_horizons: int) -> list[float]:
+    matches = re.findall(r"\*(0?\.\d+|1\.0+)\*", text)
+    if len(matches) == n_horizons:
+        return [max(0.01, min(0.99, float(m))) for m in matches]
+
+    try:
+        extraction_prompt = FORECAST_EXTRACTION_PROMPT.format(
+            n_horizons=n_horizons, model_response=text,
+        )
+        response = litellm.completion(
+            model=EXTRACTION_MODEL,
+            messages=[{"role": "user", "content": extraction_prompt}],
+            temperature=0,
+            timeout=30,
+        )
+        content = response.choices[0].message.content or ""
+        list_match = re.search(r"\[([^\]]*)\]", content)
+        if list_match:
+            parsed = json.loads(f"[{list_match.group(1)}]")
+            if isinstance(parsed, list) and len(parsed) == n_horizons:
+                return [max(0.01, min(0.99, float(v))) for v in parsed]
+    except Exception:
+        pass
+
+    return [0.5] * n_horizons
+
+
 def _parse_probability(text: str) -> float:
     asterisk = re.search(r"\*\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*", text)
     if asterisk:
@@ -265,6 +339,21 @@ def forecast(
     prob = _parse_probability(text)
     logger.info("forecast_complete", question_id=question.id, probability=prob)
     return prob
+
+
+def forecast_multi(
+    question: Question,
+    resolution_dates: list[str],
+) -> list[float]:
+    prompt = _build_dataset_prompt(question, resolution_dates)
+    response = litellm.completion(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        timeout=90,
+    )
+    text = response.choices[0].message.content or ""
+    return _parse_probabilities(text, len(resolution_dates))
 
 
 async def aforecast(
@@ -507,6 +596,21 @@ async def aforecast_multi_horizon(
     )
     _save_response_log(question.id, text, "fallback", n_horizons)
     return None
+
+
+async def aforecast_multi(
+    question: Question,
+    resolution_dates: list[str],
+) -> list[float]:
+    prompt = _build_dataset_prompt(question, resolution_dates)
+    response = await litellm.acompletion(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        timeout=90,
+    )
+    text = response.choices[0].message.content or ""
+    return _parse_probabilities(text, len(resolution_dates))
 
 
 if __name__ == "__main__":

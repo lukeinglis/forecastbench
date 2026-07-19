@@ -48,6 +48,8 @@ class AsyncForecaster(Protocol):
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
 
+MultiForecaster = Any
+
 
 class EvalResult(NamedTuple):
     scoring: ScoringResult
@@ -251,6 +253,8 @@ async def run_eval(
     round_name: str | None = None,
     prompt_variant: str = "zero-shot",
     multi_horizon: bool = False,
+    multi_forecaster: MultiForecaster | None = None,
+    async_multi_forecaster: MultiForecaster | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -282,9 +286,9 @@ async def run_eval(
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon)  # type: ignore[arg-type]
+        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
     else:
-        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
+        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
 
@@ -326,11 +330,33 @@ def _run_sync(
     questions: list[Question],
     model_slug: str,
     prompt_variant: str = "zero-shot",
+    multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
-        if _has_multi_horizon(q):
-            for date_str in q.resolution_dates:
+        if _has_multi_horizon(q) and multi_forecaster is not None:
+            dates = [d for d in q.resolution_dates if d]
+            uncached_dates: list[str] = []
+            for date_str in dates:
+                composite_key = f"{q.id}_{date_str}"
+                cached = _read_cache(model_slug, composite_key)
+                if cached is not None:
+                    forecasts[composite_key] = cached
+                else:
+                    uncached_dates.append(date_str)
+            if not uncached_dates:
+                continue
+            try:
+                probs = multi_forecaster(q, resolution_dates=uncached_dates)
+            except Exception:
+                probs = [0.5] * len(uncached_dates)
+            for date_str, prob in zip(uncached_dates, probs):
+                composite_key = f"{q.id}_{date_str}"
+                forecasts[composite_key] = prob
+                _write_cache(model_slug, composite_key, prob)
+        elif _has_multi_horizon(q):
+            dates = [d for d in q.resolution_dates if d]
+            for date_str in dates:
                 composite_key = f"{q.id}_{date_str}"
                 cached = _read_cache(model_slug, composite_key)
                 if cached is not None:
@@ -353,10 +379,13 @@ def _run_sync(
             if cached is not None:
                 forecasts[q.id] = cached
                 continue
-            prob = forecaster(
-                q, source=q.source, resolution_dates=q.resolution_dates,
-                prompt_variant=prompt_variant,
-            )
+            try:
+                prob = forecaster(
+                    q, source=q.source, resolution_dates=q.resolution_dates,
+                    prompt_variant=prompt_variant,
+                )
+            except Exception:
+                prob = 0.5
             forecasts[q.id] = prob
             _write_cache(model_slug, q.id, prob)
     return forecasts
@@ -368,6 +397,7 @@ async def _run_async(
     model_slug: str,
     prompt_variant: str = "zero-shot",
     multi_horizon: bool = False,
+    async_multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
 
@@ -399,54 +429,67 @@ async def _run_async(
 
     async def _forecast_multi_horizon(
         q: Question,
+        dates: list[str],
     ) -> list[tuple[str, float]]:
-        dates = [d for d in q.resolution_dates if d and str(d).upper() != "N/A"]
-        composite_keys = [f"{q.id}_{d}" for d in dates]
-        cached_values = {k: _read_cache(model_slug, k) for k in composite_keys}
-        if all(v is not None for v in cached_values.values()):
-            return [(k, v) for k, v in cached_values.items()]  # type: ignore[misc]
+        cached_results: dict[str, float] = {}
+        uncached_dates: list[str] = []
+        for date_str in dates:
+            composite_key = f"{q.id}_{date_str}"
+            cached = _read_cache(model_slug, composite_key)
+            if cached is not None:
+                cached_results[composite_key] = cached
+            else:
+                uncached_dates.append(date_str)
+
+        if not uncached_dates:
+            return list(cached_results.items())
 
         async with semaphore:
             try:
-                from baseline_agent import aforecast_multi_horizon
-                probs = await aforecast_multi_horizon(
-                    q,
-                    resolution_dates=dates,
-                    source=q.source,
-                    prompt_variant=prompt_variant,
-                )
+                if async_multi_forecaster is not None:
+                    probs_result = await async_multi_forecaster(q, resolution_dates=uncached_dates)
+                else:
+                    from baseline_agent import aforecast_multi_horizon
+                    probs_result = await aforecast_multi_horizon(
+                        q,
+                        resolution_dates=uncached_dates,
+                        source=q.source,
+                        prompt_variant=prompt_variant,
+                    )
             except Exception:
                 logger.warning("multi_horizon_error_fallback", question_id=q.id, exc_info=True)
-                probs = None
+                probs_result = None
 
-        results: list[tuple[str, float]] = []
-        if probs is None:
-            for key in composite_keys:
-                results.append((key, 0.5))
+        results = list(cached_results.items())
+        if probs_result is None:
+            for date_str in uncached_dates:
+                composite_key = f"{q.id}_{date_str}"
+                results.append((composite_key, 0.5))
         else:
-            for key, prob in zip(composite_keys, probs):
-                _write_cache(model_slug, key, prob)
-                results.append((key, prob))
+            for date_str, prob in zip(uncached_dates, probs_result):
+                composite_key = f"{q.id}_{date_str}"
+                _write_cache(model_slug, composite_key, prob)
+                results.append((composite_key, prob))
         return results
 
-    tasks: list[Any] = []
+    single_tasks: list[Any] = []
     multi_tasks: list[Any] = []
-
     for q in questions:
-        if _has_multi_horizon(q):
-            if multi_horizon:
-                multi_tasks.append(_forecast_multi_horizon(q))
-            else:
-                for date_str in q.resolution_dates:
-                    composite_key = f"{q.id}_{date_str}"
-                    tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
+        if _has_multi_horizon(q) and (multi_horizon or async_multi_forecaster is not None):
+            dates = [d for d in q.resolution_dates if d and str(d).upper() != "N/A"]
+            multi_tasks.append(_forecast_multi_horizon(q, dates))
+        elif _has_multi_horizon(q):
+            dates = [d for d in q.resolution_dates if d]
+            for date_str in dates:
+                composite_key = f"{q.id}_{date_str}"
+                single_tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
         else:
-            tasks.append(_forecast_one(q, q.id))
+            single_tasks.append(_forecast_one(q, q.id))
 
     all_results: list[tuple[str, float]] = []
 
-    if tasks:
-        single_results = await tqdm_asyncio.gather(*tasks, desc="Forecasting")
+    if single_tasks:
+        single_results = await tqdm_asyncio.gather(*single_tasks, desc="Forecasting")
         all_results.extend(single_results)
 
     if multi_tasks:
@@ -658,7 +701,7 @@ def main() -> None:
         round_name = _normalize_round_name(args.round)
 
     if args.agent == "baseline":
-        from baseline_agent import aforecast
+        from baseline_agent import aforecast, aforecast_multi
         forecaster: Forecaster = aforecast
     else:
         from dummy_forecaster import forecast
@@ -668,6 +711,7 @@ def main() -> None:
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
         multi_horizon=args.multi_horizon and args.agent == "baseline",
+        async_multi_forecaster=aforecast_multi if args.agent == "baseline" else None,
     ))
 
     if args.ci:
