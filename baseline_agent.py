@@ -202,6 +202,18 @@ Question: {question}
 Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. (For example, if there are n resolution dates, you would output different *p* for each resolution date) Do not output anything else."""
 
 
+def _format_question_text(text: str, forecast_due_date: str, is_dataset: bool) -> str:
+    if not is_dataset:
+        return text
+    try:
+        return text.format(
+            forecast_due_date=forecast_due_date,
+            resolution_date="each of the resolution dates provided below",
+        )
+    except (KeyError, IndexError, ValueError):
+        return text
+
+
 def _build_prompt(
     question: Question,
     resolution_date: str | None = None,
@@ -248,8 +260,9 @@ def _build_prompt(
             valid = [d for d in effective_rd if d and str(d).upper() != "N/A"]
             dates_str = ", ".join(str(d) for d in valid)
 
+        formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
         return ZERO_SHOT_DATASET_PROMPT.format(
-            question=question.question,
+            question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
             freeze_datetime=fd,
@@ -295,10 +308,11 @@ def _build_dataset_prompt(
 
     list_of_resolution_dates = ", ".join(resolution_dates)
 
+    formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
     return DATASET_PROMPT_TEMPLATE.format(
         today_date=today_date,
         data_availability_context=data_availability_context,
-        question=question.question,
+        question=formatted_q,
         background_section=background_section,
         criteria_section=criteria_section,
         freeze_value_section=freeze_value_section,
@@ -306,10 +320,13 @@ def _build_dataset_prompt(
     )
 
 
+_FULLMATCH_RE = re.compile(r"\*?\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*?")
+
+
 def _parse_probabilities(text: str, n_horizons: int) -> list[float]:
     matches = re.findall(r"\*(0?\.\d+|1\.0+)\*", text)
     if len(matches) == n_horizons:
-        return [max(0.01, min(0.99, float(m))) for m in matches]
+        return [float(m) for m in matches]
 
     try:
         extraction_prompt = FORECAST_EXTRACTION_PROMPT.format(
@@ -326,20 +343,24 @@ def _parse_probabilities(text: str, n_horizons: int) -> list[float]:
         if list_match:
             parsed = json.loads(f"[{list_match.group(1)}]")
             if isinstance(parsed, list) and len(parsed) == n_horizons:
-                return [max(0.01, min(0.99, float(v))) for v in parsed]
+                return [float(v) for v in parsed]
     except Exception:
         pass
 
-    return [0.5] * n_horizons
+    raise ValueError(f"Could not extract {n_horizons} probabilities from response")
 
 
 def _parse_probability(text: str) -> float:
+    fm = _FULLMATCH_RE.fullmatch(text.strip())
+    if fm:
+        prob = float(fm.group(1))
+        logger.debug("parsed_probability", raw_match=fm.group(1), parsed=prob, format="fullmatch")
+        return prob
     asterisk = re.search(r"\*\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*", text)
     if asterisk:
         prob = float(asterisk.group(1))
-        clamped = max(0.01, min(0.99, prob))
-        logger.debug("parsed_probability", raw_match=asterisk.group(1), parsed=clamped, format="asterisk")
-        return clamped
+        logger.debug("parsed_probability", raw_match=asterisk.group(1), parsed=prob, format="asterisk")
+        return prob
     match = re.search(r"[Pp]robability[\s:=]+\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)", text)
     if not match:
         match = re.search(r"(?:^|\s|:)\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*$", text, re.MULTILINE)
@@ -347,11 +368,9 @@ def _parse_probability(text: str) -> float:
         match = re.search(r"(0?\.\d+|1\.0{0,})", text)
     if match:
         prob = float(match.group(1))
-        clamped = max(0.01, min(0.99, prob))
-        logger.debug("parsed_probability", raw_match=match.group(1), parsed=clamped, format="standard")
-        return clamped
-    logger.debug("parsed_probability", raw_match=None, parsed=0.5, fallback=True)
-    return 0.5
+        logger.debug("parsed_probability", raw_match=match.group(1), parsed=prob, format="standard")
+        return prob
+    raise ValueError(f"Could not parse probability from response: {text[:100]}")
 
 
 def forecast(
@@ -435,7 +454,7 @@ async def aforecast(
 
 
 def _clamp(v: float) -> float:
-    return max(0.01, min(0.99, v))
+    return float(v)
 
 
 def _extract_answer_block(text: str) -> str | None:
@@ -556,7 +575,7 @@ async def _extract_with_llm(text: str, n_expected: int) -> list[float] | None:
         parsed = ast.literal_eval(result_text.strip())
         if isinstance(parsed, list) and len(parsed) == n_expected:
             if all(isinstance(v, (int, float)) and 0 <= v <= 1 for v in parsed):
-                return [max(0.01, min(0.99, float(v))) for v in parsed]
+                return [float(v) for v in parsed]
         logger.warning(
             "extraction_llm_invalid",
             n_expected=n_expected,

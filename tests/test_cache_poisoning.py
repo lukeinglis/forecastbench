@@ -22,8 +22,8 @@ def _good_forecaster(question: Question, **kwargs: object) -> float:
 
 
 class TestSyncFallbackNotCached:
-    def test_multi_horizon_exception_not_cached(self, tmp_path: Path) -> None:
-        """When forecaster raises on a multi-horizon question, 0.5 should NOT be cached."""
+    def test_multi_horizon_exception_skips(self, tmp_path: Path) -> None:
+        """When forecaster raises on a multi-horizon question, question is skipped (not cached)."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
         eval_mod.CACHE_DIR = tmp_path / "cache"
@@ -33,8 +33,8 @@ class TestSyncFallbackNotCached:
                 resolution_dates=["2024-01-01", "2024-06-01"],
             )
             forecasts = _run_sync(_raising_forecaster, [q], "test_slug")
-            assert forecasts["mh1_2024-01-01"] == 0.5
-            assert forecasts["mh1_2024-06-01"] == 0.5
+            assert "mh1_2024-01-01" not in forecasts
+            assert "mh1_2024-06-01" not in forecasts
             assert _read_cache("test_slug", "mh1_2024-01-01") is None
             assert _read_cache("test_slug", "mh1_2024-06-01") is None
         finally:
@@ -57,7 +57,7 @@ class TestSyncFallbackNotCached:
             eval_mod.CACHE_DIR = original
 
     def test_rerun_after_failure_retries(self, tmp_path: Path) -> None:
-        """After a failed run (no cache), re-running should call the forecaster again."""
+        """After a failed run (skipped), re-running should call the forecaster again."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
         eval_mod.CACHE_DIR = tmp_path / "cache"
@@ -66,9 +66,9 @@ class TestSyncFallbackNotCached:
                 id="mh3", source="acled", question="MH?",
                 resolution_dates=["2024-01-01"],
             )
-            # First run: forecaster raises, result is 0.5, NOT cached
+            # First run: forecaster raises, question skipped, NOT cached
             forecasts1 = _run_sync(_raising_forecaster, [q], "test_slug")
-            assert forecasts1["mh3_2024-01-01"] == 0.5
+            assert "mh3_2024-01-01" not in forecasts1
 
             # Second run: forecaster succeeds, result is 0.73, IS cached
             forecasts2 = _run_sync(_good_forecaster, [q], "test_slug")

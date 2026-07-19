@@ -244,8 +244,8 @@ def _raising_forecaster(question: Question, resolution_date: str | None = None, 
 
 
 class TestForecastErrorFallback:
-    def test_multi_horizon_error_returns_half(self) -> None:
-        """A forecaster that raises on multi-horizon question should produce 0.5 fallback."""
+    def test_multi_horizon_error_skips_question(self) -> None:
+        """A forecaster that raises on multi-horizon question should skip it."""
         q = Question(
             id="mh1", source="acled", question="MH?",
             resolution_dates=["2024-01-01"],
@@ -253,10 +253,10 @@ class TestForecastErrorFallback:
         with patch("eval._read_cache", return_value=None), \
              patch("eval._write_cache"):
             forecasts = _run_sync(_raising_forecaster, [q], "test_slug")
-        assert forecasts["mh1_2024-01-01"] == 0.5
+        assert "mh1_2024-01-01" not in forecasts
 
     def test_multi_horizon_error_logs_warning(self) -> None:
-        """The 0.5 fallback should log a warning with question_id."""
+        """A skipped question should log a warning with question_id."""
         import eval as eval_mod
 
         q = Question(
@@ -280,9 +280,9 @@ class TestForecastErrorFallback:
         finally:
             eval_mod.logger = original_logger  # type: ignore[assignment]
 
-        fallback_events = [e for e in log_events if e["event"] == "forecast_error_fallback"]
-        assert len(fallback_events) == 1
-        assert fallback_events[0]["question_id"] == "mh2"
+        skip_events = [e for e in log_events if "skip" in e["event"]]
+        assert len(skip_events) == 1
+        assert skip_events[0]["question_id"] == "mh2"
 
 
 class TestDifficultyAdjustmentLogging:

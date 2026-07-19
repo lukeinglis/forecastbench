@@ -262,32 +262,40 @@ class TestParseProbability:
     def test_extracts_leading_zero_optional(self) -> None:
         assert _parse_probability("The answer is .85") == pytest.approx(0.85)
 
-    def test_clamps_to_lower_bound(self) -> None:
-        assert _parse_probability("Probability: 0.001") == pytest.approx(0.01)
+    def test_no_clamping_low(self) -> None:
+        assert _parse_probability("Probability: 0.001") == pytest.approx(0.001)
 
-    def test_clamps_to_upper_bound(self) -> None:
-        assert _parse_probability("Probability: 0.999") == pytest.approx(0.99)
+    def test_no_clamping_high(self) -> None:
+        assert _parse_probability("Probability: 0.999") == pytest.approx(0.999)
 
-    def test_fallback_on_no_number(self) -> None:
-        assert _parse_probability("I cannot determine") == pytest.approx(0.5)
+    def test_raises_on_no_number(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_probability("I cannot determine")
 
-    def test_fallback_on_empty(self) -> None:
-        assert _parse_probability("") == pytest.approx(0.5)
+    def test_raises_on_empty(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_probability("")
 
     def test_extracts_from_verbose_response(self) -> None:
         text = """Let me think about this step by step.
         Base rate is around 30%. Adjusting for factors...
         My final estimate is 0.42."""
         result = _parse_probability(text)
-        assert 0.01 <= result <= 0.99
+        assert 0.0 <= result <= 1.0
 
     def test_extracts_zero(self) -> None:
         result = _parse_probability("Probability: 0")
-        assert result == pytest.approx(0.01)
+        assert result == pytest.approx(0.0)
 
     def test_extracts_one(self) -> None:
         result = _parse_probability("Probability: 1.0")
-        assert result == pytest.approx(0.99)
+        assert result == pytest.approx(1.0)
+
+    def test_fullmatch_on_bare_number(self) -> None:
+        assert _parse_probability("0.73") == pytest.approx(0.73)
+
+    def test_fullmatch_on_asterisk_wrapped(self) -> None:
+        assert _parse_probability("*0.73*") == pytest.approx(0.73)
 
 
 class TestParseProbabilities:
@@ -311,11 +319,11 @@ class TestParseProbabilities:
         assert result[0] == pytest.approx(0.30)
         assert result[3] == pytest.approx(0.75)
 
-    def test_clamps_all_values(self) -> None:
+    def test_no_clamping(self) -> None:
         text = "*0.001* *1.0* *0.50*"
         result = _parse_probabilities(text, 3)
-        assert result[0] == pytest.approx(0.01)
-        assert result[1] == pytest.approx(0.99)
+        assert result[0] == pytest.approx(0.001)
+        assert result[1] == pytest.approx(1.0)
         assert result[2] == pytest.approx(0.50)
 
     @patch("baseline_agent.litellm")
@@ -327,18 +335,18 @@ class TestParseProbabilities:
         assert result == [pytest.approx(0.30), pytest.approx(0.45), pytest.approx(0.60)]
 
     @patch("baseline_agent.litellm")
-    def test_both_fail_returns_defaults(self, mock_litellm: MagicMock) -> None:
+    def test_both_fail_raises_value_error(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("[]")
         text = "I cannot determine the probabilities"
-        result = _parse_probabilities(text, 3)
-        assert result == [0.5, 0.5, 0.5]
+        with pytest.raises(ValueError):
+            _parse_probabilities(text, 3)
 
     @patch("baseline_agent.litellm")
-    def test_llm_extraction_exception_returns_defaults(self, mock_litellm: MagicMock) -> None:
+    def test_llm_extraction_exception_raises_value_error(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.side_effect = Exception("API error")
         text = "some text without numbers"
-        result = _parse_probabilities(text, 2)
-        assert result == [0.5, 0.5]
+        with pytest.raises(ValueError):
+            _parse_probabilities(text, 2)
 
     def test_eight_horizons(self) -> None:
         text = "*0.10* *0.20* *0.30* *0.40* *0.50* *0.60* *0.70* *0.80*"
@@ -367,21 +375,21 @@ class TestAsteriskParsing:
     def test_asterisk_with_spaces(self) -> None:
         assert _parse_probability("* 0.65 *") == pytest.approx(0.65)
 
-    def test_asterisk_clamped_low(self) -> None:
-        assert _parse_probability("*0.001*") == pytest.approx(0.01)
+    def test_asterisk_no_clamping_low(self) -> None:
+        assert _parse_probability("*0.001*") == pytest.approx(0.001)
 
-    def test_asterisk_clamped_high(self) -> None:
-        assert _parse_probability("*0.999*") == pytest.approx(0.99)
+    def test_asterisk_no_clamping_high(self) -> None:
+        assert _parse_probability("*0.999*") == pytest.approx(0.999)
 
     def test_asterisk_priority_over_probability_line(self) -> None:
         text = "Probability: 0.30\n\n*0.75*"
         assert _parse_probability(text) == pytest.approx(0.75)
 
     def test_asterisk_zero(self) -> None:
-        assert _parse_probability("*0*") == pytest.approx(0.01)
+        assert _parse_probability("*0*") == pytest.approx(0.0)
 
     def test_asterisk_one(self) -> None:
-        assert _parse_probability("*1.0*") == pytest.approx(0.99)
+        assert _parse_probability("*1.0*") == pytest.approx(1.0)
 
     def test_asterisk_no_leading_zero(self) -> None:
         assert _parse_probability("*.85*") == pytest.approx(0.85)
@@ -395,8 +403,9 @@ class TestParseProbabilityPriority:
         text = "Running v0.95 of the model, probability: 0.3"
         assert _parse_probability(text) == pytest.approx(0.3)
 
-    def test_no_number_fallback(self) -> None:
-        assert _parse_probability("no number here") == pytest.approx(0.5)
+    def test_no_number_raises(self) -> None:
+        with pytest.raises(ValueError):
+            _parse_probability("no number here")
 
     def test_probability_equals(self) -> None:
         assert _parse_probability("Probability = 0.8") == pytest.approx(0.8)

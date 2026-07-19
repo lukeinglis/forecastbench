@@ -90,18 +90,18 @@ class TestExtractProbabilities:
         assert result is not None
         assert result == pytest.approx([0.3, 0.5, 0.7])
 
-    def test_clamps_to_bounds(self) -> None:
+    def test_no_clamping(self) -> None:
         result = _extract_probabilities("*0.001* *0.999* *0.5*", 3)
         assert result is not None
-        assert result[0] == pytest.approx(0.01)
-        assert result[1] == pytest.approx(0.99)
+        assert result[0] == pytest.approx(0.001)
+        assert result[1] == pytest.approx(0.999)
         assert result[2] == pytest.approx(0.5)
 
-    def test_zero_clamped_to_min(self) -> None:
+    def test_zero_and_one_pass_through(self) -> None:
         result = _extract_probabilities("*0* *0.5* *1.0*", 3)
         assert result is not None
-        assert result[0] == pytest.approx(0.01)
-        assert result[2] == pytest.approx(0.99)
+        assert result[0] == pytest.approx(0.0)
+        assert result[2] == pytest.approx(1.0)
 
     def test_no_matches_returns_none(self) -> None:
         result = _extract_probabilities("I cannot determine probabilities", 3)
@@ -335,14 +335,14 @@ class TestExtractWithLlm:
         assert result is None
 
     @patch("baseline_agent.litellm")
-    async def test_clamps_values(self, mock_litellm: MagicMock) -> None:
+    async def test_no_clamping(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("[0.001, 0.5, 0.999]")
         )
         result = await _extract_with_llm("some model output", 3)
         assert result is not None
-        assert result[0] == pytest.approx(0.01)
-        assert result[2] == pytest.approx(0.99)
+        assert result[0] == pytest.approx(0.001)
+        assert result[2] == pytest.approx(0.999)
 
 
 class TestAforecastMultiHorizon:
