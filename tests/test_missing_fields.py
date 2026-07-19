@@ -12,6 +12,7 @@ from eval import (
     _build_question,
     _has_multi_horizon,
     _expand_resolved_for_horizons,
+    _run_async,
     _run_sync,
     _write_cache,
 )
@@ -411,6 +412,58 @@ class TestMultiHorizonSyncPath:
                 resolution_dates=["2024-07-28", "2025-01-17"],
             )
             forecasts = _run_sync(lambda q, **kw: 0.5, [q], "test", multi_forecaster=mock_fm)
+
+        assert sent_dates == [["2025-01-17"]]
+        assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
+        assert forecasts["q1_2025-01-17"] == pytest.approx(0.7)
+
+
+class TestMultiHorizonAsyncPath:
+    async def test_async_fallback_to_per_date_without_multi_forecaster(self, tmp_path: object) -> None:
+        from pathlib import Path as P
+
+        tmp = P(str(tmp_path))
+        calls: list[str | None] = []
+
+        async def tracking_fn(q: Question, resolution_date: str | None = None) -> float:
+            calls.append(resolution_date)
+            return 0.5
+
+        q = Question(
+            id="q1",
+            source="acled",
+            question="Test?",
+            resolution_dates=["2024-07-28", "2025-01-17"],
+        )
+        with patch("eval.CACHE_DIR", tmp):
+            forecasts = await _run_async(tracking_fn, [q], "test")
+
+        assert set(calls) == {"2024-07-28", "2025-01-17"}
+        assert "q1_2024-07-28" in forecasts
+        assert "q1_2025-01-17" in forecasts
+
+    async def test_async_multi_sends_only_uncached_dates(self, tmp_path: object) -> None:
+        from pathlib import Path as P
+
+        tmp = P(str(tmp_path))
+        sent_dates: list[list[str]] = []
+
+        async def mock_afm(q: Question, resolution_dates: list[str]) -> list[float]:
+            sent_dates.append(resolution_dates)
+            return [0.7] * len(resolution_dates)
+
+        async def dummy(q: Question, resolution_date: str | None = None) -> float:
+            return 0.5
+
+        with patch("eval.CACHE_DIR", tmp):
+            _write_cache("test", "q1_2024-07-28", 0.99)
+            q = Question(
+                id="q1",
+                source="acled",
+                question="Test?",
+                resolution_dates=["2024-07-28", "2025-01-17"],
+            )
+            forecasts = await _run_async(dummy, [q], "test", async_multi_forecaster=mock_afm)
 
         assert sent_dates == [["2025-01-17"]]
         assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)

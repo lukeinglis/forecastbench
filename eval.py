@@ -321,7 +321,10 @@ def _run_sync(
             if cached is not None:
                 forecasts[q.id] = cached
                 continue
-            prob = forecaster(q)
+            try:
+                prob = forecaster(q)
+            except Exception:
+                prob = 0.5
             forecasts[q.id] = prob
             _write_cache(model_slug, q.id, prob)
     return forecasts
