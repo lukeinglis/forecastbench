@@ -44,7 +44,7 @@
 - Missing forecasts default to 0.5 per ForecastBench rules
 - Binary outcomes only: {0, 1}
 - Questions classified as "market" (metaculus, polymarket, manifold, infer) vs "dataset"
-- FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514)
+- FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON (auto-persisted after each eval run)

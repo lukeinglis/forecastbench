@@ -6,6 +6,8 @@ import ast
 import json
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +19,50 @@ from logging_config import get_logger
 logger = get_logger("baseline_agent")
 
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
-MODEL = os.getenv("FORECAST_MODEL", "claude-sonnet-4-20250514")
+MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
+
+_REFRESH_MARGIN_SECS = 300
+_vertex_creds_lock = threading.Lock()
+_vertex_credentials: Any = None
+_vertex_token_expiry: float = 0.0
+
+
+def _get_google_auth() -> tuple[Any, Any]:
+    import google.auth
+    import google.auth.transport.requests
+    return google.auth, google.auth.transport.requests
+
+
+def _ensure_vertex_credentials() -> None:
+    """Refresh Google ADC credentials if using Vertex AI and token is expired or near-expiry."""
+    if not MODEL.startswith("vertex_ai/"):
+        return
+
+    global _vertex_credentials, _vertex_token_expiry
+
+    if time.monotonic() < _vertex_token_expiry:
+        return
+
+    with _vertex_creds_lock:
+        if time.monotonic() < _vertex_token_expiry:
+            return
+        try:
+            auth_mod, transport_mod = _get_google_auth()
+
+            if _vertex_credentials is None:
+                _vertex_credentials, _ = auth_mod.default()
+
+            _vertex_credentials.refresh(transport_mod.Request())
+            if hasattr(_vertex_credentials, "expiry") and _vertex_credentials.expiry:
+                remaining = (_vertex_credentials.expiry.timestamp() - time.time())
+                _vertex_token_expiry = time.monotonic() + max(0, remaining - _REFRESH_MARGIN_SECS)
+            else:
+                _vertex_token_expiry = time.monotonic() + 1800
+
+            logger.debug("vertex_credentials_refreshed")
+        except Exception:
+            logger.warning("vertex_credentials_refresh_failed", exc_info=True)
 
 RESPONSE_LOG_DIR = Path(".cache/response_logs")
 
@@ -318,6 +362,7 @@ def forecast(
     prompt_variant: str = "zero-shot",
 ) -> float:
     logger.info("forecast_start", question_id=question.id, model=MODEL)
+    _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -345,6 +390,7 @@ def forecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
+    _ensure_vertex_credentials()
     prompt = _build_dataset_prompt(question, resolution_dates)
     response = litellm.completion(
         model=MODEL,
@@ -364,6 +410,7 @@ async def aforecast(
     prompt_variant: str = "zero-shot",
 ) -> float:
     logger.info("forecast_start", question_id=question.id, model=MODEL, async_mode=True)
+    _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -541,6 +588,7 @@ async def aforecast_multi_horizon(
         model=MODEL,
     )
 
+    _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
         source=source,
@@ -602,6 +650,7 @@ async def aforecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
+    _ensure_vertex_credentials()
     prompt = _build_dataset_prompt(question, resolution_dates)
     response = await litellm.acompletion(
         model=MODEL,

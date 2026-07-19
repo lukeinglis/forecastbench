@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
@@ -561,8 +562,9 @@ class TestAforecastMulti:
 
 
 class TestModelConfig:
-    def test_default_model(self) -> None:
-        assert "claude" in MODEL.lower() or "sonnet" in MODEL.lower()
+    def test_default_model_uses_vertex_ai(self) -> None:
+        assert MODEL.startswith("vertex_ai/")
+        assert "@" in MODEL
 
     @patch.dict("os.environ", {"FORECAST_MODEL": "gpt-4o"})
     def test_model_configurable_via_env(self) -> None:
@@ -572,3 +574,74 @@ class TestModelConfig:
         importlib.reload(baseline_agent)
         assert baseline_agent.MODEL == "gpt-4o"
         importlib.reload(baseline_agent)
+
+
+class TestVertexCredentialRefresh:
+    def test_skips_refresh_when_token_valid(self) -> None:
+        import baseline_agent
+        old_expiry = baseline_agent._vertex_token_expiry
+        old_creds = baseline_agent._vertex_credentials
+        try:
+            baseline_agent._vertex_token_expiry = time.monotonic() + 9999
+            baseline_agent._vertex_credentials = MagicMock()
+            with patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"):
+                baseline_agent._ensure_vertex_credentials()
+            baseline_agent._vertex_credentials.refresh.assert_not_called()
+        finally:
+            baseline_agent._vertex_token_expiry = old_expiry
+            baseline_agent._vertex_credentials = old_creds
+
+    def test_skips_for_non_vertex_model(self) -> None:
+        import baseline_agent
+        old_expiry = baseline_agent._vertex_token_expiry
+        try:
+            baseline_agent._vertex_token_expiry = 0.0
+            with patch.object(baseline_agent, "MODEL", "openai/gpt-4o"):
+                baseline_agent._ensure_vertex_credentials()
+        finally:
+            baseline_agent._vertex_token_expiry = old_expiry
+
+    def test_refreshes_expired_credentials(self) -> None:
+        import baseline_agent
+        old_expiry = baseline_agent._vertex_token_expiry
+        old_creds = baseline_agent._vertex_credentials
+        try:
+            baseline_agent._vertex_credentials = None
+            baseline_agent._vertex_token_expiry = 0.0
+
+            mock_creds = MagicMock()
+            mock_creds.expiry = None
+            mock_auth = MagicMock()
+            mock_auth.default.return_value = (mock_creds, "proj")
+            mock_transport = MagicMock()
+
+            with (
+                patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+                patch.object(baseline_agent, "_get_google_auth", return_value=(mock_auth, mock_transport)),
+            ):
+                baseline_agent._ensure_vertex_credentials()
+
+            mock_creds.refresh.assert_called_once()
+            assert baseline_agent._vertex_token_expiry > 0
+        finally:
+            baseline_agent._vertex_token_expiry = old_expiry
+            baseline_agent._vertex_credentials = old_creds
+
+    def test_refresh_failure_does_not_crash(self) -> None:
+        import baseline_agent
+        old_expiry = baseline_agent._vertex_token_expiry
+        old_creds = baseline_agent._vertex_credentials
+        try:
+            baseline_agent._vertex_credentials = None
+            baseline_agent._vertex_token_expiry = 0.0
+
+            with (
+                patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+                patch.object(baseline_agent, "_get_google_auth", side_effect=Exception("no creds")),
+            ):
+                baseline_agent._ensure_vertex_credentials()
+
+            assert baseline_agent._vertex_token_expiry == 0.0
+        finally:
+            baseline_agent._vertex_token_expiry = old_expiry
+            baseline_agent._vertex_credentials = old_creds
