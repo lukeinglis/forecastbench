@@ -430,14 +430,9 @@ def score_forecasts(
     ds_index = brier_index(ds_brier) if n_dataset > 0 else 0.0
     mk_index = brier_index(mk_brier) if n_market > 0 else 0.0
 
-    components = []
-    if n_dataset > 0:
-        components.append(ds_brier)
-    if n_market > 0:
-        components.append(mk_brier)
-
-    if components:
-        overall_bs = sum(components) / len(components)
+    total_questions = n_dataset + n_market
+    if total_questions > 0:
+        overall_bs = (ds_brier * n_dataset + mk_brier * n_market) / total_questions
     else:
         overall_bs = 0.0
 

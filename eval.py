@@ -348,8 +348,12 @@ def _run_sync(
                 continue
             try:
                 probs = multi_forecaster(q, resolution_dates=uncached_dates)
+            except ValueError:
+                logger.warning("parse_failure_skip_multi", question_id=q.id)
+                continue
             except Exception:
-                probs = [0.5] * len(uncached_dates)
+                logger.warning("forecast_error_skip_multi", question_id=q.id, exc_info=True)
+                continue
             for date_str, prob in zip(uncached_dates, probs):
                 composite_key = f"{q.id}_{date_str}"
                 forecasts[composite_key] = prob
@@ -368,9 +372,11 @@ def _run_sync(
                         source=q.source, resolution_dates=q.resolution_dates,
                         prompt_variant=prompt_variant,
                     )
+                except ValueError:
+                    logger.warning("parse_failure_skip", question_id=q.id, resolution_date=date_str)
+                    continue
                 except Exception:
-                    logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=date_str, exc_info=True)
-                    forecasts[composite_key] = 0.5
+                    logger.warning("forecast_error_skip", question_id=q.id, resolution_date=date_str, exc_info=True)
                     continue
                 forecasts[composite_key] = prob
                 _write_cache(model_slug, composite_key, prob)
@@ -384,8 +390,12 @@ def _run_sync(
                     q, source=q.source, resolution_dates=q.resolution_dates,
                     prompt_variant=prompt_variant,
                 )
+            except ValueError:
+                logger.warning("parse_failure_skip", question_id=q.id)
+                continue
             except Exception:
-                prob = 0.5
+                logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
+                continue
             forecasts[q.id] = prob
             _write_cache(model_slug, q.id, prob)
     return forecasts
@@ -408,7 +418,7 @@ async def _run_async(
         q: Question,
         cache_key: str,
         resolution_date: str | None = None,
-    ) -> tuple[str, float]:
+    ) -> tuple[str, float] | None:
         cached = _read_cache(model_slug, cache_key)
         if cached is not None:
             return cache_key, cached
@@ -421,9 +431,12 @@ async def _run_async(
                     resolution_dates=q.resolution_dates,
                     prompt_variant=prompt_variant,
                 )
+            except ValueError:
+                logger.warning("parse_failure_skip", question_id=q.id, resolution_date=resolution_date)
+                return None
             except Exception:
-                logger.warning("forecast_error_fallback", question_id=q.id, resolution_date=resolution_date, exc_info=True)
-                return cache_key, 0.5
+                logger.warning("forecast_error_skip", question_id=q.id, resolution_date=resolution_date, exc_info=True)
+                return None
         _write_cache(model_slug, cache_key, prob)
         return cache_key, prob
 
@@ -490,7 +503,7 @@ async def _run_async(
 
     if single_tasks:
         single_results = await tqdm_asyncio.gather(*single_tasks, desc="Forecasting")
-        all_results.extend(single_results)
+        all_results.extend(r for r in single_results if r is not None)
 
     if multi_tasks:
         multi_results = await tqdm_asyncio.gather(*multi_tasks, desc="Multi-horizon")

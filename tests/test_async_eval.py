@@ -167,7 +167,7 @@ class TestAsyncPath:
 
         assert cached == pytest.approx(0.65)
 
-    async def test_failed_forecast_returns_fallback(self, tmp_path: Path) -> None:
+    async def test_failed_forecast_skips_question(self, tmp_path: Path) -> None:
         async def failing_fn(q: Question, **kwargs: object) -> float:
             raise RuntimeError("API error")
 
@@ -175,7 +175,7 @@ class TestAsyncPath:
             forecasts = await _run_async(failing_fn, [_make_question("q1")], "test")
             assert _read_cache("test", "q1") is None
 
-        assert forecasts["q1"] == pytest.approx(0.5)
+        assert "q1" not in forecasts
 
     async def test_empty_question_list(self, tmp_path: Path) -> None:
         async def fn(q: Question, **kwargs: object) -> float:
