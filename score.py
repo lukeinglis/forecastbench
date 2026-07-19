@@ -13,6 +13,9 @@ from typing import NamedTuple
 from uuid import uuid4
 
 from fetch_data import MARKET_SOURCES, ResolvedQuestion
+from logging_config import get_logger
+
+logger = get_logger("score")
 
 
 class AdjustmentResult(NamedTuple):
@@ -37,14 +40,17 @@ class ScoringResult:
 
 def _validate_forecast(forecast: float) -> float:
     if math.isnan(forecast) or math.isinf(forecast):
+        logger.warning("invalid_forecast", value=forecast, reason="not_finite")
         raise ValueError(f"Forecast must be finite, got {forecast}")
     if forecast < 0.0 or forecast > 1.0:
+        logger.warning("invalid_forecast", value=forecast, reason="out_of_range")
         raise ValueError(f"Forecast must be in [0, 1], got {forecast}")
     return forecast
 
 
 def _validate_outcome(outcome: int) -> int:
     if outcome not in (0, 1):
+        logger.warning("invalid_outcome", value=outcome)
         raise ValueError(f"Outcome must be 0 or 1, got {outcome}")
     return outcome
 
@@ -69,6 +75,118 @@ def brier_index(mean_bs: float) -> float:
     if mean_bs < 0:
         raise ValueError(f"mean_bs must be non-negative, got {mean_bs}")
     return (1.0 - math.sqrt(mean_bs)) * 100.0
+
+
+def brier_skill_score(forecaster_brier: float, reference_brier: float = 0.25) -> float:
+    """Brier Skill Score: improvement over reference forecaster.
+
+    BSS = 1 - (forecaster_brier / reference_brier)
+    Positive = better than reference, 0 = same, negative = worse.
+    Reference defaults to 0.25 (always-0.5 forecaster).
+    """
+    if reference_brier == 0:
+        return 0.0
+    return 1.0 - (forecaster_brier / reference_brier)
+
+
+def bootstrap_ci(
+    pairs: list[tuple[float, int]],
+    n_replicates: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Bootstrap confidence interval for mean Brier score.
+
+    Returns (lower, upper) bounds of the CI.
+    """
+    import random
+
+    rng = random.Random(seed)
+    n = len(pairs)
+    if n == 0:
+        return (0.0, 0.0)
+    means = []
+    for _ in range(n_replicates):
+        sample = rng.choices(pairs, k=n)
+        mean_bs = sum((f - o) ** 2 for f, o in sample) / n
+        means.append(mean_bs)
+    means.sort()
+    alpha = (1 - ci) / 2
+    lo = means[int(alpha * n_replicates)]
+    hi = means[int((1 - alpha) * n_replicates)]
+    return (lo, hi)
+
+
+def murphy_decomposition(
+    pairs: list[tuple[float, int]],
+    n_bins: int = 10,
+) -> dict[str, float]:
+    """Decompose the Brier score into reliability, resolution, and uncertainty.
+
+    Uses Murphy's additive partition: Brier = REL - RES + UNC.
+
+    Reference:
+        Murphy, A. H. (1973). 'A New Vector Partition of the Probability
+        Score.' Journal of Applied Meteorology, 12(4), 595-600.
+
+    Args:
+        pairs: List of (forecast_probability, binary_outcome) tuples.
+        n_bins: Number of equally-spaced bins in [0, 1]. Default 10.
+
+    Returns:
+        Dict with keys: reliability, resolution, uncertainty, brier_check.
+    """
+    if not pairs:
+        raise ValueError("Cannot decompose empty list of pairs")
+
+    for f, o in pairs:
+        _validate_forecast(f)
+        _validate_outcome(o)
+
+    n = len(pairs)
+    base_rate = sum(o for _, o in pairs) / n
+
+    bin_width = 1.0 / n_bins
+    bins: list[tuple[float, float, list[tuple[float, int]]]] = []
+    for i in range(n_bins):
+        low = i * bin_width
+        high = (i + 1) * bin_width
+        in_bin = [
+            (f, o) for f, o in pairs
+            if low <= f < high or (i == n_bins - 1 and f == high)
+        ]
+        if in_bin:
+            bins.append((low, high, in_bin))
+
+    reliability = 0.0
+    resolution = 0.0
+    for _, _, bin_pairs in bins:
+        n_k = len(bin_pairs)
+        f_k = sum(f for f, _ in bin_pairs) / n_k
+        o_k = sum(o for _, o in bin_pairs) / n_k
+        reliability += n_k * (f_k - o_k) ** 2
+        resolution += n_k * (o_k - base_rate) ** 2
+
+    reliability /= n
+    resolution /= n
+    uncertainty = base_rate * (1.0 - base_rate)
+    brier_check = reliability - resolution + uncertainty
+
+    logger.info(
+        "murphy_decomposition",
+        reliability=round(reliability, 6),
+        resolution=round(resolution, 6),
+        uncertainty=round(uncertainty, 6),
+        brier_check=round(brier_check, 6),
+        n_bins_used=len(bins),
+    )
+
+    return {
+        "reliability": reliability,
+        "resolution": resolution,
+        "uncertainty": uncertainty,
+        "brier_check": brier_check,
+    }
 
 
 def _is_market_question(q: ResolvedQuestion) -> bool:
@@ -175,6 +293,13 @@ def adjust_for_difficulty(
     if not all_forecasts or not resolved:
         return AdjustmentResult(adjusted_scores={}, question_effects={})
 
+    logger.info(
+        "difficulty_adjustment_start",
+        n_forecasters=len(all_forecasts),
+        n_questions=len(resolved),
+        market_weight=market_weight,
+    )
+
     outcomes = {q.id: q.outcome for q in resolved}
     dataset_qids = [q.id for q in resolved if not _is_market_question(q)]
     market_qids = [q.id for q in resolved if _is_market_question(q)]
@@ -239,6 +364,8 @@ def score_forecasts(
     When difficulty_adjusted=True and all_forecasts is provided,
     applies the ForecastBench two-way fixed-effects adjustment.
     """
+    logger.info("scoring_start", n_questions=len(resolved), difficulty_adjusted=difficulty_adjusted)
+
     if not resolved:
         raise ValueError("No resolved questions to score")
 
@@ -314,7 +441,7 @@ def score_forecasts(
     else:
         overall_bs = 0.0
 
-    return ScoringResult(
+    result = ScoringResult(
         dataset_brier=ds_brier,
         dataset_index=ds_index,
         market_brier=mk_brier,
@@ -327,3 +454,14 @@ def score_forecasts(
         difficulty_adjusted=difficulty_adjusted and all_forecasts is not None and len(all_forecasts or {}) > 1,
         question_effects=question_effects,
     )
+
+    logger.info(
+        "scoring_complete",
+        overall_brier=result.overall_brier,
+        overall_index=result.overall_index,
+        n_dataset=n_dataset,
+        n_market=n_market,
+        n_missing=n_missing,
+    )
+
+    return result

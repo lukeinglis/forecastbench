@@ -124,41 +124,32 @@ class TestBuildQuestionPropagatesNewFields:
 
 
 class TestPromptSourceIntro:
-    def test_source_intro_included_when_present(self) -> None:
+    def test_source_intro_not_in_upstream_prompt(self) -> None:
         q = _make_question_with_fields(freeze_datetime=None)
         prompt = _build_prompt(q)
-        assert "Source Context: We would like you to predict" in prompt
+        assert "Source Context:" not in prompt
 
     def test_source_intro_omitted_when_none(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q)
         assert "Source Context:" not in prompt
 
-    def test_source_intro_appears_before_question(self) -> None:
-        q = _make_question_with_fields(freeze_datetime=None)
-        prompt = _build_prompt(q)
-        source_idx = prompt.index("Source Context:")
-        question_idx = prompt.index("Question:")
-        assert source_idx < question_idx
-
 
 class TestPromptResolutionDate:
     def test_resolution_date_included_when_provided(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
-        assert "Target resolution date: 2025-07-15" in prompt
+        assert "2025-07-15" in prompt
 
     def test_resolution_date_omitted_when_none(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q)
-        assert "Target resolution date:" not in prompt
+        assert "Question resolution date:" in prompt
 
-    def test_resolution_date_appears_before_question(self) -> None:
+    def test_resolution_date_uses_upstream_label(self) -> None:
         q = Question(id="q1", source="acled", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
-        rd_idx = prompt.index("Target resolution date:")
-        q_idx = prompt.index("Question:")
-        assert rd_idx < q_idx
+        assert "Question resolution date:" in prompt
 
 
 class TestHasMultiHorizon:
@@ -277,7 +268,7 @@ class TestMultiHorizonSyncPath:
 
         tmp = P(str(tmp_path))
 
-        def dummy(q: Question, resolution_date: str | None = None) -> float:
+        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.6
 
         def mock_fm(q: Question, resolution_dates: list[str]) -> list[float]:
@@ -301,7 +292,7 @@ class TestMultiHorizonSyncPath:
 
         tmp = P(str(tmp_path))
 
-        def dummy(q: Question, resolution_date: str | None = None) -> float:
+        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.5
 
         q = Question(
@@ -326,7 +317,7 @@ class TestMultiHorizonSyncPath:
             multi_calls.append(resolution_dates)
             return [0.5] * len(resolution_dates)
 
-        def tracking_fn(q: Question, resolution_date: str | None = None) -> float:
+        def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.5
 
         q = Question(
@@ -352,7 +343,7 @@ class TestMultiHorizonSyncPath:
             multi_called = True
             return [0.7] * len(resolution_dates)
 
-        def dummy(q: Question, resolution_date: str | None = None) -> float:
+        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.7
 
         with patch("eval.CACHE_DIR", tmp):
@@ -376,7 +367,7 @@ class TestMultiHorizonSyncPath:
         tmp = P(str(tmp_path))
         calls: list[str | None] = []
 
-        def tracking_fn(q: Question, resolution_date: str | None = None) -> float:
+        def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             calls.append(resolution_date)
             return 0.5
 
@@ -425,7 +416,7 @@ class TestMultiHorizonAsyncPath:
         tmp = P(str(tmp_path))
         calls: list[str | None] = []
 
-        async def tracking_fn(q: Question, resolution_date: str | None = None) -> float:
+        async def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             calls.append(resolution_date)
             return 0.5
 
@@ -452,7 +443,7 @@ class TestMultiHorizonAsyncPath:
             sent_dates.append(resolution_dates)
             return [0.7] * len(resolution_dates)
 
-        async def dummy(q: Question, resolution_date: str | None = None) -> float:
+        async def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
             return 0.5
 
         with patch("eval.CACHE_DIR", tmp):

@@ -8,6 +8,8 @@ dependencies = [
     "pydantic>=2.0",
     "litellm>=1.0",
     "tqdm>=4.60",
+    "structlog>=24.0",
+    "google-cloud-aiplatform>=1.161.0",
 ]
 
 [project.optional-dependencies]
@@ -36,3 +38,7 @@ strict = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m \"not integration\""
+markers = [
+    "integration: tests that fetch real data from the ForecastBench repo (may be slow)",
+]
