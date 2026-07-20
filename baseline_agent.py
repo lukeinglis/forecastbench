@@ -255,10 +255,9 @@ def _build_prompt(
 
     if not is_market:
         effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
-        dates_str = ""
+        dates_list: list[str] = []
         if effective_rd and isinstance(effective_rd, list):
-            valid = [d for d in effective_rd if d and str(d).upper() != "N/A"]
-            dates_str = ", ".join(str(d) for d in valid)
+            dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
 
         formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
         return ZERO_SHOT_DATASET_PROMPT.format(
@@ -269,7 +268,7 @@ def _build_prompt(
             freeze_datetime_value=fv if fv is not None else "",
             freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
             today_date=today_date,
-            list_of_resolution_dates=dates_str,
+            list_of_resolution_dates=dates_list,
         )
 
     return ZERO_SHOT_MARKET_PROMPT.format(
