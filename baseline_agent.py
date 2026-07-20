@@ -253,7 +253,7 @@ def _build_prompt(
             resolution_date=effective_resolution_date or "",
         )
 
-    if prompt_variant == "dataset" and not is_market:
+    if not is_market:
         effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
         dates_str = ""
         if effective_rd and isinstance(effective_rd, list):

@@ -285,6 +285,52 @@ class TestForecastErrorFallback:
         assert skip_events[0]["question_id"] == "mh2"
 
 
+class TestEvalResultCompositeIds:
+    def test_resolved_has_composite_ids_for_multi_horizon(self, tmp_path: Path, monkeypatch: object) -> None:
+        """run_eval should return expanded_resolved with composite IDs for dataset questions."""
+        import eval as eval_mod
+
+        resolved = [
+            ResolvedQuestion(
+                id="dq1", source="fred", question="Dataset Q",
+                outcome=1, forecast_due_date="2024-01-01",
+                resolution_dates=["2024-07-01", "2024-08-01"],
+            ),
+            ResolvedQuestion(
+                id="mq1", source="metaculus", question="Market Q",
+                outcome=0, forecast_due_date="2024-01-01",
+            ),
+        ]
+        question_sets = [
+            QuestionSet(
+                forecast_due_date="2024-01-01",
+                question_set="set_0",
+                questions=[
+                    Question(id=rq.id, source=rq.source, question=rq.question,
+                             resolution_dates=rq.resolution_dates)
+                    for rq in resolved
+                ],
+            ),
+            QuestionSet(forecast_due_date="2024-02-01", question_set="set_1", questions=[]),
+            QuestionSet(forecast_due_date="2024-03-01", question_set="set_2", questions=[]),
+        ]
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, resolved))
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")
+
+        eval_result = asyncio.run(run_eval(_dummy_forecaster, n_held_out=2, raw=True))
+
+        resolved_ids = {rq.id for rq in eval_result.resolved}
+        assert "dq1_2024-07-01" in resolved_ids
+        assert "dq1_2024-08-01" in resolved_ids
+        assert "mq1" in resolved_ids
+        assert "dq1" not in resolved_ids
+
+
 class TestDifficultyAdjustmentLogging:
     def test_skip_message_includes_reason(self, tmp_path: Path, monkeypatch: object, caplog: object) -> None:
         """difficulty_adjustment_skipped log should include reason field."""
