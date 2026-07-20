@@ -379,7 +379,7 @@ def forecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL)
+    logger.info("forecast_start", question_id=question.id, model=MODEL, prompt_variant=prompt_variant)
     _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
@@ -400,7 +400,7 @@ def forecast(
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
-    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
     return prob
 
 
@@ -427,7 +427,13 @@ async def aforecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL, async_mode=True)
+    logger.info(
+        "forecast_start",
+        question_id=question.id,
+        model=MODEL,
+        prompt_variant=prompt_variant,
+        async_mode=True,
+    )
     _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
@@ -448,7 +454,7 @@ async def aforecast(
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
-    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
     return prob
 
 
