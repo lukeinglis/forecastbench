@@ -21,7 +21,7 @@ def forecast(
     prompt_variant: str = "zero-shot",
 ) -> float:
     """Return 0.5 regardless of the question."""
-    logger.debug("dummy_forecast", question_id=question.id, probability=0.5)
+    logger.info("dummy_forecast", question_id=question.id, forecast_value=0.5)
     return 0.5
 
 

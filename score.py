@@ -74,7 +74,9 @@ def brier_index(mean_bs: float) -> float:
     """Transform mean Brier score to Brier Index. Applied AFTER averaging, never per-question."""
     if mean_bs < 0:
         raise ValueError(f"mean_bs must be non-negative, got {mean_bs}")
-    return (1.0 - math.sqrt(mean_bs)) * 100.0
+    index_value = (1.0 - math.sqrt(mean_bs)) * 100.0
+    logger.debug("brier_index", mean_brier=round(mean_bs, 6), index_value=round(index_value, 2))
+    return index_value
 
 
 def brier_skill_score(forecaster_brier: float, reference_brier: float = 0.25) -> float:
@@ -452,11 +454,17 @@ def score_forecasts(
 
     logger.info(
         "scoring_complete",
-        overall_brier=result.overall_brier,
-        overall_index=result.overall_index,
+        question_count=total_questions,
+        overall_brier=round(result.overall_brier, 6),
+        overall_index=round(result.overall_index, 2),
+        dataset_brier=round(result.dataset_brier, 6),
+        dataset_index=round(result.dataset_index, 2),
+        market_brier=round(result.market_brier, 6),
+        market_index=round(result.market_index, 2),
         n_dataset=n_dataset,
         n_market=n_market,
         n_missing=n_missing,
+        difficulty_adjusted=result.difficulty_adjusted,
     )
 
     return result
