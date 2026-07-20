@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+os.environ.setdefault("FORECAST_MODEL", "dummy")
 
 from fetch_data import Question
 from logging_config import get_logger
