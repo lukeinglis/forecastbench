@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,7 +40,7 @@ def validate_forecasts(entries: list[dict[str, Any]]) -> None:
     """
     for entry in entries:
         prob = entry.get("forecast")
-        if not isinstance(prob, (int, float)) or prob < 0 or prob > 1:
+        if not isinstance(prob, (int, float)) or not math.isfinite(prob) or prob < 0 or prob > 1:
             raise ValueError(
                 f"Forecast for {entry.get('id', '?')} is out of range [0, 1]: {prob}"
             )

@@ -7,8 +7,8 @@ from typing import Any
 
 os.environ.setdefault("FORECAST_MODEL", "dummy")
 
-from fetch_data import Question  # noqa: E402
-from logging_config import get_logger  # noqa: E402
+from fetch_data import Question
+from logging_config import get_logger
 
 logger = get_logger("dummy_forecaster")
 

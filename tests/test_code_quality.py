@@ -104,6 +104,16 @@ class TestValidateForecasts:
         ]
         validate_forecasts(entries)
 
+    def test_forecast_nan_raises(self) -> None:
+        entries = [{"id": "q1", "source": "acled", "forecast": float("nan")}]
+        with pytest.raises(ValueError, match="out of range"):
+            validate_forecasts(entries)
+
+    def test_forecast_inf_raises(self) -> None:
+        entries = [{"id": "q1", "source": "acled", "forecast": float("inf")}]
+        with pytest.raises(ValueError, match="out of range"):
+            validate_forecasts(entries)
+
 
 class TestAssembleValidation:
     def test_assemble_excludes_resolution_date_for_market(self) -> None:
