@@ -30,10 +30,31 @@ class CoverageResult:
     passes: bool
 
 
+def validate_forecasts(entries: list[dict[str, Any]]) -> None:
+    """Validate forecast entries for submission compliance.
+
+    Raises ValueError if any entry has:
+    - forecast value outside [0, 1]
+    - resolution_date set for a market-source question
+    """
+    for entry in entries:
+        prob = entry.get("forecast")
+        if not isinstance(prob, (int, float)) or prob < 0 or prob > 1:
+            raise ValueError(
+                f"Forecast for {entry.get('id', '?')} is out of range [0, 1]: {prob}"
+            )
+        source = entry.get("source", "")
+        if source.lower() in MARKET_SOURCES and entry.get("resolution_date") is not None:
+            raise ValueError(
+                f"Market question {entry.get('id', '?')} must not have resolution_date"
+            )
+
+
 def assemble_submission(
     forecasts: dict[str, float],
     questions: list[ResolvedQuestion],
     metadata: SubmissionMetadata,
+    reasoning: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build ForecastBench-format submission JSON.
 
@@ -47,9 +68,13 @@ def assemble_submission(
             "source": q.source,
             "forecast": prob,
         }
-        if q.resolution_date:
+        if q.resolution_date and q.source.lower() not in MARKET_SOURCES:
             entry["resolution_date"] = q.resolution_date
+        if reasoning and q.id in reasoning:
+            entry["reasoning"] = reasoning[q.id]
         entries.append(entry)
+
+    validate_forecasts(entries)
 
     return {
         "organization": metadata.organization,
@@ -177,6 +202,7 @@ def main() -> None:
 
     elif args.command == "validate":
         submission = json.loads(Path(args.submission).read_text())
+        validate_forecasts(submission.get("forecasts", []))
         from fetch_data import load_data, join_resolved_questions, Resolution
         all_qs, resolved = load_data()
         resolutions = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)

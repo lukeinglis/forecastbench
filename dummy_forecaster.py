@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from fetch_data import Question
-from logging_config import get_logger
+os.environ.setdefault("FORECAST_MODEL", "dummy")
+
+from fetch_data import Question  # noqa: E402
+from logging_config import get_logger  # noqa: E402
 
 logger = get_logger("dummy_forecaster")
 
