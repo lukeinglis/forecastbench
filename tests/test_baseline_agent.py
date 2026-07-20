@@ -251,6 +251,82 @@ class TestPromptVariants:
         assert "2025-06-01" in prompt
 
 
+class TestDatasetAutoRouting:
+    """Dataset questions auto-route to ZERO_SHOT_DATASET_PROMPT regardless of prompt_variant."""
+
+    def test_dataset_source_auto_routes_to_dataset_prompt(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01", "2024-08-01"],
+        )
+        prompt = _build_prompt(q)
+        assert "resolution dates" in prompt.lower()
+        assert "freeze_datetime_value_explanation" not in prompt
+        assert "Value Explanation:" in prompt
+        assert "Current rate" in prompt
+
+    def test_dataset_source_ignores_zero_shot_variant(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01", "2024-08-01"],
+        )
+        prompt = _build_prompt(q, prompt_variant="zero-shot")
+        assert "resolution dates" in prompt.lower()
+        assert "Value Explanation:" in prompt
+
+    def test_market_source_still_uses_market_prompt(self) -> None:
+        q = _make_question(source="metaculus")
+        prompt = _build_prompt(q)
+        assert "Question resolution date:" in prompt
+        assert "Question resolution dates:" not in prompt
+
+    def test_market_source_with_fv_uses_freeze_value_prompt(self) -> None:
+        q = _make_question(
+            source="metaculus",
+            freeze="2024-06-15",
+            freeze_datetime_value=0.73,
+        )
+        prompt = _build_prompt(q, prompt_variant="zero-shot-fv")
+        assert "Market value on 2024-06-15" in prompt
+        assert "0.73" in prompt
+
+    def test_format_question_text_called_for_dataset(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="val",
+            resolution_dates=["2024-07-01"],
+            forecast_due_date="2024-06-15",
+        )
+        q = q.model_copy(update={
+            "question": "Will GDP exceed {forecast_due_date} target by {resolution_date}?",
+        })
+        prompt = _build_prompt(q)
+        assert "2024-06-15" in prompt
+        assert "each of the resolution dates provided below" in prompt
+        assert "{forecast_due_date}" not in prompt
+        assert "{resolution_date}" not in prompt
+
+    def test_all_dataset_sources_auto_route(self) -> None:
+        for source in ["fred", "acled", "dbnomics", "wikipedia", "yfinance"]:
+            q = _make_question(
+                source=source,
+                freeze="2024-06-15",
+                freeze_datetime_value=1.0,
+                freeze_datetime_value_explanation="val",
+                resolution_dates=["2024-07-01"],
+            )
+            prompt = _build_prompt(q)
+            assert "resolution dates" in prompt.lower(), f"Source {source} did not auto-route to dataset prompt"
+
+
 class TestParseProbability:
     def test_extracts_decimal(self) -> None:
         assert _parse_probability("I estimate 0.73") == pytest.approx(0.73)

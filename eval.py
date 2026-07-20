@@ -322,7 +322,7 @@ async def run_eval(
     )
     logger.info("results_saved", path=str(result_path))
 
-    return EvalResult(scoring=result, forecasts=forecasts, resolved=iteration_resolved, model_slug=model_slug)
+    return EvalResult(scoring=result, forecasts=forecasts, resolved=expanded_resolved, model_slug=model_slug)
 
 
 def _run_sync(
@@ -660,9 +660,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt",
-        choices=["zero-shot", "zero-shot-fv", "dataset"],
+        choices=["zero-shot", "zero-shot-fv"],
         default="zero-shot",
-        help="Prompt variant: zero-shot (default), zero-shot-fv (with freeze values), dataset (multi-horizon)",
+        help="Market prompt variant: zero-shot (default), zero-shot-fv (with freeze values). Dataset questions auto-route to the dataset prompt.",
     )
     parser.add_argument(
         "--leaderboard",

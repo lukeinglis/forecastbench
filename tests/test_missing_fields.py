@@ -137,17 +137,17 @@ class TestPromptSourceIntro:
 
 class TestPromptResolutionDate:
     def test_resolution_date_included_when_provided(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?")
+        q = Question(id="q1", source="metaculus", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
         assert "2025-07-15" in prompt
 
     def test_resolution_date_omitted_when_none(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?")
+        q = Question(id="q1", source="metaculus", question="Test?")
         prompt = _build_prompt(q)
         assert "Question resolution date:" in prompt
 
     def test_resolution_date_uses_upstream_label(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?")
+        q = Question(id="q1", source="metaculus", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
         assert "Question resolution date:" in prompt
 
