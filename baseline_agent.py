@@ -392,7 +392,8 @@ def forecast(
         response = litellm.completion(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=0,
+            max_tokens=2000,
             timeout=60,
         )
     except Exception:
@@ -413,7 +414,8 @@ def forecast_multi(
     response = litellm.completion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0,
+        max_tokens=2000,
         timeout=90,
     )
     text = response.choices[0].message.content or ""
@@ -446,7 +448,8 @@ async def aforecast(
         response = await litellm.acompletion(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=0,
+            max_tokens=2000,
             timeout=60,
         )
     except Exception:
@@ -624,7 +627,8 @@ async def aforecast_multi_horizon(
         response = await litellm.acompletion(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=0,
+            max_tokens=2000,
             timeout=120,
         )
     except Exception:
@@ -679,7 +683,8 @@ async def aforecast_multi(
     response = await litellm.acompletion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=0,
+        max_tokens=2000,
         timeout=90,
     )
     text = response.choices[0].message.content or ""
