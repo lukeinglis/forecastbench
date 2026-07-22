@@ -120,6 +120,49 @@ class TestEvalRoundWithDummy:
         assert len(results_files) == 1
 
 
+class TestSubmitFlag:
+    def test_submit_flag_accepted(self) -> None:
+        result = _run_script("eval.py", "--help")
+        assert result.returncode == 0
+        assert "--submit" in result.stdout
+
+    def test_submit_mode_defaults_to_false(self) -> None:
+        import argparse
+        from unittest.mock import patch as _patch
+
+        with _patch("sys.argv", ["eval.py", "--agent", "dummy"]):
+            parser = argparse.ArgumentParser()
+            parser.add_argument("--agent", choices=["dummy", "baseline"], default="dummy")
+            parser.add_argument("--submit", action="store_true", default=False)
+            args = parser.parse_args(["--agent", "dummy"])
+            assert args.submit is False
+
+    def test_submit_mode_with_dummy_agent(self, tmp_path: Path) -> None:
+        import eval as eval_mod
+
+        mock_qs = QuestionSet(
+            forecast_due_date="2026-07-05",
+            question_set="2026-07-05-llm",
+            questions=[
+                Question(id="q1", source="acled", question="Test Q1"),
+                Question(id="q2", source="acled", question="Test Q2 (unresolved)"),
+            ],
+        )
+        mock_resolutions = {
+            "q1": Resolution(id="q1", outcome=1, resolution_date="2026-07-19"),
+        }
+
+        with patch("eval.fetch_question_set", return_value=mock_qs), \
+             patch("eval.fetch_all_resolutions", return_value=mock_resolutions), \
+             patch.object(eval_mod, "RESULTS_DIR", tmp_path / "results"), \
+             patch.object(eval_mod, "CACHE_DIR", tmp_path / "cache"), \
+             patch("sys.argv", ["eval.py", "--agent", "dummy", "--round", "2026-07-05-llm", "--submit"]):
+            eval_mod.main()
+
+        results_files = list((tmp_path / "results").glob("submit_*.json"))
+        assert len(results_files) == 1
+
+
 class TestAnalyzeHelp:
     def test_help_exits_zero(self) -> None:
         result = _run_script("analyze.py", "--help")

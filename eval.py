@@ -148,8 +148,9 @@ def save_result(
     question_sets_used: list[str],
     n_held_out: int,
     round_name: str | None = None,
+    prefix: str = "",
 ) -> Path:
-    """Save run result to results/{timestamp}_{model_slug}[_{round}].json."""
+    """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     metadata: dict[str, object] = {
         "n_questions": result.n_dataset + result.n_market,
@@ -180,9 +181,9 @@ def save_result(
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if round_name is not None:
         safe_round = re.sub(r"[^\w\-.]", "_", round_name)
-        path = RESULTS_DIR / f"{timestamp}_{model_slug}_{safe_round}.json"
+        path = RESULTS_DIR / f"{prefix}{timestamp}_{model_slug}_{safe_round}.json"
     else:
-        path = RESULTS_DIR / f"{timestamp}_{model_slug}.json"
+        path = RESULTS_DIR / f"{prefix}{timestamp}_{model_slug}.json"
     path.write_text(json.dumps(payload, indent=2))
     return path
 
@@ -255,6 +256,7 @@ async def run_eval(
     multi_horizon: bool = False,
     multi_forecaster: MultiForecaster | None = None,
     async_multi_forecaster: MultiForecaster | None = None,
+    submit_mode: bool = False,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -282,7 +284,15 @@ async def run_eval(
              for q_id, r in resolutions_by_id.items()},
         )
 
-    questions = [_build_question(q) for q in iteration_resolved]
+    if submit_mode:
+        all_questions: list[Question] = []
+        for qs in iteration_set:
+            for q in qs.questions:
+                all_questions.append(_build_question(q, forecast_due_date=qs.forecast_due_date))
+        questions = all_questions
+        logger.info("submit_mode_enabled", n_all=len(questions), n_resolved=len(iteration_resolved))
+    else:
+        questions = [_build_question(q) for q in iteration_resolved]
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
@@ -316,10 +326,18 @@ async def run_eval(
 
     outcomes = {q.id: q.outcome for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
-    result_path = save_result(
-        result, forecasts, outcomes, model_slug,
-        question_sets_used, n_held_out, round_name=round_name,
-    )
+
+    if submit_mode:
+        result_path = save_result(
+            result, forecasts, outcomes, model_slug,
+            question_sets_used, n_held_out, round_name=round_name,
+            prefix="submit_",
+        )
+    else:
+        result_path = save_result(
+            result, forecasts, outcomes, model_slug,
+            question_sets_used, n_held_out, round_name=round_name,
+        )
     logger.info("results_saved", path=str(result_path))
 
     return EvalResult(scoring=result, forecasts=forecasts, resolved=expanded_resolved, model_slug=model_slug)
@@ -703,6 +721,12 @@ def main() -> None:
         action="store_true",
         help="List available rounds with question counts and exit",
     )
+    parser.add_argument(
+        "--submit",
+        action="store_true",
+        default=False,
+        help="Forecast all questions (including unresolved) for submission coverage",
+    )
     args = parser.parse_args()
 
     if args.refresh:
@@ -735,6 +759,7 @@ def main() -> None:
         prompt_variant=args.prompt,
         multi_horizon=args.multi_horizon and args.agent == "baseline",
         async_multi_forecaster=aforecast_multi if args.agent == "baseline" else None,
+        submit_mode=args.submit,
     ))
 
     if args.ci:

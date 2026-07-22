@@ -17,7 +17,7 @@
 - `uv run python eval.py --agent baseline --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
 - `uv run python baseline_agent.py` to run baseline LLM agent (shortcut)
-- `FORECAST_MODEL=vertex_ai/claude-sonnet-4@20250514 uv run python eval.py --agent baseline` to run with Vertex AI
+- `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent baseline` to run with Vertex AI
 - `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent baseline` to run with alternate model
 - `uv run python analyze.py --compare` to compare all saved results
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
@@ -46,7 +46,7 @@
 - Missing forecasts default to 0.5 per ForecastBench rules
 - Binary outcomes only: {0, 1}
 - Questions classified as "market" (metaculus, polymarket, manifold, infer) vs "dataset"
-- FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
+- FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4-6). Vertex AI ADC tokens auto-refresh.
 - VERTEXAI_LOCATION env var sets the Vertex AI region (default: europe-west1). Required because the model may not be available in litellm's default region (us-central1).
 - FORECAST_THINKING env var enables/disables extended thinking (default: true). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
 - FORECAST_ENSEMBLE_N env var sets ensemble size for self-consistency averaging (default: 1, disabled). Set to 3+ to enable.
