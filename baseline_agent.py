@@ -21,6 +21,8 @@ logger = get_logger("baseline_agent")
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
+THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
+MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -63,6 +65,23 @@ def _ensure_vertex_credentials() -> None:
             logger.debug("vertex_credentials_refreshed")
         except Exception:
             logger.warning("vertex_credentials_refresh_failed", exc_info=True)
+
+def _forecast_kwargs(
+    messages: list[dict[str, str]],
+    timeout: int = 180,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": MODEL,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "timeout": timeout,
+    }
+    if THINKING_ENABLED:
+        kwargs["thinking"] = {"type": "adaptive"}
+    else:
+        kwargs["temperature"] = 0.3
+    return kwargs
+
 
 RESPONSE_LOG_DIR = Path(".cache/response_logs")
 
@@ -191,6 +210,47 @@ Output your answer (a number between 0 and 1) with an asterisk at the beginning 
 Do not output anything else.
 Answer: {{ Insert answer here }}"""
 
+SCRATCHPAD_DATASET_PROMPT = """\
+You are an expert superforecaster, familiar with the work of Tetlock and others. \
+Make a prediction of the probability that the question will be resolved as true. \
+You MUST give a probability estimate between 0 and 1 UNDER ALL CIRCUMSTANCES. \
+If for some reason you can't answer, pick the base rate, but return a number between 0 and 1.
+
+You're going to predict the probability of the following potential outcome "at each of the resolution dates".
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution dates: {list_of_resolution_dates}
+
+Before giving your final probabilities, work through these reasoning steps:
+
+Reasoning:
+1. What is the current value and what does it represent?
+2. What would need to happen for the outcome at each resolution date?
+3. What historical patterns or trends are relevant?
+4. What is your base rate estimate?
+5. How should you adjust from the base rate given current context?
+
+Final Probabilities:
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. \
+(For example, if there are n resolution dates, you would output different *p* for each resolution date) \
+Do not output anything else after the probabilities."""
+
 DATASET_PROMPT_TEMPLATE = """You are an expert superforecaster, familiar with the research on forecasting. Your goal is to predict the probability of the resolution of the question at each of the resolution dates.
 
 Today's Date: {today_date}
@@ -242,24 +302,41 @@ def _build_prompt(
     fv = getattr(question, "freeze_datetime_value", None)
     fd = question.freeze_datetime or ""
 
-    if prompt_variant == "zero-shot-fv" and is_market and fv is not None and fd:
-        return ZERO_SHOT_MARKET_WITH_FREEZE_VALUE_PROMPT.format(
+    if is_market:
+        if prompt_variant == "zero-shot-no-fv":
+            return ZERO_SHOT_MARKET_PROMPT.format(
+                question=question.question,
+                background=background,
+                resolution_criteria=question.resolution_criteria or "",
+                today_date=today_date,
+                resolution_date=effective_resolution_date or "",
+            )
+        if fv is not None and fd:
+            return ZERO_SHOT_MARKET_WITH_FREEZE_VALUE_PROMPT.format(
+                question=question.question,
+                background=background,
+                resolution_criteria=question.resolution_criteria or "",
+                freeze_datetime=fd,
+                freeze_datetime_value=fv,
+                today_date=today_date,
+                resolution_date=effective_resolution_date or "",
+            )
+        return ZERO_SHOT_MARKET_PROMPT.format(
             question=question.question,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
-            freeze_datetime=fd,
-            freeze_datetime_value=fv,
             today_date=today_date,
             resolution_date=effective_resolution_date or "",
         )
 
-    if not is_market:
-        effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
-        dates_list: list[str] = []
-        if effective_rd and isinstance(effective_rd, list):
-            dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
+    effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
+    dates_list: list[str] = []
+    if effective_rd and isinstance(effective_rd, list):
+        dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
 
-        formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
+    formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
+
+    if prompt_variant in ("zero-shot", "zero-shot-fv", "dataset"):
         return ZERO_SHOT_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,
@@ -271,12 +348,15 @@ def _build_prompt(
             list_of_resolution_dates=dates_list,
         )
 
-    return ZERO_SHOT_MARKET_PROMPT.format(
-        question=question.question,
+    return SCRATCHPAD_DATASET_PROMPT.format(
+        question=formatted_q,
         background=background,
         resolution_criteria=question.resolution_criteria or "",
+        freeze_datetime=fd,
+        freeze_datetime_value=fv if fv is not None else "",
+        freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
         today_date=today_date,
-        resolution_date=effective_resolution_date or "",
+        list_of_resolution_dates=dates_list,
     )
 
 
@@ -389,13 +469,8 @@ def forecast(
         prompt_variant=prompt_variant,
     )
     try:
-        response = litellm.completion(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=2000,
-            timeout=60,
-        )
+        messages = [{"role": "user", "content": prompt}]
+        response = litellm.completion(**_forecast_kwargs(messages))
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
         raise
@@ -411,13 +486,8 @@ def forecast_multi(
 ) -> list[float]:
     _ensure_vertex_credentials()
     prompt = _build_dataset_prompt(question, resolution_dates)
-    response = litellm.completion(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=2000,
-        timeout=90,
-    )
+    messages = [{"role": "user", "content": prompt}]
+    response = litellm.completion(**_forecast_kwargs(messages))
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
@@ -445,13 +515,8 @@ async def aforecast(
         prompt_variant=prompt_variant,
     )
     try:
-        response = await litellm.acompletion(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=2000,
-            timeout=60,
-        )
+        messages = [{"role": "user", "content": prompt}]
+        response = await litellm.acompletion(**_forecast_kwargs(messages))
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
         raise
@@ -624,13 +689,8 @@ async def aforecast_multi_horizon(
     )
 
     try:
-        response = await litellm.acompletion(
-            model=MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            max_tokens=2000,
-            timeout=120,
-        )
+        messages = [{"role": "user", "content": prompt}]
+        response = await litellm.acompletion(**_forecast_kwargs(messages))
     except Exception:
         logger.error(
             "multi_horizon_api_error",
@@ -680,13 +740,8 @@ async def aforecast_multi(
 ) -> list[float]:
     _ensure_vertex_credentials()
     prompt = _build_dataset_prompt(question, resolution_dates)
-    response = await litellm.acompletion(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0,
-        max_tokens=2000,
-        timeout=90,
-    )
+    messages = [{"role": "user", "content": prompt}]
+    response = await litellm.acompletion(**_forecast_kwargs(messages))
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 

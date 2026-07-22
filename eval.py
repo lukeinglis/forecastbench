@@ -251,7 +251,7 @@ async def run_eval(
     n_held_out: int = 2,
     raw: bool = False,
     round_name: str | None = None,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_horizon: bool = False,
     multi_forecaster: MultiForecaster | None = None,
     async_multi_forecaster: MultiForecaster | None = None,
@@ -329,7 +329,7 @@ def _run_sync(
     forecaster: SyncForecaster,
     questions: list[Question],
     model_slug: str,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
@@ -405,7 +405,7 @@ async def _run_async(
     forecaster: AsyncForecaster,
     questions: list[Question],
     model_slug: str,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_horizon: bool = False,
     async_multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
@@ -660,9 +660,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt",
-        choices=["zero-shot", "zero-shot-fv"],
-        default="zero-shot",
-        help="Market prompt variant: zero-shot (default), zero-shot-fv (with freeze values). Dataset questions auto-route to the dataset prompt.",
+        choices=["default", "zero-shot", "zero-shot-fv", "zero-shot-no-fv", "dataset"],
+        default="default",
+        help="Prompt variant: default (scratchpad for dataset, freeze values for market), "
+             "zero-shot (original prompts), zero-shot-fv (freeze values for market, same as default), "
+             "zero-shot-no-fv (force no freeze values for market), "
+             "dataset (force dataset prompt for all questions).",
     )
     parser.add_argument(
         "--leaderboard",
@@ -685,8 +688,15 @@ def main() -> None:
     parser.add_argument(
         "--multi-horizon",
         action="store_true",
-        default=False,
-        help="Use single-call multi-horizon forecasting for dataset questions (baseline agent only)",
+        dest="multi_horizon",
+        default=True,
+        help="Use single-call multi-horizon forecasting for dataset questions (default: enabled)",
+    )
+    parser.add_argument(
+        "--per-date",
+        action="store_false",
+        dest="multi_horizon",
+        help="Disable multi-horizon batching; forecast each resolution date separately",
     )
     parser.add_argument(
         "--list-rounds",
