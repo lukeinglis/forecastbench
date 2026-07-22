@@ -79,7 +79,7 @@ def _forecast_kwargs(
         "vertex_location": VERTEX_LOCATION,
     }
     if THINKING_ENABLED:
-        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
     else:
         kwargs["temperature"] = 0.3
     return kwargs

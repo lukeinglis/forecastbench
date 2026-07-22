@@ -65,7 +65,7 @@ class TestExtendedThinking:
             messages = [{"role": "user", "content": "test"}]
             kwargs = baseline_agent._forecast_kwargs(messages)
             assert "thinking" in kwargs
-            assert kwargs["thinking"] == {"type": "adaptive"}
+            assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": baseline_agent.MAX_TOKENS // 2}
             assert "temperature" not in kwargs
 
     def test_forecast_kwargs_excludes_thinking_when_disabled(self) -> None:
