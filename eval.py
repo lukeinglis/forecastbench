@@ -110,7 +110,7 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
 
 
 def _model_slug() -> str:
-    raw = os.getenv("FORECAST_MODEL", "default")
+    raw = os.getenv("FORECAST_MODEL", "unknown")
     return re.sub(r"[^\w\-.]", "_", raw)
 
 

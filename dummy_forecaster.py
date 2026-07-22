@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
+
+os.environ.setdefault("FORECAST_MODEL", "dummy")
 
 from fetch_data import Question
 from logging_config import get_logger
@@ -18,7 +21,7 @@ def forecast(
     prompt_variant: str = "zero-shot",
 ) -> float:
     """Return 0.5 regardless of the question."""
-    logger.debug("dummy_forecast", question_id=question.id, probability=0.5)
+    logger.info("dummy_forecast", question_id=question.id, forecast_value=0.5)
     return 0.5
 
 

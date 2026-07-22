@@ -732,3 +732,115 @@ class TestVertexCredentialRefresh:
         finally:
             baseline_agent._vertex_token_expiry = old_expiry
             baseline_agent._vertex_credentials = old_creds
+
+
+class TestForecastParityParams:
+    """Verify forecast LLM calls use _forecast_kwargs (adaptive thinking / temperature=0.3 fallback)."""
+
+    @patch("baseline_agent.litellm")
+    def test_forecast_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.completion.return_value = _mock_response("*0.50*")
+        from baseline_agent import forecast
+
+        forecast(_make_question())
+        kwargs = mock_litellm.completion.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert "temperature" not in kwargs
+
+    @patch("baseline_agent.litellm")
+    def test_forecast_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.completion.return_value = _mock_response("*0.50*")
+        from baseline_agent import forecast, MAX_TOKENS
+
+        forecast(_make_question())
+        kwargs = mock_litellm.completion.call_args.kwargs
+        assert kwargs["max_tokens"] == MAX_TOKENS
+
+    @patch("baseline_agent.litellm")
+    def test_forecast_multi_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.completion.return_value = _mock_response("*0.30* *0.50* *0.70*")
+        from baseline_agent import forecast_multi
+
+        forecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
+        kwargs = mock_litellm.completion.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "adaptive"}
+
+    @patch("baseline_agent.litellm")
+    def test_forecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.completion.return_value = _mock_response("*0.30* *0.50* *0.70*")
+        from baseline_agent import forecast_multi, MAX_TOKENS
+
+        forecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
+        kwargs = mock_litellm.completion.call_args.kwargs
+        assert kwargs["max_tokens"] == MAX_TOKENS
+
+    @patch("baseline_agent.litellm")
+    async def test_aforecast_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
+        from baseline_agent import aforecast
+
+        await aforecast(_make_question())
+        kwargs = mock_litellm.acompletion.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "adaptive"}
+
+    @patch("baseline_agent.litellm")
+    async def test_aforecast_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
+        from baseline_agent import aforecast, MAX_TOKENS
+
+        await aforecast(_make_question())
+        kwargs = mock_litellm.acompletion.call_args.kwargs
+        assert kwargs["max_tokens"] == MAX_TOKENS
+
+    @patch("baseline_agent.litellm")
+    async def test_aforecast_multi_horizon_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
+        from baseline_agent import aforecast_multi_horizon
+
+        await aforecast_multi_horizon(
+            _make_dataset_question(),
+            ["2024-07-01", "2024-08-01", "2024-09-01"],
+            source="acled",
+        )
+        kwargs = mock_litellm.acompletion.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "adaptive"}
+
+    @patch("baseline_agent.litellm")
+    async def test_aforecast_multi_horizon_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
+        from baseline_agent import aforecast_multi_horizon, MAX_TOKENS
+
+        await aforecast_multi_horizon(
+            _make_dataset_question(),
+            ["2024-07-01", "2024-08-01", "2024-09-01"],
+            source="acled",
+        )
+        kwargs = mock_litellm.acompletion.call_args.kwargs
+        assert kwargs["max_tokens"] == MAX_TOKENS
+
+    @patch("baseline_agent.litellm")
+    async def test_aforecast_multi_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
+        from baseline_agent import aforecast_multi
+
+        await aforecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
+        kwargs = mock_litellm.acompletion.call_args.kwargs
+        assert kwargs["thinking"] == {"type": "adaptive"}
+
+    @patch("baseline_agent.litellm")
+    async def test_aforecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
+        mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
+        from baseline_agent import aforecast_multi, MAX_TOKENS
+
+        await aforecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
+        kwargs = mock_litellm.acompletion.call_args.kwargs
+        assert kwargs["max_tokens"] == MAX_TOKENS
+
+    @patch("baseline_agent.litellm")
+    def test_extraction_calls_do_not_use_forecast_kwargs(self, mock_litellm: MagicMock) -> None:
+        """Extraction/parsing calls should NOT use _forecast_kwargs."""
+        mock_litellm.completion.return_value = _mock_response("[0.30, 0.50]")
+        _parse_probabilities("no asterisks here", 2)
+        kwargs = mock_litellm.completion.call_args.kwargs
+        assert kwargs["temperature"] == 0
+        assert "thinking" not in kwargs

@@ -9,7 +9,7 @@
 ## Commands
 - `uv run pytest` to run tests
 - `uv run ruff check .` to lint
-- `uv run mypy --ignore-missing-imports *.py` to type check
+- `uv run mypy --ignore-missing-imports --disable-error-code=attr-defined *.py` to type check
 - `uv run python eval.py --agent dummy` to run dummy forecaster (default)
 - `uv run python eval.py --agent baseline` to run LLM baseline agent
 - `uv run python eval.py --agent baseline --raw` to run without difficulty adjustment

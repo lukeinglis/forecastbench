@@ -459,7 +459,7 @@ def forecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL)
+    logger.info("forecast_start", question_id=question.id, model=MODEL, prompt_variant=prompt_variant)
     _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
@@ -476,7 +476,7 @@ def forecast(
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
-    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
     return prob
 
 
@@ -499,7 +499,13 @@ async def aforecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL, async_mode=True)
+    logger.info(
+        "forecast_start",
+        question_id=question.id,
+        model=MODEL,
+        prompt_variant=prompt_variant,
+        async_mode=True,
+    )
     _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
@@ -516,11 +522,11 @@ async def aforecast(
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
-    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
     return prob
 
 
-def _clamp(v: float) -> float:
+def _to_float(v: float) -> float:
     return float(v)
 
 
@@ -544,11 +550,11 @@ def _parse_probs_from_text(text: str, n_expected: int) -> list[float] | None:
     """Extract probabilities from a focused text block (e.g. Answer section)."""
     asterisks = _ASTERISK_RE.findall(text)
     if len(asterisks) == n_expected:
-        return [_clamp(float(m)) for m in asterisks]
+        return [_to_float(float(m)) for m in asterisks]
     decimals = _DECIMAL_RE.findall(text)
     valid = [float(d) for d in decimals if 0 <= float(d) <= 1]
     if len(valid) == n_expected:
-        return [_clamp(v) for v in valid]
+        return [_to_float(v) for v in valid]
     return None
 
 
@@ -563,9 +569,9 @@ def _tokenize_and_extract(text: str, n_expected: int) -> list[float] | None:
         if 0 <= val <= 1:
             probabilities.append(val)
     if len(probabilities) == n_expected:
-        return [_clamp(p) for p in probabilities]
+        return [_to_float(p) for p in probabilities]
     if len(probabilities) > n_expected:
-        return [_clamp(p) for p in probabilities[-n_expected:]]
+        return [_to_float(p) for p in probabilities[-n_expected:]]
     return None
 
 
@@ -573,9 +579,9 @@ def _asterisk_extract(text: str, n_expected: int) -> list[float] | None:
     """Find asterisk-wrapped probabilities in the full text."""
     matches = _ASTERISK_RE.findall(text)
     if len(matches) == n_expected:
-        return [_clamp(float(m)) for m in matches]
+        return [_to_float(float(m)) for m in matches]
     if len(matches) > n_expected:
-        return [_clamp(float(m)) for m in matches[-n_expected:]]
+        return [_to_float(float(m)) for m in matches[-n_expected:]]
     return None
 
 
@@ -584,9 +590,9 @@ def _decimal_extract(text: str, n_expected: int) -> list[float] | None:
     all_decimals = _DECIMAL_RE.findall(text)
     valid = [float(d) for d in all_decimals if 0 <= float(d) <= 1]
     if len(valid) == n_expected:
-        return [_clamp(v) for v in valid]
+        return [_to_float(v) for v in valid]
     if len(valid) > n_expected:
-        return [_clamp(v) for v in valid[-n_expected:]]
+        return [_to_float(v) for v in valid[-n_expected:]]
     return None
 
 
