@@ -744,7 +744,8 @@ class TestForecastParityParams:
 
         forecast(_make_question())
         kwargs = mock_litellm.completion.call_args.kwargs
-        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert kwargs["thinking"]["type"] == "enabled"
+        assert "budget_tokens" in kwargs["thinking"]
         assert "temperature" not in kwargs
 
     @patch("baseline_agent.litellm")
@@ -763,7 +764,8 @@ class TestForecastParityParams:
 
         forecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.completion.call_args.kwargs
-        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert kwargs["thinking"]["type"] == "enabled"
+        assert "budget_tokens" in kwargs["thinking"]
 
     @patch("baseline_agent.litellm")
     def test_forecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
@@ -781,7 +783,8 @@ class TestForecastParityParams:
 
         await aforecast(_make_question())
         kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert kwargs["thinking"]["type"] == "enabled"
+        assert "budget_tokens" in kwargs["thinking"]
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
@@ -803,7 +806,8 @@ class TestForecastParityParams:
             source="acled",
         )
         kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert kwargs["thinking"]["type"] == "enabled"
+        assert "budget_tokens" in kwargs["thinking"]
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_multi_horizon_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
@@ -825,7 +829,8 @@ class TestForecastParityParams:
 
         await aforecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert kwargs["thinking"] == {"type": "adaptive"}
+        assert kwargs["thinking"]["type"] == "enabled"
+        assert "budget_tokens" in kwargs["thinking"]
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
