@@ -26,7 +26,7 @@ EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
 THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
-ENSEMBLE_N = int(os.getenv("FORECAST_ENSEMBLE_N", "3"))
+ENSEMBLE_N = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
 ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
 
 _REFRESH_MARGIN_SECS = 300
