@@ -47,6 +47,7 @@
 - Binary outcomes only: {0, 1}
 - Questions classified as "market" (metaculus, polymarket, manifold, infer) vs "dataset"
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
+- VERTEXAI_LOCATION env var sets the Vertex AI region (default: europe-west1). Required because the model may not be available in litellm's default region (us-central1).
 - FORECAST_THINKING env var enables/disables extended thinking (default: true). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
 - Multi-horizon forecasting is enabled by default; use --per-date to forecast each resolution date separately
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
