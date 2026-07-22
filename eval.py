@@ -660,9 +660,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt",
-        choices=["zero-shot", "zero-shot-fv"],
-        default="zero-shot",
-        help="Market prompt variant: zero-shot (default), zero-shot-fv (with freeze values). Dataset questions auto-route to the dataset prompt.",
+        choices=["default", "zero-shot", "zero-shot-fv", "zero-shot-no-fv", "dataset"],
+        default="default",
+        help="Prompt variant: default (scratchpad for dataset, freeze values for market), "
+             "zero-shot (original prompts), zero-shot-fv (freeze values for market, same as default), "
+             "zero-shot-no-fv (force no freeze values for market), "
+             "dataset (force dataset prompt for all questions).",
     )
     parser.add_argument(
         "--leaderboard",
@@ -685,8 +688,15 @@ def main() -> None:
     parser.add_argument(
         "--multi-horizon",
         action="store_true",
-        default=False,
-        help="Use single-call multi-horizon forecasting for dataset questions (baseline agent only)",
+        dest="multi_horizon",
+        default=True,
+        help="Use single-call multi-horizon forecasting for dataset questions (default: enabled)",
+    )
+    parser.add_argument(
+        "--per-date",
+        action="store_false",
+        dest="multi_horizon",
+        help="Disable multi-horizon batching; forecast each resolution date separately",
     )
     parser.add_argument(
         "--list-rounds",

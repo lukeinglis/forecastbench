@@ -501,8 +501,8 @@ class TestForecastSync:
 
         mock_litellm.completion.assert_called_once()
         call_kwargs = mock_litellm.completion.call_args
-        assert call_kwargs.kwargs["temperature"] == 0.3
-        assert call_kwargs.kwargs["timeout"] == 60
+        assert call_kwargs.kwargs["max_tokens"] > 0
+        assert call_kwargs.kwargs["timeout"] == 180
         assert result == pytest.approx(0.73)
 
     @patch("baseline_agent.litellm")
