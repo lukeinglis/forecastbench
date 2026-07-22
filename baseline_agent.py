@@ -21,7 +21,7 @@ TIMESERIES_SOURCES = {"fred", "dbnomics", "yfinance"}
 logger = get_logger("baseline_agent")
 
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
-MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
+MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4-6")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
 THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
@@ -251,6 +251,35 @@ Output your answer (a number between 0 and 1) with an asterisk at the beginning 
 Do not output anything else.
 Answer: {{ Insert answer here }}"""
 
+SINGLE_DATE_DATASET_PROMPT = """\
+You are an expert superforecaster, familiar with the work of Tetlock and others. \
+Make a prediction of the probability that the question will be resolved as true. \
+You MUST give a probability estimate between 0 and 1 UNDER ALL CIRCUMSTANCES. \
+If for some reason you can't answer, pick the base rate, but return a number between 0 and 1.
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution date: {target_resolution_date}
+
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal.
+Do not output anything else.
+Answer: {{ Insert answer here }}"""
+
 SCRATCHPAD_DATASET_PROMPT = """\
 You are an expert superforecaster, familiar with the work of Tetlock and others. \
 Make a prediction of the probability that the question will be resolved as true. \
@@ -368,6 +397,19 @@ def _build_prompt(
             resolution_criteria=question.resolution_criteria or "",
             today_date=today_date,
             resolution_date=effective_resolution_date or "",
+        )
+
+    if resolution_date is not None:
+        formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
+        return SINGLE_DATE_DATASET_PROMPT.format(
+            question=formatted_q,
+            background=background,
+            resolution_criteria=question.resolution_criteria or "",
+            freeze_datetime=fd,
+            freeze_datetime_value=fv if fv is not None else "",
+            freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
+            today_date=today_date,
+            target_resolution_date=resolution_date,
         )
 
     effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
