@@ -336,7 +336,7 @@ def _build_prompt(
 
     formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
 
-    if prompt_variant in ("zero-shot", "zero-shot-fv", "zero-shot-no-fv", "dataset"):
+    if prompt_variant in ("zero-shot", "zero-shot-fv", "dataset"):
         return ZERO_SHOT_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,

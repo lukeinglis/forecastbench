@@ -494,16 +494,18 @@ class TestForecastSync:
     @patch("baseline_agent.litellm")
     def test_calls_litellm_completion(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("Probability: 0.73")
+        import baseline_agent
         from baseline_agent import forecast
 
-        q = _make_question()
-        result = forecast(q)
+        with patch.object(baseline_agent, "THINKING_ENABLED", False):
+            q = _make_question()
+            result = forecast(q)
 
-        mock_litellm.completion.assert_called_once()
-        call_kwargs = mock_litellm.completion.call_args
-        assert call_kwargs.kwargs["max_tokens"] > 0
-        assert call_kwargs.kwargs["timeout"] == 180
-        assert result == pytest.approx(0.73)
+            mock_litellm.completion.assert_called_once()
+            call_kwargs = mock_litellm.completion.call_args
+            assert call_kwargs.kwargs["temperature"] == 0.3
+            assert call_kwargs.kwargs["timeout"] == 180
+            assert result == pytest.approx(0.73)
 
     @patch("baseline_agent.litellm")
     def test_forecast_returns_float(self, mock_litellm: MagicMock) -> None:

@@ -13,6 +13,8 @@
 - `uv run python eval.py --agent dummy` to run dummy forecaster (default)
 - `uv run python eval.py --agent baseline` to run LLM baseline agent
 - `uv run python eval.py --agent baseline --raw` to run without difficulty adjustment
+- `uv run python eval.py --agent baseline --prompt default` to use scratchpad for dataset, freeze values for market (this is the default)
+- `uv run python eval.py --agent baseline --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
 - `uv run python baseline_agent.py` to run baseline LLM agent (shortcut)
 - `FORECAST_MODEL=vertex_ai/claude-sonnet-4@20250514 uv run python eval.py --agent baseline` to run with Vertex AI
@@ -45,6 +47,8 @@
 - Binary outcomes only: {0, 1}
 - Questions classified as "market" (metaculus, polymarket, manifold, infer) vs "dataset"
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
+- FORECAST_THINKING env var enables/disables extended thinking (default: true). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
+- Multi-horizon forecasting is enabled by default; use --per-date to forecast each resolution date separately
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON (auto-persisted after each eval run)

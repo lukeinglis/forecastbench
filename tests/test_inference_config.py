@@ -60,10 +60,8 @@ class TestExtendedThinking:
             assert baseline_agent.THINKING_ENABLED is False
 
     def test_forecast_kwargs_includes_thinking_when_enabled(self) -> None:
-        with patch.dict(os.environ, {"FORECAST_THINKING": "true"}):
-            import importlib
-            import baseline_agent
-            importlib.reload(baseline_agent)
+        import baseline_agent
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
             messages = [{"role": "user", "content": "test"}]
             kwargs = baseline_agent._forecast_kwargs(messages)
             assert "thinking" in kwargs
@@ -71,10 +69,8 @@ class TestExtendedThinking:
             assert "temperature" not in kwargs
 
     def test_forecast_kwargs_excludes_thinking_when_disabled(self) -> None:
-        with patch.dict(os.environ, {"FORECAST_THINKING": "false"}):
-            import importlib
-            import baseline_agent
-            importlib.reload(baseline_agent)
+        import baseline_agent
+        with patch.object(baseline_agent, "THINKING_ENABLED", False):
             messages = [{"role": "user", "content": "test"}]
             kwargs = baseline_agent._forecast_kwargs(messages)
             assert "thinking" not in kwargs
@@ -98,18 +94,15 @@ class TestMaxTokens:
             assert baseline_agent.MAX_TOKENS == 8192
 
     def test_forecast_kwargs_sets_max_tokens(self) -> None:
-        with patch.dict(os.environ, {"FORECAST_MAX_TOKENS": "32768", "FORECAST_THINKING": "false"}):
-            import importlib
-            import baseline_agent
-            importlib.reload(baseline_agent)
+        import baseline_agent
+        with patch.object(baseline_agent, "MAX_TOKENS", 32768), \
+             patch.object(baseline_agent, "THINKING_ENABLED", False):
             kwargs = baseline_agent._forecast_kwargs([{"role": "user", "content": "test"}])
             assert kwargs["max_tokens"] == 32768
 
     def test_forecast_kwargs_timeout_default(self) -> None:
-        with patch.dict(os.environ, {"FORECAST_THINKING": "false"}):
-            import importlib
-            import baseline_agent
-            importlib.reload(baseline_agent)
+        import baseline_agent
+        with patch.object(baseline_agent, "THINKING_ENABLED", False):
             kwargs = baseline_agent._forecast_kwargs([{"role": "user", "content": "test"}])
             assert kwargs["timeout"] == 180
 

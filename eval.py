@@ -251,7 +251,7 @@ async def run_eval(
     n_held_out: int = 2,
     raw: bool = False,
     round_name: str | None = None,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_horizon: bool = False,
     multi_forecaster: MultiForecaster | None = None,
     async_multi_forecaster: MultiForecaster | None = None,
@@ -329,7 +329,7 @@ def _run_sync(
     forecaster: SyncForecaster,
     questions: list[Question],
     model_slug: str,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
@@ -405,7 +405,7 @@ async def _run_async(
     forecaster: AsyncForecaster,
     questions: list[Question],
     model_slug: str,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_horizon: bool = False,
     async_multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
