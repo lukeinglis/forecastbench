@@ -21,6 +21,7 @@ logger = get_logger("baseline_agent")
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
+VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
 THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 
@@ -75,9 +76,10 @@ def _forecast_kwargs(
         "messages": messages,
         "max_tokens": MAX_TOKENS,
         "timeout": timeout,
+        "vertex_location": VERTEX_LOCATION,
     }
     if THINKING_ENABLED:
-        kwargs["thinking"] = {"type": "adaptive"}
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
     else:
         kwargs["temperature"] = 0.3
     return kwargs
