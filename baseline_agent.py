@@ -16,6 +16,8 @@ import litellm
 from fetch_data import MARKET_SOURCES, Question
 from logging_config import get_logger
 
+TIMESERIES_SOURCES = {"fred", "dbnomics", "yfinance"}
+
 logger = get_logger("baseline_agent")
 
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
@@ -70,6 +72,7 @@ def _ensure_vertex_credentials() -> None:
 def _forecast_kwargs(
     messages: list[dict[str, str]],
     timeout: int = 180,
+    source: str | None = None,
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": MODEL,
@@ -78,7 +81,9 @@ def _forecast_kwargs(
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
     }
-    if THINKING_ENABLED:
+    if source and source.lower() in TIMESERIES_SOURCES:
+        kwargs["temperature"] = 0.3
+    elif THINKING_ENABLED:
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
     else:
         kwargs["temperature"] = 0.3
@@ -350,6 +355,18 @@ def _build_prompt(
             list_of_resolution_dates=dates_list,
         )
 
+    if prompt_variant == "default" and effective_source.lower() in TIMESERIES_SOURCES:
+        return ZERO_SHOT_DATASET_PROMPT.format(
+            question=formatted_q,
+            background=background,
+            resolution_criteria=question.resolution_criteria or "",
+            freeze_datetime=fd,
+            freeze_datetime_value=fv if fv is not None else "",
+            freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
+            today_date=today_date,
+            list_of_resolution_dates=dates_list,
+        )
+
     return SCRATCHPAD_DATASET_PROMPT.format(
         question=formatted_q,
         background=background,
@@ -463,6 +480,7 @@ def forecast(
 ) -> float:
     logger.info("forecast_start", question_id=question.id, model=MODEL, prompt_variant=prompt_variant)
     _ensure_vertex_credentials()
+    effective_source = source or question.source
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -472,7 +490,7 @@ def forecast(
     )
     try:
         messages = [{"role": "user", "content": prompt}]
-        response = litellm.completion(**_forecast_kwargs(messages))
+        response = litellm.completion(**_forecast_kwargs(messages, source=effective_source))
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
         raise
@@ -489,7 +507,7 @@ def forecast_multi(
     _ensure_vertex_credentials()
     prompt = _build_dataset_prompt(question, resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    response = litellm.completion(**_forecast_kwargs(messages))
+    response = litellm.completion(**_forecast_kwargs(messages, source=question.source))
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
@@ -509,6 +527,7 @@ async def aforecast(
         async_mode=True,
     )
     _ensure_vertex_credentials()
+    effective_source = source or question.source
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -518,7 +537,7 @@ async def aforecast(
     )
     try:
         messages = [{"role": "user", "content": prompt}]
-        response = await litellm.acompletion(**_forecast_kwargs(messages))
+        response = await litellm.acompletion(**_forecast_kwargs(messages, source=effective_source))
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
         raise
@@ -682,6 +701,7 @@ async def aforecast_multi_horizon(
         model=MODEL,
     )
 
+    effective_source = source or question.source
     _ensure_vertex_credentials()
     prompt = _build_prompt(
         question,
@@ -692,7 +712,7 @@ async def aforecast_multi_horizon(
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        response = await litellm.acompletion(**_forecast_kwargs(messages))
+        response = await litellm.acompletion(**_forecast_kwargs(messages, source=effective_source))
     except Exception:
         logger.error(
             "multi_horizon_api_error",
@@ -743,7 +763,7 @@ async def aforecast_multi(
     _ensure_vertex_credentials()
     prompt = _build_dataset_prompt(question, resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    response = await litellm.acompletion(**_forecast_kwargs(messages))
+    response = await litellm.acompletion(**_forecast_kwargs(messages, source=question.source))
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
