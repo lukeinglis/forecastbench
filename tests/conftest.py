@@ -7,6 +7,12 @@ import pytest
 from fetch_data import QuestionSet, Question, ResolvedQuestion
 
 
+@pytest.fixture(autouse=True)
+def _disable_ensemble(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default to single-call mode so existing tests aren't affected by ensemble."""
+    monkeypatch.setattr("baseline_agent.ENSEMBLE_N", 1)
+
+
 @pytest.fixture
 def five_question_fixture() -> tuple[list[float], list[int], list[float], float, float]:
     """Hand-computed 5-question fixture.

@@ -26,6 +26,8 @@ EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
 THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
+ENSEMBLE_N = int(os.getenv("FORECAST_ENSEMBLE_N", "3"))
+ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -68,6 +70,38 @@ def _ensure_vertex_credentials() -> None:
             logger.debug("vertex_credentials_refreshed")
         except Exception:
             logger.warning("vertex_credentials_refresh_failed", exc_info=True)
+
+class LiteLLMAdapter:
+    """Adapter bridging its_hub's AbstractLanguageModel to litellm."""
+
+    def __init__(self, model: str, max_tokens: int, vertex_location: str) -> None:
+        self.model = model
+        self.max_tokens = max_tokens
+        self.vertex_location = vertex_location
+
+    async def agenerate_single(
+        self,
+        messages: list[dict[str, Any]],
+        stop: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, str]:
+        _ensure_vertex_credentials()
+        call_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages if isinstance(messages, list) else list(messages),
+            "max_tokens": self.max_tokens,
+            "vertex_location": self.vertex_location,
+        }
+        if "temperature" in kwargs:
+            call_kwargs["temperature"] = kwargs["temperature"]
+        else:
+            call_kwargs["temperature"] = ENSEMBLE_TEMP
+        if stop:
+            call_kwargs["stop"] = stop
+        call_kwargs["timeout"] = 180
+        response = await litellm.acompletion(**call_kwargs)
+        return {"role": "assistant", "content": response.choices[0].message.content or ""}
+
 
 def _forecast_kwargs(
     messages: list[dict[str, str]],
@@ -471,6 +505,91 @@ def _parse_probability(text: str) -> float:
     raise ValueError(f"Could not parse probability from response: {text[:100]}")
 
 
+async def _ensemble_forecast(prompt: str, source: str | None = None) -> float | None:
+    """Generate N responses via its_hub LMOrchestrator and average probabilities."""
+    from its_hub.api.types import ChatMessages
+    from its_hub.core.orchestrator import LMOrchestrator
+
+    lm = LiteLLMAdapter(MODEL, MAX_TOKENS, VERTEX_LOCATION)
+    orchestrator = LMOrchestrator(max_concurrency=ENSEMBLE_N)
+
+    messages = [{"role": "user", "content": prompt}]
+    chat_messages = ChatMessages(messages)
+    batch = chat_messages.to_batch(ENSEMBLE_N)
+
+    logger.info("ensemble_start", ensemble_n=ENSEMBLE_N, ensemble_temp=ENSEMBLE_TEMP)
+
+    responses = await orchestrator.agenerate(lm, batch, temperature=ENSEMBLE_TEMP)
+
+    probabilities: list[float] = []
+    for i, resp in enumerate(responses):
+        try:
+            content = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+            prob = _parse_probability(content)
+            probabilities.append(prob)
+            logger.debug("ensemble_member_result", member=i, probability=prob)
+        except (ValueError, Exception):
+            logger.warning("ensemble_member_failed", member=i)
+
+    if not probabilities:
+        return None
+
+    mean_prob = sum(probabilities) / len(probabilities)
+    std = (
+        (sum((p - mean_prob) ** 2 for p in probabilities) / len(probabilities)) ** 0.5
+        if len(probabilities) > 1
+        else 0.0
+    )
+    logger.info(
+        "ensemble_aggregated", probabilities=probabilities, mean=mean_prob, std=std,
+    )
+    return mean_prob
+
+
+async def _ensemble_forecast_multi_horizon(
+    prompt: str, n_horizons: int, question_id: str, source: str | None = None,
+) -> list[float] | None:
+    """Generate N multi-horizon responses and average per-horizon probabilities."""
+    from its_hub.api.types import ChatMessages
+    from its_hub.core.orchestrator import LMOrchestrator
+
+    lm = LiteLLMAdapter(MODEL, MAX_TOKENS, VERTEX_LOCATION)
+    orchestrator = LMOrchestrator(max_concurrency=ENSEMBLE_N)
+
+    messages = [{"role": "user", "content": prompt}]
+    chat_messages = ChatMessages(messages)
+    batch = chat_messages.to_batch(ENSEMBLE_N)
+
+    logger.info(
+        "ensemble_multi_horizon_start",
+        question_id=question_id,
+        ensemble_n=ENSEMBLE_N,
+        n_horizons=n_horizons,
+    )
+
+    responses = await orchestrator.agenerate(lm, batch, temperature=ENSEMBLE_TEMP)
+
+    all_probs: list[list[float]] = []
+    for i, resp in enumerate(responses):
+        content = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+        probs = _extract_probabilities(content, n_horizons)
+        if probs is not None:
+            all_probs.append(probs)
+            logger.debug("ensemble_multi_member_result", member=i, probabilities=probs)
+        else:
+            logger.warning("ensemble_multi_member_failed", member=i)
+
+    if not all_probs:
+        return None
+
+    averaged = [
+        sum(member[h] for member in all_probs) / len(all_probs)
+        for h in range(n_horizons)
+    ]
+    logger.info("ensemble_multi_aggregated", n_members=len(all_probs), averaged=averaged)
+    return averaged
+
+
 def forecast(
     question: Question,
     resolution_date: str | None = None,
@@ -488,6 +607,31 @@ def forecast(
         resolution_dates=resolution_dates,
         prompt_variant=prompt_variant,
     )
+
+    if ENSEMBLE_N > 1:
+        messages = [{"role": "user", "content": prompt}]
+        ensemble_kwargs: dict[str, Any] = {
+            "model": MODEL,
+            "messages": messages,
+            "max_tokens": MAX_TOKENS,
+            "vertex_location": VERTEX_LOCATION,
+            "temperature": ENSEMBLE_TEMP,
+            "timeout": 180,
+        }
+        probabilities: list[float] = []
+        for i in range(ENSEMBLE_N):
+            try:
+                resp = litellm.completion(**ensemble_kwargs)
+                text = resp.choices[0].message.content or ""
+                prob = _parse_probability(text)
+                probabilities.append(prob)
+            except Exception:
+                logger.warning("sync_ensemble_member_failed", member=i)
+        if probabilities:
+            mean_prob = sum(probabilities) / len(probabilities)
+            logger.info("sync_ensemble_aggregated", probabilities=probabilities, mean=mean_prob)
+            return mean_prob
+
     try:
         messages = [{"role": "user", "content": prompt}]
         response = litellm.completion(**_forecast_kwargs(messages, source=effective_source))
@@ -535,6 +679,20 @@ async def aforecast(
         resolution_dates=resolution_dates,
         prompt_variant=prompt_variant,
     )
+
+    if ENSEMBLE_N > 1:
+        result = await _ensemble_forecast(prompt, source=effective_source)
+        if result is not None:
+            logger.info(
+                "forecast_complete",
+                question_id=question.id,
+                forecast_value=result,
+                parse_success=True,
+                ensemble=True,
+            )
+            return result
+        logger.warning("ensemble_fallback_to_single", question_id=question.id)
+
     try:
         messages = [{"role": "user", "content": prompt}]
         response = await litellm.acompletion(**_forecast_kwargs(messages, source=effective_source))
@@ -709,6 +867,21 @@ async def aforecast_multi_horizon(
         resolution_dates=resolution_dates,
         prompt_variant=prompt_variant,
     )
+
+    if ENSEMBLE_N > 1:
+        ensemble_probs = await _ensemble_forecast_multi_horizon(
+            prompt, n_horizons, question.id, source=effective_source,
+        )
+        if ensemble_probs is not None:
+            logger.info(
+                "multi_horizon_complete",
+                question_id=question.id,
+                n_horizons=n_horizons,
+                method="ensemble",
+            )
+            _save_response_log(question.id, str(ensemble_probs), "ensemble_success", n_horizons)
+            return ensemble_probs
+        logger.warning("ensemble_multi_fallback_to_single", question_id=question.id)
 
     try:
         messages = [{"role": "user", "content": prompt}]

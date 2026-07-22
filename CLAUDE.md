@@ -49,6 +49,8 @@
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
 - VERTEXAI_LOCATION env var sets the Vertex AI region (default: europe-west1). Required because the model may not be available in litellm's default region (us-central1).
 - FORECAST_THINKING env var enables/disables extended thinking (default: true). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
+- FORECAST_ENSEMBLE_N env var sets ensemble size for self-consistency averaging (default: 3). Set to 1 for single-call mode.
+- FORECAST_ENSEMBLE_TEMP env var sets temperature for ensemble members (default: 0.7). Ensemble disables thinking to allow temperature.
 - Multi-horizon forecasting is enabled by default; use --per-date to forecast each resolution date separately
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
