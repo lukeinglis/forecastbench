@@ -187,15 +187,19 @@ class TestAsyncPath:
         assert forecasts == {}
 
 
-class TestTimeseriesPerDateRouting:
-    """Timeseries sources (fred, dbnomics, yfinance) always take per-date path."""
+class TestAllSourcesMultiHorizon:
+    """All sources (including timeseries) use multi-horizon when enabled."""
 
-    async def test_fred_uses_per_date_even_with_multi_horizon(self, tmp_path: Path) -> None:
-        resolution_dates_seen: list[str | None] = []
+    async def test_fred_uses_multi_horizon_when_enabled(self, tmp_path: Path) -> None:
+        multi_called = False
 
         async def tracking_fn(q: Question, **kwargs: object) -> float:
-            resolution_dates_seen.append(kwargs.get("resolution_date"))
             return 0.5
+
+        async def multi_fn(q: Question, **kwargs: object) -> list[float]:
+            nonlocal multi_called
+            multi_called = True
+            return [0.5, 0.5, 0.5]
 
         q = Question(
             id="ts1",
@@ -205,23 +209,24 @@ class TestTimeseriesPerDateRouting:
         )
         with patch("eval.CACHE_DIR", tmp_path):
             forecasts = await _run_async(
-                tracking_fn, [q], "test", multi_horizon=True,
+                tracking_fn, [q], "test",
+                multi_horizon=True, async_multi_forecaster=multi_fn,
             )
 
-        assert len(resolution_dates_seen) == 3
-        assert all(rd is not None for rd in resolution_dates_seen)
+        assert multi_called, "fred should use multi-horizon path"
         assert "ts1_2024-07-01" in forecasts
         assert "ts1_2024-08-01" in forecasts
         assert "ts1_2024-09-01" in forecasts
 
-    async def test_non_timeseries_uses_multi_horizon(self, tmp_path: Path) -> None:
-        resolution_dates_seen: list[str | None] = []
+    async def test_acled_uses_multi_horizon(self, tmp_path: Path) -> None:
+        multi_called = False
 
         async def tracking_fn(q: Question, **kwargs: object) -> float:
-            resolution_dates_seen.append(kwargs.get("resolution_date"))
             return 0.5
 
         async def multi_fn(q: Question, **kwargs: object) -> list[float]:
+            nonlocal multi_called
+            multi_called = True
             return [0.5, 0.5, 0.5]
 
         q = Question(
@@ -236,17 +241,18 @@ class TestTimeseriesPerDateRouting:
                 multi_horizon=True, async_multi_forecaster=multi_fn,
             )
 
-        assert len(resolution_dates_seen) == 0
+        assert multi_called, "acled should use multi-horizon path"
         assert "ev1_2024-07-01" in forecasts
 
-    def test_fred_sync_uses_per_date(self, tmp_path: Path) -> None:
-        resolution_dates_seen: list[str | None] = []
+    def test_fred_sync_uses_multi_horizon(self, tmp_path: Path) -> None:
+        multi_called = False
 
         def tracking_fn(q: Question, **kwargs: object) -> float:
-            resolution_dates_seen.append(kwargs.get("resolution_date"))
             return 0.5
 
         def multi_fn(q: Question, **kwargs: object) -> list[float]:
+            nonlocal multi_called
+            multi_called = True
             return [0.5, 0.5, 0.5]
 
         q = Question(
@@ -260,6 +266,5 @@ class TestTimeseriesPerDateRouting:
                 tracking_fn, [q], "test", multi_forecaster=multi_fn,
             )
 
-        assert len(resolution_dates_seen) == 3
-        assert all(rd is not None for rd in resolution_dates_seen)
+        assert multi_called, "fred sync should use multi-horizon path"
         assert "ts2_2024-07-01" in forecasts
