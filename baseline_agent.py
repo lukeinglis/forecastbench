@@ -15,6 +15,7 @@ import litellm
 
 from fetch_data import MARKET_SOURCES, Question
 from logging_config import get_logger
+from timeseries_rag import FORECAST_RAG, fetch_historical_context
 
 TIMESERIES_SOURCES = {"fred", "dbnomics", "yfinance"}
 
@@ -374,6 +375,13 @@ def _build_prompt(
     fv = getattr(question, "freeze_datetime_value", None)
     fd = question.freeze_datetime or ""
 
+    if fv is None and FORECAST_RAG and effective_source.lower() in TIMESERIES_SOURCES:
+        rag_context = fetch_historical_context(question)
+        if rag_context:
+            fv = rag_context
+            if not fd:
+                fd = getattr(question, "forecast_due_date", None) or ""
+
     if is_market:
         if prompt_variant == "zero-shot-no-fv":
             return ZERO_SHOT_MARKET_PROMPT.format(
@@ -481,6 +489,11 @@ def _build_dataset_prompt(
         freeze_value_section = f"Current value on {question.freeze_datetime}: {question.freeze_datetime_value}\n"
         if question.freeze_datetime_value_explanation:
             freeze_value_section += f"Value Explanation: {question.freeze_datetime_value_explanation}\n"
+    elif FORECAST_RAG and question.source.lower() in TIMESERIES_SOURCES:
+        rag_context = fetch_historical_context(question)
+        if rag_context:
+            fd = question.freeze_datetime or getattr(question, "forecast_due_date", None) or ""
+            freeze_value_section = f"Current value on {fd}:\n{rag_context}\n"
 
     list_of_resolution_dates = ", ".join(resolution_dates)
 

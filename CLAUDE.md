@@ -31,6 +31,7 @@
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
 - **baseline_agent.py** - LLM baseline forecaster using litellm (zero-shot superforecaster prompt)
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
+- **timeseries_rag.py** - RAG for timeseries sources (FRED, yfinance, dbnomics historical data)
 - **submit.py** - Submission assembly, coverage validation, GCS upload
 - **tests/** - pytest test suite
 
@@ -51,6 +52,8 @@
 - FORECAST_THINKING env var enables/disables extended thinking for event sources (default: true). Market and timeseries sources always use temperature=0.3 (no thinking). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
 - FORECAST_ENSEMBLE_N env var sets ensemble size for self-consistency averaging (default: 1, disabled). Set to 3+ to enable.
 - FORECAST_ENSEMBLE_TEMP env var sets temperature for ensemble members (default: 0.7). Ensemble disables thinking to allow temperature.
+- FORECAST_RAG env var enables/disables timeseries historical data retrieval (default: true). When enabled, fetches data from FRED/yfinance/dbnomics for timeseries questions missing freeze_datetime_value.
+- FRED_API_KEY env var required for FRED data retrieval (sign up at https://fred.stlouisfed.org/docs/api/api_key.html). yfinance and dbnomics require no API keys.
 - Multi-horizon forecasting is enabled by default for all dataset sources. Use --per-date to force per-date calling for all sources.
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
