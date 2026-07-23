@@ -99,12 +99,12 @@ class TestMaxTokens:
 
 
 class TestDatasetPromptRouting:
-    def test_dataset_uses_zero_shot_by_default(self) -> None:
+    def test_event_source_uses_scratchpad_by_default(self) -> None:
         from baseline_agent import _build_prompt
         q = _make_dataset_question()
         prompt = _build_prompt(q, source="acled", prompt_variant="default")
-        assert "Reasoning:" not in prompt
-        assert "reasoning steps" not in prompt.lower()
+        assert "Reasoning:" in prompt
+        assert "reasoning steps" in prompt.lower()
 
     def test_dataset_zero_shot_uses_original(self) -> None:
         from baseline_agent import _build_prompt
@@ -162,13 +162,21 @@ def _make_timeseries_question(source: str = "fred") -> Question:
 
 
 class TestSourceAwarePromptRouting:
-    def test_all_dataset_sources_use_zero_shot_by_default(self) -> None:
+    def test_timeseries_sources_use_zero_shot_by_default(self) -> None:
         from baseline_agent import _build_prompt
-        for source in ["fred", "dbnomics", "yfinance", "acled", "wikipedia"]:
+        for source in ["fred", "dbnomics", "yfinance"]:
             q = _make_timeseries_question(source=source)
             prompt = _build_prompt(q, source=source, prompt_variant="default")
             assert "Reasoning:" not in prompt, f"source={source} should use zero-shot, not scratchpad"
             assert "reasoning steps" not in prompt.lower(), f"source={source} should use zero-shot"
+
+    def test_event_sources_use_scratchpad_by_default(self) -> None:
+        from baseline_agent import _build_prompt
+        for source in ["acled", "wikipedia"]:
+            q = _make_timeseries_question(source=source)
+            prompt = _build_prompt(q, source=source, prompt_variant="default")
+            assert "Reasoning:" in prompt, f"source={source} should use scratchpad"
+            assert "reasoning steps" in prompt.lower(), f"source={source} should use scratchpad"
 
     def test_explicit_zero_shot_still_works_for_event_source(self) -> None:
         from baseline_agent import _build_prompt
