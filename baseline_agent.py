@@ -426,7 +426,19 @@ def _build_prompt(
             list_of_resolution_dates=dates_list,
         )
 
-    return ZERO_SHOT_DATASET_PROMPT.format(
+    if effective_source.lower() in TIMESERIES_SOURCES:
+        return ZERO_SHOT_DATASET_PROMPT.format(
+            question=formatted_q,
+            background=background,
+            resolution_criteria=question.resolution_criteria or "",
+            freeze_datetime=fd,
+            freeze_datetime_value=fv if fv is not None else "",
+            freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
+            today_date=today_date,
+            list_of_resolution_dates=dates_list,
+        )
+
+    return SCRATCHPAD_DATASET_PROMPT.format(
         question=formatted_q,
         background=background,
         resolution_criteria=question.resolution_criteria or "",
