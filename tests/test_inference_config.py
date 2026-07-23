@@ -230,13 +230,13 @@ class TestSourceAwareThinking:
             assert "thinking" not in kwargs
             assert kwargs["temperature"] == 0.3
 
-    def test_market_source_keeps_thinking(self) -> None:
+    def test_market_source_disables_thinking(self) -> None:
         import baseline_agent
         with patch.object(baseline_agent, "THINKING_ENABLED", True):
             messages = [{"role": "user", "content": "test"}]
             kwargs = baseline_agent._forecast_kwargs(messages, source="metaculus")
-            assert "thinking" in kwargs
-            assert "temperature" not in kwargs
+            assert "thinking" not in kwargs
+            assert kwargs["temperature"] == 0.3
 
     def test_event_source_keeps_thinking(self) -> None:
         import baseline_agent

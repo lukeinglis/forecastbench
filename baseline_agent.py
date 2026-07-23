@@ -115,7 +115,9 @@ def _forecast_kwargs(
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
     }
-    if source and source.lower() in TIMESERIES_SOURCES:
+    is_timeseries = source and source.lower() in TIMESERIES_SOURCES
+    is_market = source and source.lower() in MARKET_SOURCES
+    if is_timeseries or is_market:
         kwargs["temperature"] = 0.3
     elif THINKING_ENABLED:
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
