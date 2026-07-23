@@ -16,6 +16,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
+from baseline_agent import TIMESERIES_SOURCES  # noqa: E402
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
@@ -352,7 +353,8 @@ def _run_sync(
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
-        if _has_multi_horizon(q) and multi_forecaster is not None:
+        is_timeseries = q.source.lower() in TIMESERIES_SOURCES if q.source else False
+        if _has_multi_horizon(q) and multi_forecaster is not None and not is_timeseries:
             dates = [d for d in q.resolution_dates if d]
             uncached_dates: list[str] = []
             for date_str in dates:
@@ -506,7 +508,8 @@ async def _run_async(
     single_tasks: list[Any] = []
     multi_tasks: list[Any] = []
     for q in questions:
-        if _has_multi_horizon(q) and (multi_horizon or async_multi_forecaster is not None):
+        is_timeseries = q.source.lower() in TIMESERIES_SOURCES if q.source else False
+        if _has_multi_horizon(q) and (multi_horizon or async_multi_forecaster is not None) and not is_timeseries:
             dates = [d for d in q.resolution_dates if d and str(d).upper() != "N/A"]
             multi_tasks.append(_forecast_multi_horizon(q, dates))
         elif _has_multi_horizon(q):

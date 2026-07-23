@@ -115,14 +115,7 @@ def _forecast_kwargs(
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
     }
-    is_timeseries = source and source.lower() in TIMESERIES_SOURCES
-    is_market = source and source.lower() in MARKET_SOURCES
-    if is_timeseries or is_market:
-        kwargs["temperature"] = 0.3
-    elif THINKING_ENABLED:
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
-    else:
-        kwargs["temperature"] = 0.3
+    kwargs["temperature"] = 0.3
     return kwargs
 
 
@@ -433,19 +426,7 @@ def _build_prompt(
             list_of_resolution_dates=dates_list,
         )
 
-    if prompt_variant == "default" and effective_source.lower() in TIMESERIES_SOURCES:
-        return ZERO_SHOT_DATASET_PROMPT.format(
-            question=formatted_q,
-            background=background,
-            resolution_criteria=question.resolution_criteria or "",
-            freeze_datetime=fd,
-            freeze_datetime_value=fv if fv is not None else "",
-            freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
-            today_date=today_date,
-            list_of_resolution_dates=dates_list,
-        )
-
-    return SCRATCHPAD_DATASET_PROMPT.format(
+    return ZERO_SHOT_DATASET_PROMPT.format(
         question=formatted_q,
         background=background,
         resolution_criteria=question.resolution_criteria or "",

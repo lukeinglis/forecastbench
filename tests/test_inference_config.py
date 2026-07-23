@@ -44,7 +44,7 @@ def _make_dataset_question(
 
 
 class TestExtendedThinking:
-    def test_thinking_enabled_by_default(self) -> None:
+    def test_thinking_var_still_parsed(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("FORECAST_THINKING", None)
             import importlib
@@ -52,27 +52,18 @@ class TestExtendedThinking:
             importlib.reload(baseline_agent)
             assert baseline_agent.THINKING_ENABLED is True
 
-    def test_thinking_disabled_via_env(self) -> None:
-        with patch.dict(os.environ, {"FORECAST_THINKING": "false"}):
-            import importlib
-            import baseline_agent
-            importlib.reload(baseline_agent)
-            assert baseline_agent.THINKING_ENABLED is False
-
-    def test_forecast_kwargs_includes_thinking_when_enabled(self) -> None:
+    def test_forecast_kwargs_always_uses_temperature(self) -> None:
         import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages)
-            assert "thinking" in kwargs
-            assert kwargs["thinking"] == {"type": "enabled", "budget_tokens": baseline_agent.MAX_TOKENS // 2}
-            assert "temperature" not in kwargs
+        messages = [{"role": "user", "content": "test"}]
+        kwargs = baseline_agent._forecast_kwargs(messages)
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
 
-    def test_forecast_kwargs_excludes_thinking_when_disabled(self) -> None:
+    def test_forecast_kwargs_ignores_source(self) -> None:
         import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", False):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages)
+        messages = [{"role": "user", "content": "test"}]
+        for source in ["acled", "fred", "metaculus", None]:
+            kwargs = baseline_agent._forecast_kwargs(messages, source=source)
             assert "thinking" not in kwargs
             assert kwargs["temperature"] == 0.3
 
@@ -108,11 +99,12 @@ class TestMaxTokens:
 
 
 class TestDatasetPromptRouting:
-    def test_dataset_uses_scratchpad_by_default(self) -> None:
+    def test_dataset_uses_zero_shot_by_default(self) -> None:
         from baseline_agent import _build_prompt
         q = _make_dataset_question()
         prompt = _build_prompt(q, source="acled", prompt_variant="default")
-        assert "reasoning steps" in prompt.lower() or "Reasoning:" in prompt
+        assert "Reasoning:" not in prompt
+        assert "reasoning steps" not in prompt.lower()
 
     def test_dataset_zero_shot_uses_original(self) -> None:
         from baseline_agent import _build_prompt
@@ -121,12 +113,9 @@ class TestDatasetPromptRouting:
         assert "Reasoning:" not in prompt
         assert "reasoning steps" not in prompt.lower()
 
-    def test_scratchpad_prompt_has_star_p_format(self) -> None:
+    def test_scratchpad_prompt_still_exists(self) -> None:
         from baseline_agent import SCRATCHPAD_DATASET_PROMPT
         assert "*p*" in SCRATCHPAD_DATASET_PROMPT
-
-    def test_scratchpad_prompt_has_five_reasoning_steps(self) -> None:
-        from baseline_agent import SCRATCHPAD_DATASET_PROMPT
         for step_num in range(1, 6):
             assert f"{step_num}." in SCRATCHPAD_DATASET_PROMPT
 
@@ -173,30 +162,13 @@ def _make_timeseries_question(source: str = "fred") -> Question:
 
 
 class TestSourceAwarePromptRouting:
-    def test_timeseries_source_uses_zero_shot_by_default(self) -> None:
+    def test_all_dataset_sources_use_zero_shot_by_default(self) -> None:
         from baseline_agent import _build_prompt
-        q = _make_timeseries_question(source="fred")
-        prompt = _build_prompt(q, source="fred", prompt_variant="default")
-        assert "Reasoning:" not in prompt
-        assert "reasoning steps" not in prompt.lower()
-
-    def test_event_source_uses_scratchpad_by_default(self) -> None:
-        from baseline_agent import _build_prompt
-        q = _make_dataset_question()
-        prompt = _build_prompt(q, source="acled", prompt_variant="default")
-        assert "Reasoning:" in prompt
-
-    def test_dbnomics_uses_zero_shot_by_default(self) -> None:
-        from baseline_agent import _build_prompt
-        q = _make_timeseries_question(source="dbnomics")
-        prompt = _build_prompt(q, source="dbnomics", prompt_variant="default")
-        assert "Reasoning:" not in prompt
-
-    def test_yfinance_uses_zero_shot_by_default(self) -> None:
-        from baseline_agent import _build_prompt
-        q = _make_timeseries_question(source="yfinance")
-        prompt = _build_prompt(q, source="yfinance", prompt_variant="default")
-        assert "Reasoning:" not in prompt
+        for source in ["fred", "dbnomics", "yfinance", "acled", "wikipedia"]:
+            q = _make_timeseries_question(source=source)
+            prompt = _build_prompt(q, source=source, prompt_variant="default")
+            assert "Reasoning:" not in prompt, f"source={source} should use zero-shot, not scratchpad"
+            assert "reasoning steps" not in prompt.lower(), f"source={source} should use zero-shot"
 
     def test_explicit_zero_shot_still_works_for_event_source(self) -> None:
         from baseline_agent import _build_prompt
@@ -206,53 +178,13 @@ class TestSourceAwarePromptRouting:
 
 
 class TestSourceAwareThinking:
-    def test_timeseries_source_disables_thinking(self) -> None:
+    def test_all_sources_disable_thinking(self) -> None:
         import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages, source="fred")
-            assert "thinking" not in kwargs
-            assert kwargs["temperature"] == 0.3
-
-    def test_timeseries_source_dbnomics(self) -> None:
-        import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages, source="dbnomics")
-            assert "thinking" not in kwargs
-            assert kwargs["temperature"] == 0.3
-
-    def test_timeseries_source_yfinance(self) -> None:
-        import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages, source="yfinance")
-            assert "thinking" not in kwargs
-            assert kwargs["temperature"] == 0.3
-
-    def test_market_source_disables_thinking(self) -> None:
-        import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages, source="metaculus")
-            assert "thinking" not in kwargs
-            assert kwargs["temperature"] == 0.3
-
-    def test_event_source_keeps_thinking(self) -> None:
-        import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages, source="acled")
-            assert "thinking" in kwargs
-            assert "temperature" not in kwargs
-
-    def test_none_source_keeps_thinking(self) -> None:
-        import baseline_agent
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
-            messages = [{"role": "user", "content": "test"}]
-            kwargs = baseline_agent._forecast_kwargs(messages, source=None)
-            assert "thinking" in kwargs
-            assert "temperature" not in kwargs
+        messages = [{"role": "user", "content": "test"}]
+        for source in ["fred", "dbnomics", "yfinance", "metaculus", "acled", "wikipedia", None]:
+            kwargs = baseline_agent._forecast_kwargs(messages, source=source)
+            assert "thinking" not in kwargs, f"source={source} should not enable thinking"
+            assert kwargs["temperature"] == 0.3, f"source={source} should use temperature=0.3"
 
 
 class TestMultiHorizonDefault:
