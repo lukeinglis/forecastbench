@@ -800,15 +800,14 @@ class TestForecastParityParams:
     """Verify forecast LLM calls use _forecast_kwargs (adaptive thinking / temperature=0.3 fallback)."""
 
     @patch("baseline_agent.litellm")
-    def test_forecast_uses_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
+    def test_forecast_disables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
         from baseline_agent import forecast
 
         forecast(_make_question(source="acled"))
         kwargs = mock_litellm.completion.call_args.kwargs
-        assert kwargs["thinking"]["type"] == "enabled"
-        assert "budget_tokens" in kwargs["thinking"]
-        assert "temperature" not in kwargs
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
 
     @patch("baseline_agent.litellm")
     def test_forecast_disables_thinking_for_market_sources(self, mock_litellm: MagicMock) -> None:
@@ -830,14 +829,14 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    def test_forecast_multi_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+    def test_forecast_multi_disables_thinking(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.30* *0.50* *0.70*")
         from baseline_agent import forecast_multi
 
         forecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.completion.call_args.kwargs
-        assert kwargs["thinking"]["type"] == "enabled"
-        assert "budget_tokens" in kwargs["thinking"]
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
 
     @patch("baseline_agent.litellm")
     def test_forecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
@@ -849,14 +848,14 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    async def test_aforecast_uses_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
+    async def test_aforecast_disables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
         from baseline_agent import aforecast
 
         await aforecast(_make_question(source="acled"))
         kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert kwargs["thinking"]["type"] == "enabled"
-        assert "budget_tokens" in kwargs["thinking"]
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_disables_thinking_for_market_sources(self, mock_litellm: MagicMock) -> None:
@@ -878,7 +877,7 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    async def test_aforecast_multi_horizon_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+    async def test_aforecast_multi_horizon_disables_thinking(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
         from baseline_agent import aforecast_multi_horizon
 
@@ -888,8 +887,8 @@ class TestForecastParityParams:
             source="acled",
         )
         kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert kwargs["thinking"]["type"] == "enabled"
-        assert "budget_tokens" in kwargs["thinking"]
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_multi_horizon_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
@@ -905,14 +904,14 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    async def test_aforecast_multi_uses_thinking_by_default(self, mock_litellm: MagicMock) -> None:
+    async def test_aforecast_multi_disables_thinking(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
         from baseline_agent import aforecast_multi
 
         await aforecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert kwargs["thinking"]["type"] == "enabled"
-        assert "budget_tokens" in kwargs["thinking"]
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:

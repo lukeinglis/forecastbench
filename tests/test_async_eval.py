@@ -185,3 +185,81 @@ class TestAsyncPath:
             forecasts = await _run_async(fn, [], "test")
 
         assert forecasts == {}
+
+
+class TestTimeseriesPerDateRouting:
+    """Timeseries sources (fred, dbnomics, yfinance) always take per-date path."""
+
+    async def test_fred_uses_per_date_even_with_multi_horizon(self, tmp_path: Path) -> None:
+        resolution_dates_seen: list[str | None] = []
+
+        async def tracking_fn(q: Question, **kwargs: object) -> float:
+            resolution_dates_seen.append(kwargs.get("resolution_date"))
+            return 0.5
+
+        q = Question(
+            id="ts1",
+            source="fred",
+            question="Will rate exceed threshold?",
+            resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+        )
+        with patch("eval.CACHE_DIR", tmp_path):
+            forecasts = await _run_async(
+                tracking_fn, [q], "test", multi_horizon=True,
+            )
+
+        assert len(resolution_dates_seen) == 3
+        assert all(rd is not None for rd in resolution_dates_seen)
+        assert "ts1_2024-07-01" in forecasts
+        assert "ts1_2024-08-01" in forecasts
+        assert "ts1_2024-09-01" in forecasts
+
+    async def test_non_timeseries_uses_multi_horizon(self, tmp_path: Path) -> None:
+        resolution_dates_seen: list[str | None] = []
+
+        async def tracking_fn(q: Question, **kwargs: object) -> float:
+            resolution_dates_seen.append(kwargs.get("resolution_date"))
+            return 0.5
+
+        async def multi_fn(q: Question, **kwargs: object) -> list[float]:
+            return [0.5, 0.5, 0.5]
+
+        q = Question(
+            id="ev1",
+            source="acled",
+            question="Will conflict exceed threshold?",
+            resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+        )
+        with patch("eval.CACHE_DIR", tmp_path):
+            forecasts = await _run_async(
+                tracking_fn, [q], "test",
+                multi_horizon=True, async_multi_forecaster=multi_fn,
+            )
+
+        assert len(resolution_dates_seen) == 0
+        assert "ev1_2024-07-01" in forecasts
+
+    def test_fred_sync_uses_per_date(self, tmp_path: Path) -> None:
+        resolution_dates_seen: list[str | None] = []
+
+        def tracking_fn(q: Question, **kwargs: object) -> float:
+            resolution_dates_seen.append(kwargs.get("resolution_date"))
+            return 0.5
+
+        def multi_fn(q: Question, **kwargs: object) -> list[float]:
+            return [0.5, 0.5, 0.5]
+
+        q = Question(
+            id="ts2",
+            source="fred",
+            question="Will rate exceed threshold?",
+            resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+        )
+        with patch("eval.CACHE_DIR", tmp_path):
+            forecasts = _run_sync(
+                tracking_fn, [q], "test", multi_forecaster=multi_fn,
+            )
+
+        assert len(resolution_dates_seen) == 3
+        assert all(rd is not None for rd in resolution_dates_seen)
+        assert "ts2_2024-07-01" in forecasts
