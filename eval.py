@@ -16,6 +16,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
+from calibrate import calibrate, load_calibration_models  # noqa: E402
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
@@ -247,6 +248,52 @@ def _build_question(q: Question | ResolvedQuestion, forecast_due_date: str | Non
     )
 
 
+def _apply_calibration(
+    forecasts: dict[str, float],
+    questions: list[Question],
+) -> dict[str, float]:
+    """Apply source-specific calibration post-processing to forecasts."""
+    models = load_calibration_models()
+    if not models:
+        logger.info("calibration_no_models")
+        return forecasts
+
+    source_map: dict[str, str] = {}
+    for q in questions:
+        source_map[q.id] = q.source
+
+    composite_re = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})$")
+    calibrated = dict(forecasts)
+    n_calibrated = 0
+    n_uncalibrated = 0
+    source_deltas: dict[str, list[float]] = {}
+
+    for qid, prob in forecasts.items():
+        source = source_map.get(qid)
+        if source is None:
+            m = composite_re.match(qid)
+            if m:
+                source = source_map.get(m.group(1))
+        if source is None or source not in models:
+            n_uncalibrated += 1
+            continue
+
+        new_prob = calibrate(prob, source, models)
+        delta = new_prob - prob
+        calibrated[qid] = new_prob
+        n_calibrated += 1
+        source_deltas.setdefault(source, []).append(delta)
+
+    for source, deltas in sorted(source_deltas.items()):
+        mean_delta = sum(deltas) / len(deltas)
+        logger.info("calibration_applied", source=source, n=len(deltas),
+                     mean_delta=round(mean_delta, 4))
+
+    logger.info("calibration_summary", n_calibrated=n_calibrated,
+                 n_uncalibrated=n_uncalibrated)
+    return calibrated
+
+
 async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
@@ -257,6 +304,7 @@ async def run_eval(
     multi_forecaster: MultiForecaster | None = None,
     async_multi_forecaster: MultiForecaster | None = None,
     submit_mode: bool = False,
+    calibrate_forecasts: bool = False,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -299,6 +347,9 @@ async def run_eval(
         forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
     else:
         forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
+
+    if calibrate_forecasts:
+        forecasts = _apply_calibration(forecasts, questions)
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
 
@@ -727,6 +778,12 @@ def main() -> None:
         default=False,
         help="Forecast all questions (including unresolved) for submission coverage",
     )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        default=False,
+        help="Apply source-specific calibration post-processing before scoring",
+    )
     args = parser.parse_args()
 
     if args.refresh:
@@ -760,6 +817,7 @@ def main() -> None:
         multi_horizon=args.multi_horizon and args.agent == "baseline",
         async_multi_forecaster=aforecast_multi if args.agent == "baseline" else None,
         submit_mode=args.submit,
+        calibrate_forecasts=args.calibrate,
     ))
 
     if args.ci:
