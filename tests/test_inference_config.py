@@ -52,20 +52,17 @@ class TestExtendedThinking:
             importlib.reload(baseline_agent)
             assert baseline_agent.THINKING_ENABLED is True
 
-    def test_forecast_kwargs_always_uses_temperature(self) -> None:
+    def test_forecast_kwargs_source_aware(self) -> None:
         import baseline_agent
         messages = [{"role": "user", "content": "test"}]
-        kwargs = baseline_agent._forecast_kwargs(messages)
-        assert "thinking" not in kwargs
-        assert kwargs["temperature"] == 0.3
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            kwargs_fred = baseline_agent._forecast_kwargs(messages, source="fred")
+            assert "thinking" not in kwargs_fred
+            assert kwargs_fred["temperature"] == 0.3
 
-    def test_forecast_kwargs_ignores_source(self) -> None:
-        import baseline_agent
-        messages = [{"role": "user", "content": "test"}]
-        for source in ["acled", "fred", "metaculus", None]:
-            kwargs = baseline_agent._forecast_kwargs(messages, source=source)
-            assert "thinking" not in kwargs
-            assert kwargs["temperature"] == 0.3
+            kwargs_acled = baseline_agent._forecast_kwargs(messages, source="acled")
+            assert "thinking" in kwargs_acled
+            assert "temperature" not in kwargs_acled
 
 
 class TestMaxTokens:
@@ -186,13 +183,39 @@ class TestSourceAwarePromptRouting:
 
 
 class TestSourceAwareThinking:
-    def test_all_sources_disable_thinking(self) -> None:
+    def test_timeseries_and_market_disable_thinking(self) -> None:
         import baseline_agent
         messages = [{"role": "user", "content": "test"}]
-        for source in ["fred", "dbnomics", "yfinance", "metaculus", "acled", "wikipedia", None]:
-            kwargs = baseline_agent._forecast_kwargs(messages, source=source)
-            assert "thinking" not in kwargs, f"source={source} should not enable thinking"
-            assert kwargs["temperature"] == 0.3, f"source={source} should use temperature=0.3"
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            for source in ["fred", "dbnomics", "yfinance", "metaculus", "polymarket", "manifold", "infer"]:
+                kwargs = baseline_agent._forecast_kwargs(messages, source=source)
+                assert "thinking" not in kwargs, f"source={source} should not enable thinking"
+                assert kwargs["temperature"] == 0.3, f"source={source} should use temperature=0.3"
+
+    def test_event_sources_enable_thinking(self) -> None:
+        import baseline_agent
+        messages = [{"role": "user", "content": "test"}]
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            for source in ["acled", "wikipedia"]:
+                kwargs = baseline_agent._forecast_kwargs(messages, source=source)
+                assert "thinking" in kwargs, f"source={source} should enable thinking"
+                assert "temperature" not in kwargs, f"source={source} should not set temperature when thinking"
+
+    def test_event_sources_no_thinking_when_disabled(self) -> None:
+        import baseline_agent
+        messages = [{"role": "user", "content": "test"}]
+        with patch.object(baseline_agent, "THINKING_ENABLED", False):
+            for source in ["acled", "wikipedia"]:
+                kwargs = baseline_agent._forecast_kwargs(messages, source=source)
+                assert "thinking" not in kwargs, f"source={source} should not think when THINKING_ENABLED=false"
+                assert kwargs["temperature"] == 0.3
+
+    def test_no_source_enables_thinking(self) -> None:
+        import baseline_agent
+        messages = [{"role": "user", "content": "test"}]
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            kwargs = baseline_agent._forecast_kwargs(messages, source=None)
+            assert "thinking" in kwargs, "source=None should enable thinking"
 
 
 class TestMultiHorizonDefault:

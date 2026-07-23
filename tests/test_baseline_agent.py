@@ -800,14 +800,16 @@ class TestForecastParityParams:
     """Verify forecast LLM calls use _forecast_kwargs (adaptive thinking / temperature=0.3 fallback)."""
 
     @patch("baseline_agent.litellm")
-    def test_forecast_disables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
+    def test_forecast_enables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
+        import baseline_agent
         from baseline_agent import forecast
 
-        forecast(_make_question(source="acled"))
-        kwargs = mock_litellm.completion.call_args.kwargs
-        assert "thinking" not in kwargs
-        assert kwargs["temperature"] == 0.3
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            forecast(_make_question(source="acled"))
+            kwargs = mock_litellm.completion.call_args.kwargs
+            assert "thinking" in kwargs
+            assert "temperature" not in kwargs
 
     @patch("baseline_agent.litellm")
     def test_forecast_disables_thinking_for_market_sources(self, mock_litellm: MagicMock) -> None:
@@ -829,11 +831,17 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    def test_forecast_multi_disables_thinking(self, mock_litellm: MagicMock) -> None:
+    def test_forecast_multi_disables_thinking_for_timeseries(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.30* *0.50* *0.70*")
         from baseline_agent import forecast_multi
 
-        forecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
+        q = Question(
+            id="tsq1", source="fred", question="Will value exceed threshold?",
+            freeze_datetime="2024-06-05", forecast_due_date="2024-06-15",
+            freeze_datetime_value=42.5,
+            resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+        )
+        forecast_multi(q, ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.completion.call_args.kwargs
         assert "thinking" not in kwargs
         assert kwargs["temperature"] == 0.3
@@ -848,14 +856,16 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    async def test_aforecast_disables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
+    async def test_aforecast_enables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
+        import baseline_agent
         from baseline_agent import aforecast
 
-        await aforecast(_make_question(source="acled"))
-        kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert "thinking" not in kwargs
-        assert kwargs["temperature"] == 0.3
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            await aforecast(_make_question(source="acled"))
+            kwargs = mock_litellm.acompletion.call_args.kwargs
+            assert "thinking" in kwargs
+            assert "temperature" not in kwargs
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_disables_thinking_for_market_sources(self, mock_litellm: MagicMock) -> None:
@@ -877,18 +887,20 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    async def test_aforecast_multi_horizon_disables_thinking(self, mock_litellm: MagicMock) -> None:
+    async def test_aforecast_multi_horizon_enables_thinking_for_events(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
+        import baseline_agent
         from baseline_agent import aforecast_multi_horizon
 
-        await aforecast_multi_horizon(
-            _make_dataset_question(),
-            ["2024-07-01", "2024-08-01", "2024-09-01"],
-            source="acled",
-        )
-        kwargs = mock_litellm.acompletion.call_args.kwargs
-        assert "thinking" not in kwargs
-        assert kwargs["temperature"] == 0.3
+        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+            await aforecast_multi_horizon(
+                _make_dataset_question(),
+                ["2024-07-01", "2024-08-01", "2024-09-01"],
+                source="acled",
+            )
+            kwargs = mock_litellm.acompletion.call_args.kwargs
+            assert "thinking" in kwargs
+            assert "temperature" not in kwargs
 
     @patch("baseline_agent.litellm")
     async def test_aforecast_multi_horizon_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
@@ -904,11 +916,17 @@ class TestForecastParityParams:
         assert kwargs["max_tokens"] == MAX_TOKENS
 
     @patch("baseline_agent.litellm")
-    async def test_aforecast_multi_disables_thinking(self, mock_litellm: MagicMock) -> None:
+    async def test_aforecast_multi_disables_thinking_for_timeseries(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
         from baseline_agent import aforecast_multi
 
-        await aforecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
+        q = Question(
+            id="tsq1", source="fred", question="Will value exceed threshold?",
+            freeze_datetime="2024-06-05", forecast_due_date="2024-06-15",
+            freeze_datetime_value=42.5,
+            resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+        )
+        await aforecast_multi(q, ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.acompletion.call_args.kwargs
         assert "thinking" not in kwargs
         assert kwargs["temperature"] == 0.3

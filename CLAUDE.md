@@ -48,10 +48,10 @@
 - Questions classified as "market" (metaculus, polymarket, manifold, infer) vs "dataset"
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4-6). Vertex AI ADC tokens auto-refresh.
 - VERTEXAI_LOCATION env var sets the Vertex AI region (default: europe-west1). Required because the model may not be available in litellm's default region (us-central1).
-- FORECAST_THINKING env var is deprecated (thinking disabled for all sources on Sonnet 4.6). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
+- FORECAST_THINKING env var enables/disables extended thinking for event sources (default: true). Market and timeseries sources always use temperature=0.3 (no thinking). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
 - FORECAST_ENSEMBLE_N env var sets ensemble size for self-consistency averaging (default: 1, disabled). Set to 3+ to enable.
 - FORECAST_ENSEMBLE_TEMP env var sets temperature for ensemble members (default: 0.7). Ensemble disables thinking to allow temperature.
-- Multi-horizon forecasting is enabled by default for event sources (acled, wikipedia); timeseries sources (fred, dbnomics, yfinance) always use per-date calling regardless of --multi-horizon flag. Use --per-date to force per-date for all sources.
+- Multi-horizon forecasting is enabled by default for all dataset sources. Use --per-date to force per-date calling for all sources.
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Baseline agent always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON (auto-persisted after each eval run)
