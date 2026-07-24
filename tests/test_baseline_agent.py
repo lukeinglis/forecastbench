@@ -11,6 +11,7 @@ import pytest
 from fetch_data import Question
 from baseline_agent import (
     _apply_horizon_dampening,
+    _apply_timeseries_dampening,
     _build_prompt,
     _build_dataset_prompt,
     _parse_probability,
@@ -591,7 +592,8 @@ class TestForecastAsync:
         )
         result = await aforecast(q, prompt_variant="dataset", source="fred")
 
-        assert result == pytest.approx(0.42)
+        # 0.42 dampened: 0.5 + 0.5 * (0.42 - 0.5) = 0.46
+        assert result == pytest.approx(0.46)
 
 
 class TestMarketInfoResolutionCriteria:
@@ -868,3 +870,34 @@ class TestHorizonDampening:
         dates = ["2025-07-01"]
         result = _apply_horizon_dampening(probs, dates, "2024-07-01")
         assert result[0] == pytest.approx(0.5)
+
+
+class TestTimeseriesDampening:
+    def test_half_confidence_shrinks_toward_half(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+            assert _apply_timeseries_dampening(0.8, "fred") == pytest.approx(0.65)
+            assert _apply_timeseries_dampening(0.2, "fred") == pytest.approx(0.35)
+
+    def test_zero_confidence_always_returns_half(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.0):
+            assert _apply_timeseries_dampening(0.8, "fred") == pytest.approx(0.5)
+            assert _apply_timeseries_dampening(0.1, "dbnomics") == pytest.approx(0.5)
+
+    def test_full_confidence_no_change(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 1.0):
+            assert _apply_timeseries_dampening(0.8, "yfinance") == pytest.approx(0.8)
+            assert _apply_timeseries_dampening(0.2, "fred") == pytest.approx(0.2)
+
+    def test_non_timeseries_source_unchanged(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.0):
+            assert _apply_timeseries_dampening(0.8, "metaculus") == pytest.approx(0.8)
+            assert _apply_timeseries_dampening(0.2, "polymarket") == pytest.approx(0.2)
+
+    def test_case_insensitive(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+            assert _apply_timeseries_dampening(0.8, "FRED") == pytest.approx(0.65)
+            assert _apply_timeseries_dampening(0.8, "YFinance") == pytest.approx(0.65)
+
+    def test_half_stays_at_half(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+            assert _apply_timeseries_dampening(0.5, "fred") == pytest.approx(0.5)

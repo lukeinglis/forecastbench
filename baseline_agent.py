@@ -30,12 +30,20 @@ MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "2000"))
 
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
+TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "0.5"))
 
 
 def _select_model(source: str | None) -> str:
     if TIMESERIES_MODEL and source and source.lower() in TIMESERIES_SOURCES:
         return TIMESERIES_MODEL
     return MODEL
+
+def _apply_timeseries_dampening(prob: float, source: str) -> float:
+    """Shrink timeseries predictions toward 0.5 to reduce overconfidence."""
+    if source.lower() not in TIMESERIES_SOURCES:
+        return prob
+    return 0.5 + TIMESERIES_CONFIDENCE * (prob - 0.5)
+
 
 def _apply_horizon_dampening(
     probabilities: list[float],
@@ -510,6 +518,7 @@ async def aforecast(
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
+    prob = _apply_timeseries_dampening(prob, effective_source)
     logger.info("forecast_complete", question_id=question.id, probability=prob)
     return prob
 
@@ -709,6 +718,7 @@ async def aforecast_multi_horizon(
         _save_response_log(question.id, text, "regex_success", n_horizons)
         if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
             probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
+        probs = [_apply_timeseries_dampening(p, effective_source) for p in probs]
         return probs
 
     logger.info("multi_horizon_regex_failed", question_id=question.id, trying="llm_extraction")
@@ -723,6 +733,7 @@ async def aforecast_multi_horizon(
         _save_response_log(question.id, text, "llm_success", n_horizons)
         if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
             probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
+        probs = [_apply_timeseries_dampening(p, effective_source) for p in probs]
         return probs
 
     logger.warning(

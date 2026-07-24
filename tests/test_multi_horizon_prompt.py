@@ -357,7 +357,8 @@ class TestAforecastMultiHorizon:
         result = await aforecast_multi_horizon(q, dates, source="fred")
 
         assert len(result) == 3
-        assert result == pytest.approx([0.3, 0.5, 0.7])
+        # Timeseries dampening (confidence=0.5): 0.3→0.4, 0.5→0.5, 0.7→0.6
+        assert result == pytest.approx([0.4, 0.5, 0.6])
         mock_litellm.acompletion.assert_called_once()
 
     @patch("baseline_agent.litellm")
@@ -375,7 +376,8 @@ class TestAforecastMultiHorizon:
         result = await aforecast_multi_horizon(q, dates, source="fred")
 
         assert len(result) == 3
-        assert result == pytest.approx([0.4, 0.5, 0.6])
+        # Timeseries dampening (confidence=0.5): 0.4→0.45, 0.5→0.5, 0.6→0.55
+        assert result == pytest.approx([0.45, 0.5, 0.55])
         assert mock_litellm.acompletion.call_count == 2
 
     @patch("baseline_agent.litellm")
