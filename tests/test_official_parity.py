@@ -27,6 +27,16 @@ from baseline_agent import (
 from fetch_data import Question
 from score import brier_score, brier_index
 
+_STAT_BASELINE_RE = re.compile(
+    r"\n?Statistical baseline \([^)]+\): \d+% probability\n"
+    r"Note: This is a simple statistical estimate\. "
+    r"Use your judgment to adjust\.\n",
+)
+
+
+def _strip_statistical_baseline(prompt: str) -> str:
+    return _STAT_BASELINE_RE.sub("", prompt)
+
 
 # ---------------------------------------------------------------------------
 # Reference snapshots from official forecastingresearch/forecastbench
@@ -308,7 +318,7 @@ class TestDatasetPromptParity:
         our_prompt = _build_prompt(q, source=q.source, resolution_dates=q.resolution_dates)
         official_prompt = _official_render_prompt(q_dict, forecast_due_date, forecast_due_date)
 
-        assert our_prompt.strip() == official_prompt.strip()
+        assert _strip_statistical_baseline(our_prompt).strip() == official_prompt.strip()
 
     def test_dataset_prompt_with_placeholders_matches(self) -> None:
         text = "Will value have increased by {resolution_date} compared to {forecast_due_date}?"
@@ -318,7 +328,7 @@ class TestDatasetPromptParity:
         our_prompt = _build_prompt(q, source=q.source, resolution_dates=q.resolution_dates)
         official_prompt = _official_render_prompt(q_dict, forecast_due_date, forecast_due_date)
 
-        assert our_prompt.strip() == official_prompt.strip()
+        assert _strip_statistical_baseline(our_prompt).strip() == official_prompt.strip()
         assert "{resolution_date}" not in our_prompt
         assert "{forecast_due_date}" not in our_prompt
 
@@ -330,7 +340,7 @@ class TestDatasetPromptParity:
         our_prompt = _build_prompt(q, source=q.source, resolution_dates=q.resolution_dates)
         official_prompt = _official_render_prompt(q_dict, forecast_due_date, forecast_due_date)
 
-        assert our_prompt.strip() == official_prompt.strip()
+        assert _strip_statistical_baseline(our_prompt).strip() == official_prompt.strip()
 
     def test_resolution_dates_rendered_as_list(self) -> None:
         q, _ = _make_dataset_question()
@@ -352,7 +362,7 @@ class TestDatasetPromptParity:
             our_prompt = _build_prompt(q, source=q.source, resolution_dates=q.resolution_dates)
             official_prompt = _official_render_prompt(q_dict, forecast_due_date, forecast_due_date)
 
-            assert our_prompt.strip() == official_prompt.strip(), f"Mismatch for source: {source}"
+            assert _strip_statistical_baseline(our_prompt).strip() == official_prompt.strip(), f"Mismatch for source: {source}"
 
 
 class TestMarketPromptParity:
