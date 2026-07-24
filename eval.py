@@ -689,6 +689,16 @@ def main() -> None:
         help="Use single-call multi-horizon forecasting for dataset questions (baseline agent only)",
     )
     parser.add_argument(
+        "--fit-calibration",
+        action="store_true",
+        help="Fit Platt scaling calibration from iteration-set forecasts and save params",
+    )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Apply saved Platt scaling calibration to forecasts before scoring",
+    )
+    parser.add_argument(
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
@@ -726,6 +736,34 @@ def main() -> None:
         multi_horizon=args.multi_horizon and args.agent == "baseline",
         async_multi_forecaster=aforecast_multi if args.agent == "baseline" else None,
     ))
+
+    if args.fit_calibration:
+        from calibrate import fit_calibration, save_calibration, calibration_path
+        sources = {q.id: q.source.lower() for q in eval_result.resolved}
+        outcomes = {q.id: q.outcome for q in eval_result.resolved}
+        params = fit_calibration(eval_result.forecasts, outcomes, sources)
+        cal_path = calibration_path(eval_result.model_slug)
+        save_calibration(params, cal_path)
+        logger.info("calibration_fitted", path=str(cal_path), n_sources=len(params) - 1)
+
+    if args.calibrate:
+        from calibrate import load_calibration, calibrate_forecasts, calibration_path
+        cal_path = calibration_path(eval_result.model_slug)
+        if cal_path.exists():
+            params = load_calibration(cal_path)
+            sources = {q.id: q.source.lower() for q in eval_result.resolved}
+            calibrated = calibrate_forecasts(eval_result.forecasts, sources, params)
+            cal_result = score_forecasts(
+                calibrated, eval_result.resolved,
+                difficulty_adjusted=not args.raw,
+            )
+            logger.info("calibrated_results",
+                        overall_index=round(cal_result.overall_index, 1),
+                        overall_brier=round(cal_result.overall_brier, 4))
+            _print_results(cal_result)
+        else:
+            logger.warning("calibration_not_found", path=str(cal_path),
+                           hint="Run with --fit-calibration first")
 
     if args.ci:
         from score import bootstrap_ci
