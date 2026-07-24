@@ -644,7 +644,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ForecastBench evaluation")
     parser.add_argument(
         "--agent",
-        choices=["dummy", "baseline", "ensemble"],
+        choices=["dummy", "baseline", "ensemble", "belief"],
         default="dummy",
         help="Forecaster agent to use (default: dummy)",
     )
@@ -732,6 +732,10 @@ def main() -> None:
         from ensemble import ensemble_forecast, ensemble_forecast_multi_horizon
         forecaster = ensemble_forecast
         async_multi_forecaster_fn = ensemble_forecast_multi_horizon
+    elif args.agent == "belief":
+        from belief_forecaster import belief_forecast, belief_forecast_multi_horizon
+        forecaster = belief_forecast  # type: ignore[assignment]
+        async_multi_forecaster_fn = belief_forecast_multi_horizon  # type: ignore[assignment]
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
@@ -739,7 +743,7 @@ def main() -> None:
     eval_result = asyncio.run(run_eval(
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
-        multi_horizon=args.multi_horizon and args.agent in ("baseline", "ensemble"),
+        multi_horizon=args.multi_horizon and args.agent in ("baseline", "ensemble", "belief"),
         async_multi_forecaster=async_multi_forecaster_fn,
     ))
 

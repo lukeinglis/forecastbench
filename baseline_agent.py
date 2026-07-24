@@ -20,9 +20,18 @@ logger = get_logger("baseline_agent")
 
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
+TIMESERIES_MODEL = os.getenv("FORECAST_TIMESERIES_MODEL", "")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "2000"))
+
+TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
+
+
+def _select_model(source: str | None) -> str:
+    if TIMESERIES_MODEL and source and source.lower() in TIMESERIES_SOURCES:
+        return TIMESERIES_MODEL
+    return MODEL
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -36,9 +45,10 @@ def _get_google_auth() -> tuple[Any, Any]:
     return google.auth, google.auth.transport.requests
 
 
-def _ensure_vertex_credentials() -> None:
+def _ensure_vertex_credentials(model: str | None = None) -> None:
     """Refresh Google ADC credentials if using Vertex AI and token is expired or near-expiry."""
-    if not MODEL.startswith("vertex_ai/"):
+    effective = model or MODEL
+    if not effective.startswith("vertex_ai/"):
         return
 
     global _vertex_credentials, _vertex_token_expiry
@@ -387,8 +397,10 @@ def forecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL)
-    _ensure_vertex_credentials()
+    effective_source = source or question.source
+    model = _select_model(effective_source)
+    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source)
+    _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -398,14 +410,14 @@ def forecast(
     )
     try:
         response = litellm.completion(
-            model=MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
             timeout=60,
         )
     except Exception:
-        logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
+        logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
@@ -417,10 +429,12 @@ def forecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
-    _ensure_vertex_credentials()
+    model = _select_model(question.source)
+    logger.info("forecast_multi_start", question_id=question.id, model=model, source=question.source)
+    _ensure_vertex_credentials(model)
     prompt = _build_dataset_prompt(question, resolution_dates)
     response = litellm.completion(
-        model=MODEL,
+        model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=TEMPERATURE,
         max_tokens=MAX_TOKENS,
@@ -437,8 +451,10 @@ async def aforecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL, async_mode=True)
-    _ensure_vertex_credentials()
+    effective_source = source or question.source
+    model = _select_model(effective_source)
+    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, async_mode=True)
+    _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -448,14 +464,14 @@ async def aforecast(
     )
     try:
         response = await litellm.acompletion(
-            model=MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
             timeout=60,
         )
     except Exception:
-        logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
+        logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
@@ -610,14 +626,17 @@ async def aforecast_multi_horizon(
     caller knows not to cache placeholder values.
     """
     n_horizons = len(resolution_dates)
+    effective_source = source or question.source
+    model = _select_model(effective_source)
     logger.info(
         "multi_horizon_start",
         question_id=question.id,
         n_horizons=n_horizons,
-        model=MODEL,
+        model=model,
+        source=effective_source,
     )
 
-    _ensure_vertex_credentials()
+    _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
         source=source,
@@ -627,7 +646,7 @@ async def aforecast_multi_horizon(
 
     try:
         response = await litellm.acompletion(
-            model=MODEL,
+            model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
@@ -637,7 +656,7 @@ async def aforecast_multi_horizon(
         logger.error(
             "multi_horizon_api_error",
             question_id=question.id,
-            model=MODEL,
+            model=model,
             exc_info=True,
         )
         return None
@@ -680,10 +699,12 @@ async def aforecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
-    _ensure_vertex_credentials()
+    model = _select_model(question.source)
+    logger.info("aforecast_multi_start", question_id=question.id, model=model, source=question.source)
+    _ensure_vertex_credentials(model)
     prompt = _build_dataset_prompt(question, resolution_dates)
     response = await litellm.acompletion(
-        model=MODEL,
+        model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=TEMPERATURE,
         max_tokens=MAX_TOKENS,
