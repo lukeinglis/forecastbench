@@ -1,12 +1,13 @@
 """Multi-model ensemble forecaster.
 
-Fans out forecasts to multiple LLMs in parallel and aggregates via simple mean.
-Event sources (acled, wikipedia) use only the primary model.
+Fans out forecasts to multiple LLMs in parallel and aggregates via log-odds
+extremization. Event sources (acled, wikipedia) use only the primary model.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from typing import Any
 
@@ -25,12 +26,23 @@ from logging_config import get_logger
 
 logger = get_logger("ensemble")
 
+EXTREMIZE_GAMMA = float(os.getenv("FORECAST_EXTREMIZE_GAMMA", "1.5"))
+
 ENSEMBLE_MODELS = os.getenv(
     "FORECAST_ENSEMBLE_MODELS",
     "vertex_ai/claude-sonnet-4@20250514,openai/gpt-4o",
 ).split(",")
 
 EVENT_SOURCES = frozenset(["acled", "wikipedia"])
+
+
+def _aggregate_forecasts(predictions: list[float], gamma: float = EXTREMIZE_GAMMA) -> float:
+    if len(predictions) == 1:
+        return predictions[0]
+    EPS = 1e-6
+    clamped = [max(EPS, min(1 - EPS, p)) for p in predictions]
+    mean_logit = sum(math.log(p / (1 - p)) for p in clamped) / len(clamped)
+    return 1.0 / (1.0 + math.exp(-gamma * mean_logit))
 
 
 async def _single_model_forecast(
@@ -97,7 +109,7 @@ async def ensemble_forecast(
     if not predictions:
         raise ValueError(f"All {len(models)} ensemble models failed for question {question.id}")
 
-    aggregate = sum(predictions) / len(predictions)
+    aggregate = _aggregate_forecasts(predictions)
     logger.info(
         "ensemble_complete",
         question_id=question.id,
@@ -175,7 +187,7 @@ async def ensemble_forecast_multi_horizon(
         return None
 
     aggregated = [
-        sum(model_probs[i] for model_probs in successful) / len(successful)
+        _aggregate_forecasts([model_probs[i] for model_probs in successful])
         for i in range(n_horizons)
     ]
     logger.info(
