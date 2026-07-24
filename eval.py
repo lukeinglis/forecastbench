@@ -644,7 +644,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ForecastBench evaluation")
     parser.add_argument(
         "--agent",
-        choices=["dummy", "baseline"],
+        choices=["dummy", "baseline", "decompose"],
         default="dummy",
         help="Forecaster agent to use (default: dummy)",
     )
@@ -716,15 +716,24 @@ def main() -> None:
     if args.agent == "baseline":
         from baseline_agent import aforecast, aforecast_multi
         forecaster: Forecaster = aforecast
+    elif args.agent == "decompose":
+        from decompose import decomposed_forecast, decomposed_forecast_multi_horizon
+        forecaster = decomposed_forecast
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
 
+    async_multi: MultiForecaster | None = None
+    if args.agent == "baseline":
+        async_multi = aforecast_multi
+    elif args.agent == "decompose":
+        async_multi = decomposed_forecast_multi_horizon
+
     eval_result = asyncio.run(run_eval(
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
-        multi_horizon=args.multi_horizon and args.agent == "baseline",
-        async_multi_forecaster=aforecast_multi if args.agent == "baseline" else None,
+        multi_horizon=args.multi_horizon and args.agent in ("baseline", "decompose"),
+        async_multi_forecaster=async_multi,
     ))
 
     if args.ci:
