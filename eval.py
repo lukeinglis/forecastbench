@@ -148,6 +148,7 @@ def save_result(
     question_sets_used: list[str],
     n_held_out: int,
     round_name: str | None = None,
+    sources: dict[str, str] | None = None,
 ) -> Path:
     """Save run result to results/{timestamp}_{model_slug}[_{round}].json."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -175,6 +176,7 @@ def save_result(
         },
         "forecasts": forecasts,
         "outcomes": outcomes,
+        "sources": sources,
         "metadata": metadata,
     }
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -315,10 +317,12 @@ async def run_eval(
     _print_results(result)
 
     outcomes = {q.id: q.outcome for q in expanded_resolved}
+    sources = {q.id: q.source.lower() for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
     result_path = save_result(
         result, forecasts, outcomes, model_slug,
         question_sets_used, n_held_out, round_name=round_name,
+        sources=sources,
     )
     logger.info("results_saved", path=str(result_path))
 
@@ -749,12 +753,27 @@ def main() -> None:
 
     if args.fit_calibration:
         from calibrate import fit_calibration, save_calibration, calibration_path
-        sources = {q.id: q.source.lower() for q in eval_result.resolved}
-        outcomes = {q.id: q.outcome for q in eval_result.resolved}
-        params = fit_calibration(eval_result.forecasts, outcomes, sources)
+        all_forecasts = dict(eval_result.forecasts)
+        all_outcomes: dict[str, int] = {q.id: q.outcome for q in eval_result.resolved}
+        all_sources: dict[str, str] = {q.id: q.source.lower() for q in eval_result.resolved}
+
+        previous = load_previous_results()
+        for prev in previous:
+            for qid, prob in prev.get("forecasts", {}).items():
+                if qid not in all_forecasts:
+                    all_forecasts[str(qid)] = float(prob)  # type: ignore[arg-type]
+            for qid, outcome in prev.get("outcomes", {}).items():
+                if qid not in all_outcomes:
+                    all_outcomes[str(qid)] = int(outcome)  # type: ignore[arg-type]
+            for qid, src in prev.get("sources", {}).items():
+                if qid not in all_sources:
+                    all_sources[str(qid)] = str(src)
+
+        params = fit_calibration(all_forecasts, all_outcomes, all_sources)
         cal_path = calibration_path(eval_result.model_slug)
         save_calibration(params, cal_path)
-        logger.info("calibration_fitted", path=str(cal_path), n_sources=len(params) - 1)
+        logger.info("calibration_fitted", path=str(cal_path), n_sources=len(params) - 1,
+                     n_samples=len(all_forecasts))
 
     if args.calibrate:
         from calibrate import load_calibration, calibrate_forecasts, calibration_path

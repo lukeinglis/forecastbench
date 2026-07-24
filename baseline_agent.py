@@ -29,12 +29,43 @@ TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "2000"))
 
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
+HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
 
 
 def _select_model(source: str | None) -> str:
     if TIMESERIES_MODEL and source and source.lower() in TIMESERIES_SOURCES:
         return TIMESERIES_MODEL
     return MODEL
+
+def _apply_horizon_dampening(
+    probabilities: list[float],
+    resolution_dates: list[str],
+    forecast_due_date: str,
+) -> list[float]:
+    """Regress probabilities toward 0.5 for distant resolution dates."""
+    from datetime import datetime
+
+    dampened: list[float] = []
+    try:
+        base = datetime.strptime(forecast_due_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return probabilities
+
+    for prob, date_str in zip(probabilities, resolution_dates):
+        try:
+            rd = datetime.strptime(date_str, "%Y-%m-%d")
+            days = (rd - base).days
+            if days <= 30:
+                factor = 1.0
+            elif days >= 365:
+                factor = 0.3
+            else:
+                factor = 1.0 - 0.7 * (days - 30) / (365 - 30)
+            dampened.append(0.5 + factor * (prob - 0.5))
+        except (ValueError, TypeError):
+            dampened.append(prob)
+    return dampened
+
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -676,6 +707,8 @@ async def aforecast_multi_horizon(
             method="regex",
         )
         _save_response_log(question.id, text, "regex_success", n_horizons)
+        if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
+            probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
         return probs
 
     logger.info("multi_horizon_regex_failed", question_id=question.id, trying="llm_extraction")
@@ -688,6 +721,8 @@ async def aforecast_multi_horizon(
             method="llm_extraction",
         )
         _save_response_log(question.id, text, "llm_success", n_horizons)
+        if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
+            probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
         return probs
 
     logger.warning(

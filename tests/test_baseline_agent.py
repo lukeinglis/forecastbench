@@ -10,6 +10,7 @@ import pytest
 
 from fetch_data import Question
 from baseline_agent import (
+    _apply_horizon_dampening,
     _build_prompt,
     _build_dataset_prompt,
     _parse_probability,
@@ -818,3 +819,52 @@ class TestVertexCredentialRefresh:
         finally:
             baseline_agent._vertex_token_expiry = old_expiry
             baseline_agent._vertex_credentials = old_creds
+
+
+class TestHorizonDampening:
+    def test_near_dates_unchanged(self) -> None:
+        probs = [0.8, 0.9]
+        dates = ["2024-07-10", "2024-07-20"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.8)
+        assert result[1] == pytest.approx(0.9)
+
+    def test_far_dates_regress_toward_half(self) -> None:
+        probs = [0.8, 0.8]
+        dates = ["2024-07-10", "2025-07-01"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.8)
+        assert result[1] == pytest.approx(0.5 + 0.3 * (0.8 - 0.5))
+
+    def test_exactly_365_days_uses_min_factor(self) -> None:
+        probs = [1.0]
+        dates = ["2025-07-01"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.5 + 0.3 * 0.5)
+
+    def test_midrange_interpolates(self) -> None:
+        probs = [0.8]
+        dates = ["2024-12-29"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        days = 181
+        factor = 1.0 - 0.7 * (days - 30) / (365 - 30)
+        assert result[0] == pytest.approx(0.5 + factor * 0.3)
+
+    def test_invalid_forecast_due_date_returns_original(self) -> None:
+        probs = [0.8]
+        dates = ["2024-07-10"]
+        result = _apply_horizon_dampening(probs, dates, "not-a-date")
+        assert result == probs
+
+    def test_invalid_resolution_date_keeps_original(self) -> None:
+        probs = [0.8, 0.9]
+        dates = ["bad-date", "2024-07-10"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == 0.8
+        assert result[1] == pytest.approx(0.9)
+
+    def test_prob_at_half_stays_at_half(self) -> None:
+        probs = [0.5]
+        dates = ["2025-07-01"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.5)
