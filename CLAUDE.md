@@ -13,7 +13,7 @@
 - `uv run python eval.py --agent dummy` to run dummy forecaster (default)
 - `uv run python eval.py --agent baseline` to run LLM baseline agent
 - `uv run python eval.py --agent baseline --raw` to run without difficulty adjustment
-- `uv run python eval.py --agent baseline --prompt default` to use zero-shot for dataset, freeze values for market (this is the default). Scratchpad available via `--prompt scratchpad` but not used by default.
+- `uv run python eval.py --agent baseline --prompt default` to use scratchpad for dataset, freeze values for market (this is the default).
 - `uv run python eval.py --agent baseline --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
 - `uv run python baseline_agent.py` to run baseline LLM agent (shortcut)
