@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -14,6 +15,7 @@ from baseline_agent import (
     _parse_probability,
     _parse_probabilities,
     MODEL,
+    TIMESERIES_SOURCES,
     TEMPERATURE,
     MAX_TOKENS,
 )
@@ -686,6 +688,65 @@ class TestModelConfig:
         importlib.reload(baseline_agent)
         assert baseline_agent.MAX_TOKENS == 4096
         importlib.reload(baseline_agent)
+
+
+class TestSelectModel:
+    def test_returns_default_model_when_timeseries_model_empty(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", ""):
+            from baseline_agent import _select_model
+            assert _select_model("fred") == MODEL
+
+    def test_returns_timeseries_model_for_fred(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("fred") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_returns_timeseries_model_for_dbnomics(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("dbnomics") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_returns_timeseries_model_for_yfinance(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("yfinance") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_returns_default_model_for_metaculus(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("metaculus") == MODEL
+
+    def test_returns_default_model_for_none_source(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model(None) == MODEL
+
+    def test_case_insensitive_source(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("FRED") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_timeseries_sources_contains_expected(self) -> None:
+        assert TIMESERIES_SOURCES == frozenset(["fred", "dbnomics", "yfinance"])
+
+    @patch.dict("os.environ", {"FORECAST_TIMESERIES_MODEL": "openai/gpt-4o"})
+    def test_env_var_is_read(self) -> None:
+        import importlib
+        import baseline_agent
+        importlib.reload(baseline_agent)
+        assert baseline_agent.TIMESERIES_MODEL == "openai/gpt-4o"
+        importlib.reload(baseline_agent)
+
+    @patch.dict("os.environ", {}, clear=False)
+    def test_env_var_defaults_to_empty(self) -> None:
+        import importlib
+        import baseline_agent
+        env = os.environ.copy()
+        env.pop("FORECAST_TIMESERIES_MODEL", None)
+        with patch.dict("os.environ", env, clear=True):
+            importlib.reload(baseline_agent)
+            assert baseline_agent.TIMESERIES_MODEL == ""
+            importlib.reload(baseline_agent)
 
 
 class TestVertexCredentialRefresh:
