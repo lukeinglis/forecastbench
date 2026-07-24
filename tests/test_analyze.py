@@ -9,9 +9,11 @@ import pytest
 
 from fetch_data import ResolvedQuestion
 from analyze import (
+    _lookup_forecast,
     analyze_by_source,
     analyze_calibration,
     analyze_biases,
+    analyze_decomposition,
     analyze_worst_questions,
     analyze_by_horizon,
     compare_paired,
@@ -247,6 +249,77 @@ class TestComparePaired:
         path_b.write_text(json.dumps(result_b))
         result = compare_paired(path_a, path_b)
         assert "error" in result
+
+
+class TestAnalyzeWithCompositeIds:
+    """Test that analysis functions handle composite dataset IDs like 'dq1_2026-07-12'."""
+
+    def test_lookup_direct_match(self) -> None:
+        forecasts = {"dq1_2026-07-12": 0.8}
+        assert _lookup_forecast(forecasts, "dq1_2026-07-12") == 0.8
+
+    def test_lookup_base_id_fallback(self) -> None:
+        forecasts = {"dq1": 0.7}
+        assert _lookup_forecast(forecasts, "dq1_2026-07-12") == 0.7
+
+    def test_lookup_missing_defaults_half(self) -> None:
+        assert _lookup_forecast({}, "dq1_2026-07-12") == 0.5
+
+    def test_lookup_no_false_split_on_natural_underscores(self) -> None:
+        forecasts = {"some_question": 0.9}
+        assert _lookup_forecast(forecasts, "some_question_name") == 0.5
+        assert _lookup_forecast(forecasts, "some_question") == 0.9
+
+    def test_by_source_composite_direct(self) -> None:
+        resolved = [
+            _rq("dq1_2026-07-12", "acled", 1),
+            _rq("dq2_2026-07-12", "acled", 0),
+        ]
+        forecasts = {"dq1_2026-07-12": 0.9, "dq2_2026-07-12": 0.1}
+        result = analyze_by_source(forecasts, resolved)
+        assert result["acled"]["count"] == 2
+        assert result["acled"]["brier"] == pytest.approx(0.01)
+
+    def test_by_source_base_id_fallback(self) -> None:
+        resolved = [
+            _rq("dq1_2026-07-12", "acled", 1),
+            _rq("dq1_2026-08-12", "acled", 0),
+        ]
+        forecasts = {"dq1": 0.9}
+        result = analyze_by_source(forecasts, resolved)
+        # dq1->1: (0.9-1)^2 = 0.01, dq1->0: (0.9-0)^2 = 0.81 => mean 0.41
+        assert result["acled"]["brier"] == pytest.approx(0.41)
+
+    def test_calibration_with_composite_ids(self) -> None:
+        resolved = [_rq("dq1_2026-07-12", "acled", 1)]
+        forecasts = {"dq1": 0.85}
+        bins = analyze_calibration(forecasts, resolved, n_bins=10)
+        assert len(bins) == 1
+        assert bins[0]["mean_predicted"] == pytest.approx(0.85)
+
+    def test_biases_with_composite_ids(self) -> None:
+        resolved = [_rq(f"dq{i}_2026-07-12", "acled", 1) for i in range(5)]
+        forecasts = {f"dq{i}": 0.2 for i in range(5)}
+        result = analyze_biases(forecasts, resolved)
+        assert result["mean_forecast"] == pytest.approx(0.2)
+        assert result["bias"] < 0
+
+    def test_decomposition_with_composite_ids(self) -> None:
+        resolved = [_rq(f"dq{i}_2026-07-12", "acled", i % 2) for i in range(10)]
+        forecasts = {f"dq{i}": 0.5 for i in range(10)}
+        result = analyze_decomposition(forecasts, resolved)
+        assert "murphy" in result
+        assert "calibration" in result
+
+    def test_market_questions_unaffected(self) -> None:
+        resolved = [
+            _rq("metaculus_12345", "metaculus", 1),
+            _rq("polymarket_abc", "polymarket", 0),
+        ]
+        forecasts = {"metaculus_12345": 0.9, "polymarket_abc": 0.1}
+        result = analyze_by_source(forecasts, resolved)
+        assert result["metaculus"]["brier"] == pytest.approx(0.01)
+        assert result["polymarket"]["brier"] == pytest.approx(0.01)
 
 
 class TestSaveAnalysis:

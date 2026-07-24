@@ -14,6 +14,22 @@ from score import brier_score, brier_index, murphy_decomposition
 
 logger = get_logger("analyze")
 
+_DATE_SUFFIX_RE = re.compile(r'_(\d{4}-\d{2}-\d{2})$')
+
+
+def _lookup_forecast(forecasts: dict[str, float], question_id: str) -> float:
+    """Look up forecast by ID, handling composite dataset IDs like 'dq1_2026-07-12'."""
+    prob = forecasts.get(question_id)
+    if prob is not None:
+        return prob
+    m = _DATE_SUFFIX_RE.search(question_id)
+    if m:
+        base_id = question_id[:m.start()]
+        prob = forecasts.get(base_id)
+        if prob is not None:
+            return prob
+    return 0.5
+
 
 def analyze_by_source(
     forecasts: dict[str, float],
@@ -21,7 +37,7 @@ def analyze_by_source(
 ) -> dict[str, dict[str, object]]:
     by_source: dict[str, list[tuple[float, int]]] = {}
     for q in resolved:
-        f = forecasts.get(q.id, 0.5)
+        f = _lookup_forecast(forecasts, q.id)
         by_source.setdefault(q.source, []).append((f, q.outcome))
 
     results: dict[str, dict[str, object]] = {}
@@ -40,7 +56,7 @@ def analyze_calibration(
     resolved: list[ResolvedQuestion],
     n_bins: int = 10,
 ) -> list[dict[str, object]]:
-    pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
+    pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
     if not pairs:
         return []
 
@@ -123,7 +139,7 @@ def analyze_biases(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
 ) -> dict[str, object]:
-    pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
+    pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
     if not pairs:
         return {"mean_forecast": 0.0, "mean_outcome": 0.0, "bias": 0.0, "low_bin": {}, "high_bin": {}}
 
@@ -161,7 +177,7 @@ def analyze_decomposition(
     n_bins: int = 10,
 ) -> dict[str, dict[str, float]]:
     """Run Murphy decomposition and calibration metrics on forecast/outcome pairs."""
-    pairs = [(forecasts.get(q.id, 0.5), q.outcome) for q in resolved]
+    pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
     if not pairs:
         return {"murphy": {}, "calibration": {}}
 
