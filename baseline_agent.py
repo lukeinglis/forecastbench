@@ -18,6 +18,9 @@ from logging_config import get_logger
 
 logger = get_logger("baseline_agent")
 
+litellm.vertex_project = os.getenv("VERTEX_PROJECT", "itpc-gcp-product-all-claude")
+litellm.vertex_location = os.getenv("VERTEX_LOCATION", "europe-west1")
+
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
 TIMESERIES_MODEL = os.getenv("FORECAST_TIMESERIES_MODEL", "")
