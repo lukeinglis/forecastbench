@@ -21,6 +21,8 @@ logger = get_logger("baseline_agent")
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
 MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
+TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
+MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "2000"))
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -392,7 +394,8 @@ def forecast(
         response = litellm.completion(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
             timeout=60,
         )
     except Exception:
@@ -413,7 +416,8 @@ def forecast_multi(
     response = litellm.completion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS,
         timeout=90,
     )
     text = response.choices[0].message.content or ""
@@ -440,7 +444,8 @@ async def aforecast(
         response = await litellm.acompletion(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
             timeout=60,
         )
     except Exception:
@@ -618,7 +623,8 @@ async def aforecast_multi_horizon(
         response = await litellm.acompletion(
             model=MODEL,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
             timeout=120,
         )
     except Exception:
@@ -673,7 +679,8 @@ async def aforecast_multi(
     response = await litellm.acompletion(
         model=MODEL,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,
+        temperature=TEMPERATURE,
+        max_tokens=MAX_TOKENS,
         timeout=90,
     )
     text = response.choices[0].message.content or ""

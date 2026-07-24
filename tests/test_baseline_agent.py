@@ -14,6 +14,8 @@ from baseline_agent import (
     _parse_probability,
     _parse_probabilities,
     MODEL,
+    TEMPERATURE,
+    MAX_TOKENS,
 )
 
 
@@ -501,7 +503,8 @@ class TestForecastSync:
 
         mock_litellm.completion.assert_called_once()
         call_kwargs = mock_litellm.completion.call_args
-        assert call_kwargs.kwargs["temperature"] == 0.3
+        assert call_kwargs.kwargs["temperature"] == 0
+        assert call_kwargs.kwargs["max_tokens"] == 2000
         assert call_kwargs.kwargs["timeout"] == 60
         assert result == pytest.approx(0.73)
 
@@ -658,6 +661,30 @@ class TestModelConfig:
 
         importlib.reload(baseline_agent)
         assert baseline_agent.MODEL == "gpt-4o"
+        importlib.reload(baseline_agent)
+
+    def test_default_temperature_is_zero(self) -> None:
+        assert TEMPERATURE == 0
+
+    def test_default_max_tokens_is_2000(self) -> None:
+        assert MAX_TOKENS == 2000
+
+    @patch.dict("os.environ", {"FORECAST_TEMPERATURE": "0.5"})
+    def test_temperature_configurable_via_env(self) -> None:
+        import importlib
+        import baseline_agent
+
+        importlib.reload(baseline_agent)
+        assert baseline_agent.TEMPERATURE == 0.5
+        importlib.reload(baseline_agent)
+
+    @patch.dict("os.environ", {"FORECAST_MAX_TOKENS": "4096"})
+    def test_max_tokens_configurable_via_env(self) -> None:
+        import importlib
+        import baseline_agent
+
+        importlib.reload(baseline_agent)
+        assert baseline_agent.MAX_TOKENS == 4096
         importlib.reload(baseline_agent)
 
 
