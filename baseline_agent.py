@@ -285,11 +285,12 @@ def _build_prompt(
             today_date=today_date,
             list_of_resolution_dates=dates_list,
         )
-        from statistical_baseline import get_statistical_context
+        if os.getenv("FORECAST_STATISTICAL_BASELINE", "").lower() in ("1", "true", "yes"):
+            from statistical_baseline import get_statistical_context
 
-        ctx = get_statistical_context(question)
-        if ctx:
-            prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+            ctx = get_statistical_context(question)
+            if ctx:
+                prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
         return prompt
 
     return ZERO_SHOT_MARKET_PROMPT.format(
