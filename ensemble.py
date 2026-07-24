@@ -115,27 +115,26 @@ async def _single_model_multi_horizon(
     question_id: str,
     n_horizons: int,
 ) -> list[float] | None:
-    if model.startswith("vertex_ai/"):
-        _ensure_vertex_credentials()
     try:
+        if model.startswith("vertex_ai/"):
+            _ensure_vertex_credentials()
         response = await litellm.acompletion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             timeout=120,
         )
-    except Exception:
-        logger.warning("ensemble_multi_horizon_api_error", model=model, question_id=question_id, exc_info=True)
-        return None
+        text = response.choices[0].message.content or ""
 
-    text = response.choices[0].message.content or ""
+        probs = _extract_probabilities(text, n_horizons)
+        if probs is not None:
+            return probs
 
-    probs = _extract_probabilities(text, n_horizons)
-    if probs is not None:
+        probs = await _extract_with_llm(text, n_horizons)
         return probs
-
-    probs = await _extract_with_llm(text, n_horizons)
-    return probs
+    except Exception:
+        logger.warning("ensemble_multi_horizon_error", model=model, question_id=question_id, exc_info=True)
+        return None
 
 
 async def ensemble_forecast_multi_horizon(

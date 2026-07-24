@@ -164,7 +164,7 @@ class TestEventSourceSingleModel:
              patch("ensemble.litellm") as mock_litellm, \
              patch("ensemble._ensure_vertex_credentials"):
             mock_litellm.acompletion = AsyncMock(return_value=resp)
-            result = asyncio.run(ensemble_forecast(q, source="acled"))
+            asyncio.run(ensemble_forecast(q, source="acled"))
 
         mock_litellm.acompletion.assert_called_once()
 
