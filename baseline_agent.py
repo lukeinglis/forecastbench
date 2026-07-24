@@ -262,7 +262,7 @@ def _build_prompt(
             dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
 
         formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
-        return ZERO_SHOT_DATASET_PROMPT.format(
+        prompt = ZERO_SHOT_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
@@ -272,6 +272,12 @@ def _build_prompt(
             today_date=today_date,
             list_of_resolution_dates=dates_list,
         )
+        from statistical_baseline import get_statistical_context
+
+        ctx = get_statistical_context(question)
+        if ctx:
+            prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+        return prompt
 
     return ZERO_SHOT_MARKET_PROMPT.format(
         question=question.question,
