@@ -1,31 +1,36 @@
-"""Source-specific calibration post-processing via isotonic regression.
+"""Calibration tools for forecast probabilities.
 
-Learns calibration curves from prior results and applies them as a
-post-processing step before scoring. Uses Pool Adjacent Violators
-Algorithm (PAVA) — pure Python, no scikit-learn dependency.
+Provides two approaches:
+1. Isotonic regression (PAVA) — learned from result files, applied per-source
+2. Hierarchical Platt scaling — fitted from forecasts+outcomes, saved/loaded as params
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
+
 from logging_config import get_logger
 
 logger = get_logger("calibrate")
 
 CALIBRATION_DIR = Path(".cache/calibration")
 MIN_DATA_POINTS = 20
+MIN_SAMPLES_FOR_SOURCE = 10
 
+
+# ---------------------------------------------------------------------------
+# Isotonic regression (PAVA) — used by eval.py _apply_calibration
+# ---------------------------------------------------------------------------
 
 def isotonic_regression(
     predictions: list[float], outcomes: list[float],
 ) -> list[tuple[float, float]]:
-    """Pool Adjacent Violators Algorithm (PAVA) for isotonic regression.
-
-    Input: parallel lists of (prediction, binary_outcome), need not be sorted.
-    Output: monotone non-decreasing breakpoints as (x, y) tuples.
-    """
+    """Pool Adjacent Violators Algorithm (PAVA) for isotonic regression."""
     if not predictions or not outcomes:
         return []
 
@@ -61,11 +66,7 @@ def calibrate(
     source: str,
     models: dict[str, list[tuple[float, float]]] | None = None,
 ) -> float:
-    """Apply calibration to a single forecast probability.
-
-    Loads model from disk if not provided. Returns input unchanged
-    if no model exists for the source (identity fallback).
-    """
+    """Apply isotonic calibration to a single forecast probability."""
     if models is not None:
         breakpoints = models.get(source)
     else:
@@ -79,7 +80,7 @@ def calibrate(
 
 
 def load_calibration_models() -> dict[str, list[tuple[float, float]]]:
-    """Load all calibration models from disk."""
+    """Load all isotonic calibration models from disk."""
     models: dict[str, list[tuple[float, float]]] = {}
     if not CALIBRATION_DIR.exists():
         return models
@@ -88,19 +89,16 @@ def load_calibration_models() -> dict[str, list[tuple[float, float]]]:
         source = path.stem
         try:
             data = json.loads(path.read_text())
-            breakpoints = [(float(x), float(y)) for x, y in data["breakpoints"]]
-            models[source] = breakpoints
+            if "breakpoints" in data:
+                breakpoints = [(float(x), float(y)) for x, y in data["breakpoints"]]
+                models[source] = breakpoints
         except (json.JSONDecodeError, KeyError, ValueError):
             logger.warning("calibration_load_failed", source=source)
     return models
 
 
 def learn(result_path: str) -> None:
-    """Learn calibration models from a result file.
-
-    Re-joins forecasts with questions to recover per-question source,
-    groups by source, fits isotonic regression per source.
-    """
+    """Learn isotonic calibration models from a result file."""
     from fetch_data import Resolution, load_data, join_resolved_questions
 
     data = json.loads(Path(result_path).read_text())
@@ -152,8 +150,8 @@ def learn(result_path: str) -> None:
         outs = [o for _, o in pairs]
         breakpoints = isotonic_regression(preds, outs)
 
-        calibrated = [_interpolate(p, breakpoints) for p in preds]
-        deltas = [c - p for c, p in zip(calibrated, preds)]
+        calibrated_vals = [_interpolate(p, breakpoints) for p in preds]
+        deltas = [c - p for c, p in zip(calibrated_vals, preds)]
         mean_shift = sum(deltas) / len(deltas) if deltas else 0.0
         max_shift = max(abs(d) for d in deltas) if deltas else 0.0
 
@@ -222,6 +220,142 @@ def _interpolate(x: float, breakpoints: list[tuple[float, float]]) -> float:
             return y0 + t * (y1 - y0)
 
     return breakpoints[-1][1]
+
+
+# ---------------------------------------------------------------------------
+# Platt scaling — used by eval.py --fit-calibration / --calibrate flags
+# ---------------------------------------------------------------------------
+
+def _logit(p: float) -> float:
+    EPS = 1e-6
+    p = max(EPS, min(1 - EPS, p))
+    return math.log(p / (1 - p))
+
+
+def _logistic(x: float) -> float:
+    if x > 500:
+        return 1.0
+    if x < -500:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-x))
+
+
+def platt_calibrate(probability: float, a: float = 1.0, b: float = 0.0) -> float:
+    """Apply Platt scaling: calibrated_p = logistic(a * logit(p) + b)."""
+    return _logistic(a * _logit(probability) + b)
+
+
+def _negative_log_likelihood(
+    ab: Any,
+    logits: Any,
+    outcomes: Any,
+) -> float:
+    import numpy as np
+    a, b = float(ab[0]), float(ab[1])
+    z = a * logits + b
+    z = np.clip(z, -500, 500)
+    p = 1.0 / (1.0 + np.exp(-z))
+    p = np.clip(p, 1e-15, 1 - 1e-15)
+    nll = -np.sum(outcomes * np.log(p) + (1 - outcomes) * np.log(1 - p))
+    return float(nll)
+
+
+def fit_platt(
+    forecasts: list[float],
+    outcomes: list[int],
+    prior_a: float = 1.0,
+    prior_b: float = 0.0,
+    regularization: float = 0.0,
+) -> tuple[float, float]:
+    """Fit Platt scaling parameters via maximum likelihood."""
+    import numpy as np
+    from scipy.optimize import minimize as sp_minimize
+
+    logits = np.array([_logit(p) for p in forecasts])
+    outs = np.array(outcomes)
+
+    def objective(ab: Any) -> float:
+        nll = _negative_log_likelihood(ab, logits, outs)
+        if regularization > 0:
+            reg = regularization * ((ab[0] - prior_a) ** 2 + (ab[1] - prior_b) ** 2)
+            return float(nll + reg)
+        return nll
+
+    result = sp_minimize(
+        objective,
+        x0=np.array([prior_a, prior_b]),
+        method="Nelder-Mead",
+        options={"maxiter": 1000, "xatol": 1e-8, "fatol": 1e-8},
+    )
+    return float(result.x[0]), float(result.x[1])
+
+
+def fit_calibration(
+    forecasts: dict[str, float],
+    outcomes: dict[str, int],
+    sources: dict[str, str],
+    min_samples: int = MIN_SAMPLES_FOR_SOURCE,
+) -> dict[str, dict[str, float]]:
+    """Fit per-source Platt scaling with hierarchical prior."""
+    by_source: dict[str, tuple[list[float], list[int]]] = defaultdict(lambda: ([], []))
+    all_f: list[float] = []
+    all_o: list[int] = []
+    for qid, prob in forecasts.items():
+        if qid not in outcomes:
+            continue
+        source = sources.get(qid, "unknown")
+        by_source[source][0].append(prob)
+        by_source[source][1].append(outcomes[qid])
+        all_f.append(prob)
+        all_o.append(outcomes[qid])
+
+    if not all_f:
+        return {}
+
+    global_a, global_b = fit_platt(all_f, all_o) if len(all_f) >= min_samples else (1.0, 0.0)
+
+    params: dict[str, dict[str, float]] = {"_global": {"a": global_a, "b": global_b}}
+    for source, (fs, os_) in by_source.items():
+        if len(fs) >= min_samples:
+            a, b = fit_platt(fs, os_)
+            params[source] = {"a": a, "b": b}
+        else:
+            a, b = fit_platt(
+                fs, os_,
+                prior_a=global_a, prior_b=global_b,
+                regularization=1.0,
+            )
+            params[source] = {"a": a, "b": b}
+
+    return params
+
+
+def save_calibration(params: dict[str, dict[str, float]], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(params, indent=2))
+
+
+def load_calibration(path: Path) -> dict[str, dict[str, float]]:
+    data = json.loads(path.read_text())
+    return {k: {"a": float(v["a"]), "b": float(v["b"])} for k, v in data.items()}
+
+
+def calibration_path(model_slug: str) -> Path:
+    return CALIBRATION_DIR / f"{model_slug}.json"
+
+
+def calibrate_forecasts(
+    forecasts: dict[str, float],
+    sources: dict[str, str],
+    params: dict[str, dict[str, float]],
+) -> dict[str, float]:
+    """Apply per-source Platt calibration to a dict of forecasts."""
+    result: dict[str, float] = {}
+    for qid, prob in forecasts.items():
+        src = sources.get(qid, "_global")
+        src_params = params.get(src, params.get("_global", {"a": 1.0, "b": 0.0}))
+        result[qid] = platt_calibrate(prob, src_params["a"], src_params["b"])
+    return result
 
 
 if __name__ == "__main__":

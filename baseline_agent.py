@@ -17,18 +17,84 @@ from fetch_data import MARKET_SOURCES, Question
 from logging_config import get_logger
 from timeseries_rag import FORECAST_RAG, fetch_historical_context
 
-TIMESERIES_SOURCES = {"fred", "dbnomics", "yfinance"}
-
 logger = get_logger("baseline_agent")
 
+litellm.vertex_project = os.getenv("VERTEX_PROJECT", "itpc-gcp-product-all-claude")
+litellm.vertex_location = os.getenv("VERTEX_LOCATION", "europe-west1")
+
 # Pinned to specific snapshot for benchmark reproducibility. Override via FORECAST_MODEL env var.
-MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4-6")
+MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
+TIMESERIES_MODEL = os.getenv("FORECAST_TIMESERIES_MODEL", "")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
+TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
+MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
 THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
-MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 ENSEMBLE_N = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
 ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
+
+TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
+HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
+TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "0.5"))
+BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "true").lower() in ("1", "true", "yes")
+
+_DEFAULT_BASE_RATES: dict[str, float] = {
+    "fred": 0.46,
+    "dbnomics": 0.78,
+    "yfinance": 0.43,
+}
+
+
+def _load_base_rates() -> dict[str, float]:
+    override = os.getenv("FORECAST_BASE_RATES")
+    if override:
+        return json.loads(override)
+    return _DEFAULT_BASE_RATES
+
+
+TIMESERIES_BASE_RATES: dict[str, float] = _load_base_rates()
+
+
+def _select_model(source: str | None) -> str:
+    if TIMESERIES_MODEL and source and source.lower() in TIMESERIES_SOURCES:
+        return TIMESERIES_MODEL
+    return MODEL
+
+def _apply_timeseries_dampening(prob: float, source: str) -> float:
+    """Shrink timeseries predictions toward 0.5 to reduce overconfidence."""
+    if source.lower() not in TIMESERIES_SOURCES:
+        return prob
+    return 0.5 + TIMESERIES_CONFIDENCE * (prob - 0.5)
+
+
+def _apply_horizon_dampening(
+    probabilities: list[float],
+    resolution_dates: list[str],
+    forecast_due_date: str,
+) -> list[float]:
+    """Regress probabilities toward 0.5 for distant resolution dates."""
+    from datetime import datetime
+
+    dampened: list[float] = []
+    try:
+        base = datetime.strptime(forecast_due_date, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        return probabilities
+
+    for prob, date_str in zip(probabilities, resolution_dates):
+        try:
+            rd = datetime.strptime(date_str, "%Y-%m-%d")
+            days = (rd - base).days
+            if days <= 30:
+                factor = 1.0
+            elif days >= 365:
+                factor = 0.3
+            else:
+                factor = 1.0 - 0.7 * (days - 30) / (365 - 30)
+            dampened.append(0.5 + factor * (prob - 0.5))
+        except (ValueError, TypeError):
+            dampened.append(prob)
+    return dampened
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -42,9 +108,10 @@ def _get_google_auth() -> tuple[Any, Any]:
     return google.auth, google.auth.transport.requests
 
 
-def _ensure_vertex_credentials() -> None:
+def _ensure_vertex_credentials(model: str | None = None) -> None:
     """Refresh Google ADC credentials if using Vertex AI and token is expired or near-expiry."""
-    if not MODEL.startswith("vertex_ai/"):
+    effective = model or MODEL
+    if not effective.startswith("vertex_ai/"):
         return
 
     global _vertex_credentials, _vertex_token_expiry
@@ -411,7 +478,7 @@ def _build_prompt(
 
     if resolution_date is not None:
         formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
-        return SINGLE_DATE_DATASET_PROMPT.format(
+        prompt = SINGLE_DATE_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
@@ -421,6 +488,26 @@ def _build_prompt(
             today_date=today_date,
             target_resolution_date=resolution_date,
         )
+        if BASE_RATE_HINT:
+            base_rate = TIMESERIES_BASE_RATES.get(effective_source.lower())
+            if base_rate is not None:
+                base_rate_text = (
+                    f'Historical context: Questions of this type from this data source '
+                    f'have historically resolved to YES approximately {base_rate:.0%} of the time. '
+                    f'This base rate should inform your starting estimate, with adjustments '
+                    f'based on the specific details of this question.\n\n'
+                )
+                prompt = prompt.replace(
+                    'Output your answer',
+                    base_rate_text + 'Output your answer',
+                )
+        if os.getenv("FORECAST_STATISTICAL_BASELINE", "").lower() in ("1", "true", "yes"):
+            from statistical_baseline import get_statistical_context
+
+            ctx = get_statistical_context(question)
+            if ctx:
+                prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+        return prompt
 
     effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
     dates_list: list[str] = []
@@ -430,7 +517,7 @@ def _build_prompt(
     formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
 
     if prompt_variant in ("zero-shot", "zero-shot-fv", "dataset"):
-        return ZERO_SHOT_DATASET_PROMPT.format(
+        prompt = ZERO_SHOT_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
@@ -440,6 +527,26 @@ def _build_prompt(
             today_date=today_date,
             list_of_resolution_dates=dates_list,
         )
+        if BASE_RATE_HINT:
+            base_rate = TIMESERIES_BASE_RATES.get(effective_source.lower())
+            if base_rate is not None:
+                base_rate_text = (
+                    f'Historical context: Questions of this type from this data source '
+                    f'have historically resolved to YES approximately {base_rate:.0%} of the time. '
+                    f'This base rate should inform your starting estimate, with adjustments '
+                    f'based on the specific details of this question.\n\n'
+                )
+                prompt = prompt.replace(
+                    'Output your answer',
+                    base_rate_text + 'Output your answer',
+                )
+        if os.getenv("FORECAST_STATISTICAL_BASELINE", "").lower() in ("1", "true", "yes"):
+            from statistical_baseline import get_statistical_context
+
+            ctx = get_statistical_context(question)
+            if ctx:
+                prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+        return prompt
 
     if effective_source.lower() in TIMESERIES_SOURCES:
         return ZERO_SHOT_DATASET_PROMPT.format(
@@ -654,9 +761,10 @@ def forecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info("forecast_start", question_id=question.id, model=MODEL, prompt_variant=prompt_variant)
-    _ensure_vertex_credentials()
     effective_source = source or question.source
+    model = _select_model(effective_source)
+    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, prompt_variant=prompt_variant)
+    _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -691,9 +799,11 @@ def forecast(
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        response = litellm.completion(**_forecast_kwargs(messages, source=effective_source))
+        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs["model"] = model
+        response = litellm.completion(**kwargs)
     except Exception:
-        logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
+        logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
@@ -705,10 +815,14 @@ def forecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
-    _ensure_vertex_credentials()
+    model = _select_model(question.source)
+    logger.info("forecast_multi_start", question_id=question.id, model=model, source=question.source)
+    _ensure_vertex_credentials(model)
     prompt = _build_dataset_prompt(question, resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    response = litellm.completion(**_forecast_kwargs(messages, source=question.source))
+    kwargs = _forecast_kwargs(messages, source=question.source)
+    kwargs["model"] = model
+    response = litellm.completion(**kwargs)
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
@@ -720,15 +834,10 @@ async def aforecast(
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
 ) -> float:
-    logger.info(
-        "forecast_start",
-        question_id=question.id,
-        model=MODEL,
-        prompt_variant=prompt_variant,
-        async_mode=True,
-    )
-    _ensure_vertex_credentials()
     effective_source = source or question.source
+    model = _select_model(effective_source)
+    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, prompt_variant=prompt_variant, async_mode=True)
+    _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
         resolution_date=resolution_date,
@@ -752,13 +861,16 @@ async def aforecast(
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        response = await litellm.acompletion(**_forecast_kwargs(messages, source=effective_source))
+        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs["model"] = model
+        response = await litellm.acompletion(**kwargs)
     except Exception:
-        logger.error("forecast_api_error", question_id=question.id, model=MODEL, exc_info=True)
+        logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
-    logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
+    prob = _apply_timeseries_dampening(prob, effective_source)
+    logger.info("forecast_complete", question_id=question.id, probability=prob)
     return prob
 
 
@@ -909,15 +1021,17 @@ async def aforecast_multi_horizon(
     caller knows not to cache placeholder values.
     """
     n_horizons = len(resolution_dates)
+    effective_source = source or question.source
+    model = _select_model(effective_source)
     logger.info(
         "multi_horizon_start",
         question_id=question.id,
         n_horizons=n_horizons,
-        model=MODEL,
+        model=model,
+        source=effective_source,
     )
 
-    effective_source = source or question.source
-    _ensure_vertex_credentials()
+    _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
         source=source,
@@ -942,12 +1056,14 @@ async def aforecast_multi_horizon(
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        response = await litellm.acompletion(**_forecast_kwargs(messages, source=effective_source))
+        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs["model"] = model
+        response = await litellm.acompletion(**kwargs)
     except Exception:
         logger.error(
             "multi_horizon_api_error",
             question_id=question.id,
-            model=MODEL,
+            model=model,
             exc_info=True,
         )
         return None
@@ -963,6 +1079,9 @@ async def aforecast_multi_horizon(
             method="regex",
         )
         _save_response_log(question.id, text, "regex_success", n_horizons)
+        if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
+            probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
+        probs = [_apply_timeseries_dampening(p, effective_source) for p in probs]
         return probs
 
     logger.info("multi_horizon_regex_failed", question_id=question.id, trying="llm_extraction")
@@ -975,6 +1094,9 @@ async def aforecast_multi_horizon(
             method="llm_extraction",
         )
         _save_response_log(question.id, text, "llm_success", n_horizons)
+        if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
+            probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
+        probs = [_apply_timeseries_dampening(p, effective_source) for p in probs]
         return probs
 
     logger.warning(
@@ -990,10 +1112,14 @@ async def aforecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
-    _ensure_vertex_credentials()
+    model = _select_model(question.source)
+    logger.info("aforecast_multi_start", question_id=question.id, model=model, source=question.source)
+    _ensure_vertex_credentials(model)
     prompt = _build_dataset_prompt(question, resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    response = await litellm.acompletion(**_forecast_kwargs(messages, source=question.source))
+    kwargs = _forecast_kwargs(messages, source=question.source)
+    kwargs["model"] = model
+    response = await litellm.acompletion(**kwargs)
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 

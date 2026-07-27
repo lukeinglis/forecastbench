@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -9,11 +10,16 @@ import pytest
 
 from fetch_data import Question
 from baseline_agent import (
+    _apply_horizon_dampening,
+    _apply_timeseries_dampening,
     _build_prompt,
     _build_dataset_prompt,
     _parse_probability,
     _parse_probabilities,
     MODEL,
+    TIMESERIES_SOURCES,
+    TEMPERATURE,
+    MAX_TOKENS,
 )
 
 
@@ -650,7 +656,8 @@ class TestForecastAsync:
         )
         result = await aforecast(q, prompt_variant="dataset", source="fred")
 
-        assert result == pytest.approx(0.42)
+        # 0.42 dampened: 0.5 + 0.5 * (0.42 - 0.5) = 0.46
+        assert result == pytest.approx(0.46)
 
 
 class TestMarketInfoResolutionCriteria:
@@ -724,6 +731,89 @@ class TestModelConfig:
         assert baseline_agent.MODEL == "gpt-4o"
         importlib.reload(baseline_agent)
 
+    def test_default_temperature_is_zero(self) -> None:
+        assert TEMPERATURE == 0
+
+    def test_default_max_tokens_is_16384(self) -> None:
+        assert MAX_TOKENS == 16384
+
+    @patch.dict("os.environ", {"FORECAST_TEMPERATURE": "0.5"})
+    def test_temperature_configurable_via_env(self) -> None:
+        import importlib
+        import baseline_agent
+
+        importlib.reload(baseline_agent)
+        assert baseline_agent.TEMPERATURE == 0.5
+        importlib.reload(baseline_agent)
+
+    @patch.dict("os.environ", {"FORECAST_MAX_TOKENS": "4096"})
+    def test_max_tokens_configurable_via_env(self) -> None:
+        import importlib
+        import baseline_agent
+
+        importlib.reload(baseline_agent)
+        assert baseline_agent.MAX_TOKENS == 4096
+        importlib.reload(baseline_agent)
+
+
+class TestSelectModel:
+    def test_returns_default_model_when_timeseries_model_empty(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", ""):
+            from baseline_agent import _select_model
+            assert _select_model("fred") == MODEL
+
+    def test_returns_timeseries_model_for_fred(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("fred") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_returns_timeseries_model_for_dbnomics(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("dbnomics") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_returns_timeseries_model_for_yfinance(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("yfinance") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_returns_default_model_for_metaculus(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("metaculus") == MODEL
+
+    def test_returns_default_model_for_none_source(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model(None) == MODEL
+
+    def test_case_insensitive_source(self) -> None:
+        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from baseline_agent import _select_model
+            assert _select_model("FRED") == "vertex_ai/claude-opus-4-8@20250915"
+
+    def test_timeseries_sources_contains_expected(self) -> None:
+        assert TIMESERIES_SOURCES == frozenset(["fred", "dbnomics", "yfinance"])
+
+    @patch.dict("os.environ", {"FORECAST_TIMESERIES_MODEL": "openai/gpt-4o"})
+    def test_env_var_is_read(self) -> None:
+        import importlib
+        import baseline_agent
+        importlib.reload(baseline_agent)
+        assert baseline_agent.TIMESERIES_MODEL == "openai/gpt-4o"
+        importlib.reload(baseline_agent)
+
+    @patch.dict("os.environ", {}, clear=False)
+    def test_env_var_defaults_to_empty(self) -> None:
+        import importlib
+        import baseline_agent
+        env = os.environ.copy()
+        env.pop("FORECAST_TIMESERIES_MODEL", None)
+        with patch.dict("os.environ", env, clear=True):
+            importlib.reload(baseline_agent)
+            assert baseline_agent.TIMESERIES_MODEL == ""
+            importlib.reload(baseline_agent)
+
 
 class TestVertexCredentialRefresh:
     def test_skips_refresh_when_token_valid(self) -> None:
@@ -794,6 +884,169 @@ class TestVertexCredentialRefresh:
         finally:
             baseline_agent._vertex_token_expiry = old_expiry
             baseline_agent._vertex_credentials = old_creds
+
+
+class TestHorizonDampening:
+    def test_near_dates_unchanged(self) -> None:
+        probs = [0.8, 0.9]
+        dates = ["2024-07-10", "2024-07-20"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.8)
+        assert result[1] == pytest.approx(0.9)
+
+    def test_far_dates_regress_toward_half(self) -> None:
+        probs = [0.8, 0.8]
+        dates = ["2024-07-10", "2025-07-01"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.8)
+        assert result[1] == pytest.approx(0.5 + 0.3 * (0.8 - 0.5))
+
+    def test_exactly_365_days_uses_min_factor(self) -> None:
+        probs = [1.0]
+        dates = ["2025-07-01"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.5 + 0.3 * 0.5)
+
+    def test_midrange_interpolates(self) -> None:
+        probs = [0.8]
+        dates = ["2024-12-29"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        days = 181
+        factor = 1.0 - 0.7 * (days - 30) / (365 - 30)
+        assert result[0] == pytest.approx(0.5 + factor * 0.3)
+
+    def test_invalid_forecast_due_date_returns_original(self) -> None:
+        probs = [0.8]
+        dates = ["2024-07-10"]
+        result = _apply_horizon_dampening(probs, dates, "not-a-date")
+        assert result == probs
+
+    def test_invalid_resolution_date_keeps_original(self) -> None:
+        probs = [0.8, 0.9]
+        dates = ["bad-date", "2024-07-10"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == 0.8
+        assert result[1] == pytest.approx(0.9)
+
+    def test_prob_at_half_stays_at_half(self) -> None:
+        probs = [0.5]
+        dates = ["2025-07-01"]
+        result = _apply_horizon_dampening(probs, dates, "2024-07-01")
+        assert result[0] == pytest.approx(0.5)
+
+
+class TestTimeseriesDampening:
+    def test_half_confidence_shrinks_toward_half(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+            assert _apply_timeseries_dampening(0.8, "fred") == pytest.approx(0.65)
+            assert _apply_timeseries_dampening(0.2, "fred") == pytest.approx(0.35)
+
+    def test_zero_confidence_always_returns_half(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.0):
+            assert _apply_timeseries_dampening(0.8, "fred") == pytest.approx(0.5)
+            assert _apply_timeseries_dampening(0.1, "dbnomics") == pytest.approx(0.5)
+
+    def test_full_confidence_no_change(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 1.0):
+            assert _apply_timeseries_dampening(0.8, "yfinance") == pytest.approx(0.8)
+            assert _apply_timeseries_dampening(0.2, "fred") == pytest.approx(0.2)
+
+    def test_non_timeseries_source_unchanged(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.0):
+            assert _apply_timeseries_dampening(0.8, "metaculus") == pytest.approx(0.8)
+            assert _apply_timeseries_dampening(0.2, "polymarket") == pytest.approx(0.2)
+
+    def test_case_insensitive(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+            assert _apply_timeseries_dampening(0.8, "FRED") == pytest.approx(0.65)
+            assert _apply_timeseries_dampening(0.8, "YFinance") == pytest.approx(0.65)
+
+    def test_half_stays_at_half(self) -> None:
+        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+            assert _apply_timeseries_dampening(0.5, "fred") == pytest.approx(0.5)
+
+
+class TestBaseRateHint:
+    def test_fred_prompt_contains_base_rate(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="fred")
+        assert "46%" in prompt
+        assert "Historical context" in prompt
+
+    def test_dbnomics_shows_correct_percentage(self) -> None:
+        q = _make_question(
+            source="dbnomics",
+            freeze="2024-06-15",
+            freeze_datetime_value=100.0,
+            freeze_datetime_value_explanation="Index value",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="dbnomics")
+        assert "78%" in prompt
+
+    def test_yfinance_shows_correct_percentage(self) -> None:
+        q = _make_question(
+            source="yfinance",
+            freeze="2024-06-15",
+            freeze_datetime_value=150.0,
+            freeze_datetime_value_explanation="Stock price",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="yfinance")
+        assert "43%" in prompt
+
+    def test_market_source_has_no_base_rate(self) -> None:
+        q = _make_question(source="metaculus")
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="metaculus")
+        assert "Historical context" not in prompt
+
+    def test_disabled_by_env_var(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", False):
+            prompt = _build_prompt(q, source="fred")
+        assert "Historical context" not in prompt
+
+    def test_non_timeseries_dataset_source_has_no_base_rate(self) -> None:
+        q = _make_question(
+            source="acled",
+            freeze="2024-06-15",
+            freeze_datetime_value=50.0,
+            freeze_datetime_value_explanation="Count",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="acled")
+        assert "Historical context" not in prompt
+
+    def test_base_rate_inserted_before_output_instruction(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="fred")
+        hist_idx = prompt.index("Historical context")
+        output_idx = prompt.index("Output your answer")
+        assert hist_idx < output_idx
 
 
 class TestForecastParityParams:

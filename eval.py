@@ -149,6 +149,7 @@ def save_result(
     question_sets_used: list[str],
     n_held_out: int,
     round_name: str | None = None,
+    sources: dict[str, str] | None = None,
     prefix: str = "",
 ) -> Path:
     """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
@@ -177,6 +178,7 @@ def save_result(
         },
         "forecasts": forecasts,
         "outcomes": outcomes,
+        "sources": sources,
         "metadata": metadata,
     }
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -376,18 +378,20 @@ async def run_eval(
     _print_results(result)
 
     outcomes = {q.id: q.outcome for q in expanded_resolved}
+    sources = {q.id: q.source.lower() for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
-
     if submit_mode:
         result_path = save_result(
             result, forecasts, outcomes, model_slug,
             question_sets_used, n_held_out, round_name=round_name,
+            sources=sources,
             prefix="submit_",
         )
     else:
         result_path = save_result(
             result, forecasts, outcomes, model_slug,
             question_sets_used, n_held_out, round_name=round_name,
+            sources=sources,
         )
     logger.info("results_saved", path=str(result_path))
 
@@ -713,7 +717,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ForecastBench evaluation")
     parser.add_argument(
         "--agent",
-        choices=["dummy", "baseline"],
+        choices=["dummy", "baseline", "ensemble", "belief", "hybrid"],
         default="dummy",
         help="Forecaster agent to use (default: dummy)",
     )
@@ -768,6 +772,16 @@ def main() -> None:
         help="Disable multi-horizon batching; forecast each resolution date separately",
     )
     parser.add_argument(
+        "--fit-calibration",
+        action="store_true",
+        help="Fit Platt scaling calibration from iteration-set forecasts and save params",
+    )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Apply saved Platt scaling calibration to forecasts before scoring",
+    )
+    parser.add_argument(
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
@@ -777,12 +791,6 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Forecast all questions (including unresolved) for submission coverage",
-    )
-    parser.add_argument(
-        "--calibrate",
-        action="store_true",
-        default=False,
-        help="Apply source-specific calibration post-processing before scoring",
     )
     args = parser.parse_args()
 
@@ -804,9 +812,23 @@ def main() -> None:
     if args.round:
         round_name = _normalize_round_name(args.round)
 
+    async_multi_forecaster_fn: MultiForecaster | None = None
     if args.agent == "baseline":
         from baseline_agent import aforecast, aforecast_multi
         forecaster: Forecaster = aforecast
+        async_multi_forecaster_fn = aforecast_multi
+    elif args.agent == "ensemble":
+        from ensemble import ensemble_forecast, ensemble_forecast_multi_horizon
+        forecaster = ensemble_forecast
+        async_multi_forecaster_fn = ensemble_forecast_multi_horizon
+    elif args.agent == "belief":
+        from belief_forecaster import belief_forecast, belief_forecast_multi_horizon
+        forecaster = belief_forecast  # type: ignore[assignment]
+        async_multi_forecaster_fn = belief_forecast_multi_horizon  # type: ignore[assignment]
+    elif args.agent == "hybrid":
+        from hybrid_forecaster import hybrid_forecast, hybrid_forecast_multi_horizon
+        forecaster = hybrid_forecast  # type: ignore[assignment]
+        async_multi_forecaster_fn = hybrid_forecast_multi_horizon  # type: ignore[assignment]
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
@@ -814,11 +836,54 @@ def main() -> None:
     eval_result = asyncio.run(run_eval(
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
-        multi_horizon=args.multi_horizon and args.agent == "baseline",
-        async_multi_forecaster=aforecast_multi if args.agent == "baseline" else None,
+        multi_horizon=args.multi_horizon and args.agent in ("baseline", "ensemble", "belief", "hybrid"),
+        async_multi_forecaster=async_multi_forecaster_fn,
         submit_mode=args.submit,
         calibrate_forecasts=args.calibrate,
     ))
+
+    if args.fit_calibration:
+        from calibrate import fit_calibration, save_calibration, calibration_path
+        all_forecasts = dict(eval_result.forecasts)
+        all_outcomes: dict[str, int] = {q.id: q.outcome for q in eval_result.resolved}
+        all_sources: dict[str, str] = {q.id: q.source.lower() for q in eval_result.resolved}
+
+        previous = load_previous_results()
+        for prev in previous:
+            for qid, prob in prev.get("forecasts", {}).items():
+                if qid not in all_forecasts:
+                    all_forecasts[str(qid)] = float(prob)  # type: ignore[arg-type]
+            for qid, outcome in prev.get("outcomes", {}).items():
+                if qid not in all_outcomes:
+                    all_outcomes[str(qid)] = int(outcome)  # type: ignore[arg-type]
+            for qid, src in prev.get("sources", {}).items():
+                if qid not in all_sources:
+                    all_sources[str(qid)] = str(src)
+
+        params = fit_calibration(all_forecasts, all_outcomes, all_sources)
+        cal_path = calibration_path(eval_result.model_slug)
+        save_calibration(params, cal_path)
+        logger.info("calibration_fitted", path=str(cal_path), n_sources=len(params) - 1,
+                     n_samples=len(all_forecasts))
+
+    if args.calibrate:
+        from calibrate import load_calibration, calibrate_forecasts, calibration_path
+        cal_path = calibration_path(eval_result.model_slug)
+        if cal_path.exists():
+            params = load_calibration(cal_path)
+            sources = {q.id: q.source.lower() for q in eval_result.resolved}
+            calibrated = calibrate_forecasts(eval_result.forecasts, sources, params)
+            cal_result = score_forecasts(
+                calibrated, eval_result.resolved,
+                difficulty_adjusted=not args.raw,
+            )
+            logger.info("calibrated_results",
+                        overall_index=round(cal_result.overall_index, 1),
+                        overall_brier=round(cal_result.overall_brier, 4))
+            _print_results(cal_result)
+        else:
+            logger.warning("calibration_not_found", path=str(cal_path),
+                           hint="Run with --fit-calibration first")
 
     if args.ci:
         from score import bootstrap_ci
