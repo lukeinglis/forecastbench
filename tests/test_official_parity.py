@@ -33,9 +33,22 @@ _STAT_BASELINE_RE = re.compile(
     r"Use your judgment to adjust\.\n",
 )
 
+_BASE_RATE_RE = re.compile(
+    r"Historical context: Questions of this type from this data source "
+    r"have historically resolved to YES approximately \d+% of the time\. "
+    r"This base rate should inform your starting estimate, with adjustments "
+    r"based on the specific details of this question\.\n\n",
+)
+
+
+def _strip_enhancements(prompt: str) -> str:
+    prompt = _STAT_BASELINE_RE.sub("", prompt)
+    prompt = _BASE_RATE_RE.sub("", prompt)
+    return prompt
+
 
 def _strip_statistical_baseline(prompt: str) -> str:
-    return _STAT_BASELINE_RE.sub("", prompt)
+    return _strip_enhancements(prompt)
 
 
 # ---------------------------------------------------------------------------

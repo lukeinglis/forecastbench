@@ -31,6 +31,23 @@ MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "2000"))
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
 TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "0.5"))
+BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "true").lower() in ("1", "true", "yes")
+
+_DEFAULT_BASE_RATES: dict[str, float] = {
+    "fred": 0.46,
+    "dbnomics": 0.78,
+    "yfinance": 0.43,
+}
+
+
+def _load_base_rates() -> dict[str, float]:
+    override = os.getenv("FORECAST_BASE_RATES")
+    if override:
+        return json.loads(override)
+    return _DEFAULT_BASE_RATES
+
+
+TIMESERIES_BASE_RATES: dict[str, float] = _load_base_rates()
 
 
 def _select_model(source: str | None) -> str:
@@ -324,6 +341,19 @@ def _build_prompt(
             today_date=today_date,
             list_of_resolution_dates=dates_list,
         )
+        if BASE_RATE_HINT:
+            base_rate = TIMESERIES_BASE_RATES.get(effective_source.lower())
+            if base_rate is not None:
+                base_rate_text = (
+                    f'Historical context: Questions of this type from this data source '
+                    f'have historically resolved to YES approximately {base_rate:.0%} of the time. '
+                    f'This base rate should inform your starting estimate, with adjustments '
+                    f'based on the specific details of this question.\n\n'
+                )
+                prompt = prompt.replace(
+                    'Output your answer',
+                    base_rate_text + 'Output your answer',
+                )
         if os.getenv("FORECAST_STATISTICAL_BASELINE", "").lower() in ("1", "true", "yes"):
             from statistical_baseline import get_statistical_context
 

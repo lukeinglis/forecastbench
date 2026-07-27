@@ -17,6 +17,7 @@ from baseline_agent import (
     _parse_probability,
     _parse_probabilities,
     MODEL,
+    TIMESERIES_BASE_RATES,
     TIMESERIES_SOURCES,
     TEMPERATURE,
     MAX_TOKENS,
@@ -901,3 +902,86 @@ class TestTimeseriesDampening:
     def test_half_stays_at_half(self) -> None:
         with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
             assert _apply_timeseries_dampening(0.5, "fred") == pytest.approx(0.5)
+
+
+class TestBaseRateHint:
+    def test_fred_prompt_contains_base_rate(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="fred")
+        assert "46%" in prompt
+        assert "Historical context" in prompt
+
+    def test_dbnomics_shows_correct_percentage(self) -> None:
+        q = _make_question(
+            source="dbnomics",
+            freeze="2024-06-15",
+            freeze_datetime_value=100.0,
+            freeze_datetime_value_explanation="Index value",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="dbnomics")
+        assert "78%" in prompt
+
+    def test_yfinance_shows_correct_percentage(self) -> None:
+        q = _make_question(
+            source="yfinance",
+            freeze="2024-06-15",
+            freeze_datetime_value=150.0,
+            freeze_datetime_value_explanation="Stock price",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="yfinance")
+        assert "43%" in prompt
+
+    def test_market_source_has_no_base_rate(self) -> None:
+        q = _make_question(source="metaculus")
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="metaculus")
+        assert "Historical context" not in prompt
+
+    def test_disabled_by_env_var(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", False):
+            prompt = _build_prompt(q, source="fred")
+        assert "Historical context" not in prompt
+
+    def test_non_timeseries_dataset_source_has_no_base_rate(self) -> None:
+        q = _make_question(
+            source="acled",
+            freeze="2024-06-15",
+            freeze_datetime_value=50.0,
+            freeze_datetime_value_explanation="Count",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="acled")
+        assert "Historical context" not in prompt
+
+    def test_base_rate_inserted_before_output_instruction(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.BASE_RATE_HINT", True):
+            prompt = _build_prompt(q, source="fred")
+        hist_idx = prompt.index("Historical context")
+        output_idx = prompt.index("Output your answer")
+        assert hist_idx < output_idx
