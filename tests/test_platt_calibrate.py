@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from calibrate import (
-    calibrate,
+    platt_calibrate as calibrate,
     calibrate_forecasts,
     fit_calibration,
     fit_platt,

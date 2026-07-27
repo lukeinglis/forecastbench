@@ -7,11 +7,10 @@ Tests Platt scaling, base-rate replacement, isotonic regression, and hybrids.
 from __future__ import annotations
 
 import json
-import math
 from collections import defaultdict
 from pathlib import Path
 
-from calibrate import calibrate, fit_calibration, fit_platt
+from calibrate import platt_calibrate as calibrate, fit_calibration
 from score import brier_index, brier_score
 
 RESULTS_DIR = Path("results")

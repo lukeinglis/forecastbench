@@ -478,7 +478,7 @@ def _build_prompt(
 
     if resolution_date is not None:
         formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
-        prompt = ZERO_SHOT_DATASET_PROMPT.format(
+        prompt = SINGLE_DATE_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
@@ -486,7 +486,7 @@ def _build_prompt(
             freeze_datetime_value=fv if fv is not None else "",
             freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
             today_date=today_date,
-            list_of_resolution_dates=resolution_date,
+            target_resolution_date=resolution_date,
         )
         if BASE_RATE_HINT:
             base_rate = TIMESERIES_BASE_RATES.get(effective_source.lower())

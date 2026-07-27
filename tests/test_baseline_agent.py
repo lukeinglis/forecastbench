@@ -17,7 +17,6 @@ from baseline_agent import (
     _parse_probability,
     _parse_probabilities,
     MODEL,
-    TIMESERIES_BASE_RATES,
     TIMESERIES_SOURCES,
     TEMPERATURE,
     MAX_TOKENS,
@@ -735,8 +734,8 @@ class TestModelConfig:
     def test_default_temperature_is_zero(self) -> None:
         assert TEMPERATURE == 0
 
-    def test_default_max_tokens_is_2000(self) -> None:
-        assert MAX_TOKENS == 2000
+    def test_default_max_tokens_is_16384(self) -> None:
+        assert MAX_TOKENS == 16384
 
     @patch.dict("os.environ", {"FORECAST_TEMPERATURE": "0.5"})
     def test_temperature_configurable_via_env(self) -> None:
