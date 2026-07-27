@@ -16,6 +16,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
+from calibrate import calibrate, load_calibration_models  # noqa: E402
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
@@ -110,7 +111,7 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
 
 
 def _model_slug() -> str:
-    raw = os.getenv("FORECAST_MODEL", "default")
+    raw = os.getenv("FORECAST_MODEL", "unknown")
     return re.sub(r"[^\w\-.]", "_", raw)
 
 
@@ -149,8 +150,9 @@ def save_result(
     n_held_out: int,
     round_name: str | None = None,
     sources: dict[str, str] | None = None,
+    prefix: str = "",
 ) -> Path:
-    """Save run result to results/{timestamp}_{model_slug}[_{round}].json."""
+    """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     metadata: dict[str, object] = {
         "n_questions": result.n_dataset + result.n_market,
@@ -182,9 +184,9 @@ def save_result(
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if round_name is not None:
         safe_round = re.sub(r"[^\w\-.]", "_", round_name)
-        path = RESULTS_DIR / f"{timestamp}_{model_slug}_{safe_round}.json"
+        path = RESULTS_DIR / f"{prefix}{timestamp}_{model_slug}_{safe_round}.json"
     else:
-        path = RESULTS_DIR / f"{timestamp}_{model_slug}.json"
+        path = RESULTS_DIR / f"{prefix}{timestamp}_{model_slug}.json"
     path.write_text(json.dumps(payload, indent=2))
     return path
 
@@ -248,15 +250,63 @@ def _build_question(q: Question | ResolvedQuestion, forecast_due_date: str | Non
     )
 
 
+def _apply_calibration(
+    forecasts: dict[str, float],
+    questions: list[Question],
+) -> dict[str, float]:
+    """Apply source-specific calibration post-processing to forecasts."""
+    models = load_calibration_models()
+    if not models:
+        logger.info("calibration_no_models")
+        return forecasts
+
+    source_map: dict[str, str] = {}
+    for q in questions:
+        source_map[q.id] = q.source
+
+    composite_re = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})$")
+    calibrated = dict(forecasts)
+    n_calibrated = 0
+    n_uncalibrated = 0
+    source_deltas: dict[str, list[float]] = {}
+
+    for qid, prob in forecasts.items():
+        source = source_map.get(qid)
+        if source is None:
+            m = composite_re.match(qid)
+            if m:
+                source = source_map.get(m.group(1))
+        if source is None or source not in models:
+            n_uncalibrated += 1
+            continue
+
+        new_prob = calibrate(prob, source, models)
+        delta = new_prob - prob
+        calibrated[qid] = new_prob
+        n_calibrated += 1
+        source_deltas.setdefault(source, []).append(delta)
+
+    for source, deltas in sorted(source_deltas.items()):
+        mean_delta = sum(deltas) / len(deltas)
+        logger.info("calibration_applied", source=source, n=len(deltas),
+                     mean_delta=round(mean_delta, 4))
+
+    logger.info("calibration_summary", n_calibrated=n_calibrated,
+                 n_uncalibrated=n_uncalibrated)
+    return calibrated
+
+
 async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
     raw: bool = False,
     round_name: str | None = None,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_horizon: bool = False,
     multi_forecaster: MultiForecaster | None = None,
     async_multi_forecaster: MultiForecaster | None = None,
+    submit_mode: bool = False,
+    calibrate_forecasts: bool = False,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -284,13 +334,24 @@ async def run_eval(
              for q_id, r in resolutions_by_id.items()},
         )
 
-    questions = [_build_question(q) for q in iteration_resolved]
+    if submit_mode:
+        all_questions: list[Question] = []
+        for qs in iteration_set:
+            for q in qs.questions:
+                all_questions.append(_build_question(q, forecast_due_date=qs.forecast_due_date))
+        questions = all_questions
+        logger.info("submit_mode_enabled", n_all=len(questions), n_resolved=len(iteration_resolved))
+    else:
+        questions = [_build_question(q) for q in iteration_resolved]
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
         forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
     else:
         forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
+
+    if calibrate_forecasts:
+        forecasts = _apply_calibration(forecasts, questions)
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
 
@@ -319,11 +380,19 @@ async def run_eval(
     outcomes = {q.id: q.outcome for q in expanded_resolved}
     sources = {q.id: q.source.lower() for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
-    result_path = save_result(
-        result, forecasts, outcomes, model_slug,
-        question_sets_used, n_held_out, round_name=round_name,
-        sources=sources,
-    )
+    if submit_mode:
+        result_path = save_result(
+            result, forecasts, outcomes, model_slug,
+            question_sets_used, n_held_out, round_name=round_name,
+            sources=sources,
+            prefix="submit_",
+        )
+    else:
+        result_path = save_result(
+            result, forecasts, outcomes, model_slug,
+            question_sets_used, n_held_out, round_name=round_name,
+            sources=sources,
+        )
     logger.info("results_saved", path=str(result_path))
 
     return EvalResult(scoring=result, forecasts=forecasts, resolved=expanded_resolved, model_slug=model_slug)
@@ -333,7 +402,7 @@ def _run_sync(
     forecaster: SyncForecaster,
     questions: list[Question],
     model_slug: str,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
@@ -409,7 +478,7 @@ async def _run_async(
     forecaster: AsyncForecaster,
     questions: list[Question],
     model_slug: str,
-    prompt_variant: str = "zero-shot",
+    prompt_variant: str = "default",
     multi_horizon: bool = False,
     async_multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
@@ -664,9 +733,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--prompt",
-        choices=["zero-shot", "zero-shot-fv"],
-        default="zero-shot",
-        help="Market prompt variant: zero-shot (default), zero-shot-fv (with freeze values). Dataset questions auto-route to the dataset prompt.",
+        choices=["default", "zero-shot", "zero-shot-fv", "zero-shot-no-fv", "dataset"],
+        default="default",
+        help="Prompt variant: default (scratchpad for dataset, freeze values for market), "
+             "zero-shot (original prompts), zero-shot-fv (freeze values for market, same as default), "
+             "zero-shot-no-fv (force no freeze values for market), "
+             "dataset (force dataset prompt for all questions).",
     )
     parser.add_argument(
         "--leaderboard",
@@ -689,8 +761,15 @@ def main() -> None:
     parser.add_argument(
         "--multi-horizon",
         action="store_true",
-        default=False,
-        help="Use single-call multi-horizon forecasting for dataset questions (baseline agent only)",
+        dest="multi_horizon",
+        default=True,
+        help="Use single-call multi-horizon forecasting for dataset questions (default: enabled)",
+    )
+    parser.add_argument(
+        "--per-date",
+        action="store_false",
+        dest="multi_horizon",
+        help="Disable multi-horizon batching; forecast each resolution date separately",
     )
     parser.add_argument(
         "--fit-calibration",
@@ -706,6 +785,12 @@ def main() -> None:
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
+    )
+    parser.add_argument(
+        "--submit",
+        action="store_true",
+        default=False,
+        help="Forecast all questions (including unresolved) for submission coverage",
     )
     args = parser.parse_args()
 
@@ -753,6 +838,8 @@ def main() -> None:
         prompt_variant=args.prompt,
         multi_horizon=args.multi_horizon and args.agent in ("baseline", "ensemble", "belief", "hybrid"),
         async_multi_forecaster=async_multi_forecaster_fn,
+        submit_mode=args.submit,
+        calibrate_forecasts=args.calibrate,
     ))
 
     if args.fit_calibration:

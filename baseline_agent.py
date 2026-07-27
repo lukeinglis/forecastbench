@@ -15,6 +15,7 @@ import litellm
 
 from fetch_data import MARKET_SOURCES, Question
 from logging_config import get_logger
+from timeseries_rag import FORECAST_RAG, fetch_historical_context
 
 logger = get_logger("baseline_agent")
 
@@ -26,7 +27,11 @@ MODEL = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
 TIMESERIES_MODEL = os.getenv("FORECAST_TIMESERIES_MODEL", "")
 EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
-MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "2000"))
+MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
+VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
+THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
+ENSEMBLE_N = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
+ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
 
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
@@ -91,7 +96,6 @@ def _apply_horizon_dampening(
             dampened.append(prob)
     return dampened
 
-
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
 _vertex_credentials: Any = None
@@ -134,6 +138,61 @@ def _ensure_vertex_credentials(model: str | None = None) -> None:
             logger.debug("vertex_credentials_refreshed")
         except Exception:
             logger.warning("vertex_credentials_refresh_failed", exc_info=True)
+
+class LiteLLMAdapter:
+    """Adapter bridging its_hub's AbstractLanguageModel to litellm."""
+
+    def __init__(self, model: str, max_tokens: int, vertex_location: str) -> None:
+        self.model = model
+        self.max_tokens = max_tokens
+        self.vertex_location = vertex_location
+
+    async def agenerate_single(
+        self,
+        messages: list[dict[str, Any]],
+        stop: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, str]:
+        _ensure_vertex_credentials()
+        call_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages if isinstance(messages, list) else list(messages),
+            "max_tokens": self.max_tokens,
+            "vertex_location": self.vertex_location,
+        }
+        if "temperature" in kwargs:
+            call_kwargs["temperature"] = kwargs["temperature"]
+        else:
+            call_kwargs["temperature"] = ENSEMBLE_TEMP
+        if stop:
+            call_kwargs["stop"] = stop
+        call_kwargs["timeout"] = 180
+        response = await litellm.acompletion(**call_kwargs)
+        return {"role": "assistant", "content": response.choices[0].message.content or ""}
+
+
+def _forecast_kwargs(
+    messages: list[dict[str, str]],
+    timeout: int = 180,
+    source: str | None = None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": MODEL,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "timeout": timeout,
+        "vertex_location": VERTEX_LOCATION,
+    }
+    is_timeseries = source and source.lower() in TIMESERIES_SOURCES
+    is_market = source and source.lower() in MARKET_SOURCES
+    if is_timeseries or is_market:
+        kwargs["temperature"] = 0.3
+    elif THINKING_ENABLED:
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
+    else:
+        kwargs["temperature"] = 0.3
+    return kwargs
+
 
 RESPONSE_LOG_DIR = Path(".cache/response_logs")
 
@@ -262,6 +321,76 @@ Output your answer (a number between 0 and 1) with an asterisk at the beginning 
 Do not output anything else.
 Answer: {{ Insert answer here }}"""
 
+SINGLE_DATE_DATASET_PROMPT = """\
+You are an expert superforecaster, familiar with the work of Tetlock and others. \
+Make a prediction of the probability that the question will be resolved as true. \
+You MUST give a probability estimate between 0 and 1 UNDER ALL CIRCUMSTANCES. \
+If for some reason you can't answer, pick the base rate, but return a number between 0 and 1.
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution date: {target_resolution_date}
+
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal.
+Do not output anything else.
+Answer: {{ Insert answer here }}"""
+
+SCRATCHPAD_DATASET_PROMPT = """\
+You are an expert superforecaster, familiar with the work of Tetlock and others. \
+Make a prediction of the probability that the question will be resolved as true. \
+You MUST give a probability estimate between 0 and 1 UNDER ALL CIRCUMSTANCES. \
+If for some reason you can't answer, pick the base rate, but return a number between 0 and 1.
+
+You're going to predict the probability of the following potential outcome "at each of the resolution dates".
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution dates: {list_of_resolution_dates}
+
+Before giving your final probabilities, work through these reasoning steps:
+
+Reasoning:
+1. What is the current value and what does it represent?
+2. What would need to happen for the outcome at each resolution date?
+3. What historical patterns or trends are relevant?
+4. What is your base rate estimate?
+5. How should you adjust from the base rate given current context?
+
+Final Probabilities:
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. \
+(For example, if there are n resolution dates, you would output different *p* for each resolution date) \
+Do not output anything else after the probabilities."""
+
 DATASET_PROMPT_TEMPLATE = """You are an expert superforecaster, familiar with the research on forecasting. Your goal is to predict the probability of the resolution of the question at each of the resolution dates.
 
 Today's Date: {today_date}
@@ -313,24 +442,81 @@ def _build_prompt(
     fv = getattr(question, "freeze_datetime_value", None)
     fd = question.freeze_datetime or ""
 
-    if prompt_variant == "zero-shot-fv" and is_market and fv is not None and fd:
-        return ZERO_SHOT_MARKET_WITH_FREEZE_VALUE_PROMPT.format(
+    if fv is None and FORECAST_RAG and effective_source.lower() in TIMESERIES_SOURCES:
+        rag_context = fetch_historical_context(question)
+        if rag_context:
+            fv = rag_context
+            if not fd:
+                fd = getattr(question, "forecast_due_date", None) or ""
+
+    if is_market:
+        if prompt_variant == "zero-shot-no-fv":
+            return ZERO_SHOT_MARKET_PROMPT.format(
+                question=question.question,
+                background=background,
+                resolution_criteria=question.resolution_criteria or "",
+                today_date=today_date,
+                resolution_date=effective_resolution_date or "",
+            )
+        if fv is not None and fd:
+            return ZERO_SHOT_MARKET_WITH_FREEZE_VALUE_PROMPT.format(
+                question=question.question,
+                background=background,
+                resolution_criteria=question.resolution_criteria or "",
+                freeze_datetime=fd,
+                freeze_datetime_value=fv,
+                today_date=today_date,
+                resolution_date=effective_resolution_date or "",
+            )
+        return ZERO_SHOT_MARKET_PROMPT.format(
             question=question.question,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
-            freeze_datetime=fd,
-            freeze_datetime_value=fv,
             today_date=today_date,
             resolution_date=effective_resolution_date or "",
         )
 
-    if not is_market:
-        effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
-        dates_list: list[str] = []
-        if effective_rd and isinstance(effective_rd, list):
-            dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
-
+    if resolution_date is not None:
         formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
+        prompt = ZERO_SHOT_DATASET_PROMPT.format(
+            question=formatted_q,
+            background=background,
+            resolution_criteria=question.resolution_criteria or "",
+            freeze_datetime=fd,
+            freeze_datetime_value=fv if fv is not None else "",
+            freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
+            today_date=today_date,
+            list_of_resolution_dates=resolution_date,
+        )
+        if BASE_RATE_HINT:
+            base_rate = TIMESERIES_BASE_RATES.get(effective_source.lower())
+            if base_rate is not None:
+                base_rate_text = (
+                    f'Historical context: Questions of this type from this data source '
+                    f'have historically resolved to YES approximately {base_rate:.0%} of the time. '
+                    f'This base rate should inform your starting estimate, with adjustments '
+                    f'based on the specific details of this question.\n\n'
+                )
+                prompt = prompt.replace(
+                    'Output your answer',
+                    base_rate_text + 'Output your answer',
+                )
+        if os.getenv("FORECAST_STATISTICAL_BASELINE", "").lower() in ("1", "true", "yes"):
+            from statistical_baseline import get_statistical_context
+
+            ctx = get_statistical_context(question)
+            if ctx:
+                prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+        return prompt
+
+    effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
+    dates_list: list[str] = []
+    if effective_rd and isinstance(effective_rd, list):
+        dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
+
+    formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
+
+    if prompt_variant in ("zero-shot", "zero-shot-fv", "dataset"):
         prompt = ZERO_SHOT_DATASET_PROMPT.format(
             question=formatted_q,
             background=background,
@@ -362,12 +548,27 @@ def _build_prompt(
                 prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
         return prompt
 
-    return ZERO_SHOT_MARKET_PROMPT.format(
-        question=question.question,
+    if effective_source.lower() in TIMESERIES_SOURCES:
+        return ZERO_SHOT_DATASET_PROMPT.format(
+            question=formatted_q,
+            background=background,
+            resolution_criteria=question.resolution_criteria or "",
+            freeze_datetime=fd,
+            freeze_datetime_value=fv if fv is not None else "",
+            freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
+            today_date=today_date,
+            list_of_resolution_dates=dates_list,
+        )
+
+    return SCRATCHPAD_DATASET_PROMPT.format(
+        question=formatted_q,
         background=background,
         resolution_criteria=question.resolution_criteria or "",
+        freeze_datetime=fd,
+        freeze_datetime_value=fv if fv is not None else "",
+        freeze_datetime_value_explanation=getattr(question, "freeze_datetime_value_explanation", None) or "",
         today_date=today_date,
-        resolution_date=effective_resolution_date or "",
+        list_of_resolution_dates=dates_list,
     )
 
 
@@ -395,6 +596,11 @@ def _build_dataset_prompt(
         freeze_value_section = f"Current value on {question.freeze_datetime}: {question.freeze_datetime_value}\n"
         if question.freeze_datetime_value_explanation:
             freeze_value_section += f"Value Explanation: {question.freeze_datetime_value_explanation}\n"
+    elif FORECAST_RAG and question.source.lower() in TIMESERIES_SOURCES:
+        rag_context = fetch_historical_context(question)
+        if rag_context:
+            fd = question.freeze_datetime or getattr(question, "forecast_due_date", None) or ""
+            freeze_value_section = f"Current value on {fd}:\n{rag_context}\n"
 
     list_of_resolution_dates = ", ".join(resolution_dates)
 
@@ -463,6 +669,91 @@ def _parse_probability(text: str) -> float:
     raise ValueError(f"Could not parse probability from response: {text[:100]}")
 
 
+async def _ensemble_forecast(prompt: str, source: str | None = None) -> float | None:
+    """Generate N responses via its_hub LMOrchestrator and average probabilities."""
+    from its_hub.api.types import ChatMessages
+    from its_hub.core.orchestrator import LMOrchestrator
+
+    lm = LiteLLMAdapter(MODEL, MAX_TOKENS, VERTEX_LOCATION)
+    orchestrator = LMOrchestrator(max_concurrency=ENSEMBLE_N)
+
+    messages = [{"role": "user", "content": prompt}]
+    chat_messages = ChatMessages(messages)
+    batch = chat_messages.to_batch(ENSEMBLE_N)
+
+    logger.info("ensemble_start", ensemble_n=ENSEMBLE_N, ensemble_temp=ENSEMBLE_TEMP)
+
+    responses = await orchestrator.agenerate(lm, batch, temperature=ENSEMBLE_TEMP)
+
+    probabilities: list[float] = []
+    for i, resp in enumerate(responses):
+        try:
+            content = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+            prob = _parse_probability(content)
+            probabilities.append(prob)
+            logger.debug("ensemble_member_result", member=i, probability=prob)
+        except (ValueError, Exception):
+            logger.warning("ensemble_member_failed", member=i)
+
+    if not probabilities:
+        return None
+
+    mean_prob = sum(probabilities) / len(probabilities)
+    std = (
+        (sum((p - mean_prob) ** 2 for p in probabilities) / len(probabilities)) ** 0.5
+        if len(probabilities) > 1
+        else 0.0
+    )
+    logger.info(
+        "ensemble_aggregated", probabilities=probabilities, mean=mean_prob, std=std,
+    )
+    return mean_prob
+
+
+async def _ensemble_forecast_multi_horizon(
+    prompt: str, n_horizons: int, question_id: str, source: str | None = None,
+) -> list[float] | None:
+    """Generate N multi-horizon responses and average per-horizon probabilities."""
+    from its_hub.api.types import ChatMessages
+    from its_hub.core.orchestrator import LMOrchestrator
+
+    lm = LiteLLMAdapter(MODEL, MAX_TOKENS, VERTEX_LOCATION)
+    orchestrator = LMOrchestrator(max_concurrency=ENSEMBLE_N)
+
+    messages = [{"role": "user", "content": prompt}]
+    chat_messages = ChatMessages(messages)
+    batch = chat_messages.to_batch(ENSEMBLE_N)
+
+    logger.info(
+        "ensemble_multi_horizon_start",
+        question_id=question_id,
+        ensemble_n=ENSEMBLE_N,
+        n_horizons=n_horizons,
+    )
+
+    responses = await orchestrator.agenerate(lm, batch, temperature=ENSEMBLE_TEMP)
+
+    all_probs: list[list[float]] = []
+    for i, resp in enumerate(responses):
+        content = resp.get("content", "") if isinstance(resp, dict) else str(resp)
+        probs = _extract_probabilities(content, n_horizons)
+        if probs is not None:
+            all_probs.append(probs)
+            logger.debug("ensemble_multi_member_result", member=i, probabilities=probs)
+        else:
+            logger.warning("ensemble_multi_member_failed", member=i)
+
+    if not all_probs:
+        return None
+
+    averaged = [
+        sum(member[h] for member in all_probs) / len(all_probs)
+        for h in range(n_horizons)
+    ]
+    logger.info("ensemble_multi_aggregated", n_members=len(all_probs), averaged=averaged)
+    return averaged
+
+
 def forecast(
     question: Question,
     resolution_date: str | None = None,
@@ -472,7 +763,7 @@ def forecast(
 ) -> float:
     effective_source = source or question.source
     model = _select_model(effective_source)
-    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source)
+    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, prompt_variant=prompt_variant)
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
@@ -481,20 +772,42 @@ def forecast(
         resolution_dates=resolution_dates,
         prompt_variant=prompt_variant,
     )
+
+    if ENSEMBLE_N > 1:
+        messages = [{"role": "user", "content": prompt}]
+        ensemble_kwargs: dict[str, Any] = {
+            "model": MODEL,
+            "messages": messages,
+            "max_tokens": MAX_TOKENS,
+            "vertex_location": VERTEX_LOCATION,
+            "temperature": ENSEMBLE_TEMP,
+            "timeout": 180,
+        }
+        probabilities: list[float] = []
+        for i in range(ENSEMBLE_N):
+            try:
+                resp = litellm.completion(**ensemble_kwargs)
+                text = resp.choices[0].message.content or ""
+                prob = _parse_probability(text)
+                probabilities.append(prob)
+            except Exception:
+                logger.warning("sync_ensemble_member_failed", member=i)
+        if probabilities:
+            mean_prob = sum(probabilities) / len(probabilities)
+            logger.info("sync_ensemble_aggregated", probabilities=probabilities, mean=mean_prob)
+            return mean_prob
+
     try:
-        response = litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            timeout=60,
-        )
+        messages = [{"role": "user", "content": prompt}]
+        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs["model"] = model
+        response = litellm.completion(**kwargs)
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
-    logger.info("forecast_complete", question_id=question.id, probability=prob)
+    logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
     return prob
 
 
@@ -506,13 +819,10 @@ def forecast_multi(
     logger.info("forecast_multi_start", question_id=question.id, model=model, source=question.source)
     _ensure_vertex_credentials(model)
     prompt = _build_dataset_prompt(question, resolution_dates)
-    response = litellm.completion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=TEMPERATURE,
-        max_tokens=MAX_TOKENS,
-        timeout=90,
-    )
+    messages = [{"role": "user", "content": prompt}]
+    kwargs = _forecast_kwargs(messages, source=question.source)
+    kwargs["model"] = model
+    response = litellm.completion(**kwargs)
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
@@ -526,7 +836,7 @@ async def aforecast(
 ) -> float:
     effective_source = source or question.source
     model = _select_model(effective_source)
-    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, async_mode=True)
+    logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, prompt_variant=prompt_variant, async_mode=True)
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(
         question,
@@ -535,14 +845,25 @@ async def aforecast(
         resolution_dates=resolution_dates,
         prompt_variant=prompt_variant,
     )
+
+    if ENSEMBLE_N > 1:
+        result = await _ensemble_forecast(prompt, source=effective_source)
+        if result is not None:
+            logger.info(
+                "forecast_complete",
+                question_id=question.id,
+                forecast_value=result,
+                parse_success=True,
+                ensemble=True,
+            )
+            return result
+        logger.warning("ensemble_fallback_to_single", question_id=question.id)
+
     try:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            timeout=60,
-        )
+        messages = [{"role": "user", "content": prompt}]
+        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs["model"] = model
+        response = await litellm.acompletion(**kwargs)
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
@@ -553,7 +874,7 @@ async def aforecast(
     return prob
 
 
-def _clamp(v: float) -> float:
+def _to_float(v: float) -> float:
     return float(v)
 
 
@@ -577,11 +898,11 @@ def _parse_probs_from_text(text: str, n_expected: int) -> list[float] | None:
     """Extract probabilities from a focused text block (e.g. Answer section)."""
     asterisks = _ASTERISK_RE.findall(text)
     if len(asterisks) == n_expected:
-        return [_clamp(float(m)) for m in asterisks]
+        return [_to_float(float(m)) for m in asterisks]
     decimals = _DECIMAL_RE.findall(text)
     valid = [float(d) for d in decimals if 0 <= float(d) <= 1]
     if len(valid) == n_expected:
-        return [_clamp(v) for v in valid]
+        return [_to_float(v) for v in valid]
     return None
 
 
@@ -596,9 +917,9 @@ def _tokenize_and_extract(text: str, n_expected: int) -> list[float] | None:
         if 0 <= val <= 1:
             probabilities.append(val)
     if len(probabilities) == n_expected:
-        return [_clamp(p) for p in probabilities]
+        return [_to_float(p) for p in probabilities]
     if len(probabilities) > n_expected:
-        return [_clamp(p) for p in probabilities[-n_expected:]]
+        return [_to_float(p) for p in probabilities[-n_expected:]]
     return None
 
 
@@ -606,9 +927,9 @@ def _asterisk_extract(text: str, n_expected: int) -> list[float] | None:
     """Find asterisk-wrapped probabilities in the full text."""
     matches = _ASTERISK_RE.findall(text)
     if len(matches) == n_expected:
-        return [_clamp(float(m)) for m in matches]
+        return [_to_float(float(m)) for m in matches]
     if len(matches) > n_expected:
-        return [_clamp(float(m)) for m in matches[-n_expected:]]
+        return [_to_float(float(m)) for m in matches[-n_expected:]]
     return None
 
 
@@ -617,9 +938,9 @@ def _decimal_extract(text: str, n_expected: int) -> list[float] | None:
     all_decimals = _DECIMAL_RE.findall(text)
     valid = [float(d) for d in all_decimals if 0 <= float(d) <= 1]
     if len(valid) == n_expected:
-        return [_clamp(v) for v in valid]
+        return [_to_float(v) for v in valid]
     if len(valid) > n_expected:
-        return [_clamp(v) for v in valid[-n_expected:]]
+        return [_to_float(v) for v in valid[-n_expected:]]
     return None
 
 
@@ -718,14 +1039,26 @@ async def aforecast_multi_horizon(
         prompt_variant=prompt_variant,
     )
 
-    try:
-        response = await litellm.acompletion(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=TEMPERATURE,
-            max_tokens=MAX_TOKENS,
-            timeout=120,
+    if ENSEMBLE_N > 1:
+        ensemble_probs = await _ensemble_forecast_multi_horizon(
+            prompt, n_horizons, question.id, source=effective_source,
         )
+        if ensemble_probs is not None:
+            logger.info(
+                "multi_horizon_complete",
+                question_id=question.id,
+                n_horizons=n_horizons,
+                method="ensemble",
+            )
+            _save_response_log(question.id, str(ensemble_probs), "ensemble_success", n_horizons)
+            return ensemble_probs
+        logger.warning("ensemble_multi_fallback_to_single", question_id=question.id)
+
+    try:
+        messages = [{"role": "user", "content": prompt}]
+        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs["model"] = model
+        response = await litellm.acompletion(**kwargs)
     except Exception:
         logger.error(
             "multi_horizon_api_error",
@@ -783,13 +1116,10 @@ async def aforecast_multi(
     logger.info("aforecast_multi_start", question_id=question.id, model=model, source=question.source)
     _ensure_vertex_credentials(model)
     prompt = _build_dataset_prompt(question, resolution_dates)
-    response = await litellm.acompletion(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=TEMPERATURE,
-        max_tokens=MAX_TOKENS,
-        timeout=90,
-    )
+    messages = [{"role": "user", "content": prompt}]
+    kwargs = _forecast_kwargs(messages, source=question.source)
+    kwargs["model"] = model
+    response = await litellm.acompletion(**kwargs)
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
