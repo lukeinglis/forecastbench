@@ -133,6 +133,111 @@ class TestSaveLoadRoundtrip:
         assert abs(loaded["src"]["b"] - (-0.987654321)) < 1e-9
 
 
+class TestPerHorizonCalibration:
+    def test_fit_produces_per_horizon_keys(self) -> None:
+        """fit_calibration with horizon_indices produces keys like 'src_h1'."""
+        forecasts = {}
+        outcomes = {}
+        sources = {}
+        horizon_indices = {}
+        for i in range(30):
+            qid = f"q_h1_{i}"
+            forecasts[qid] = 0.7 if i < 15 else 0.3
+            outcomes[qid] = 1 if i < 15 else 0
+            sources[qid] = "fred"
+            horizon_indices[qid] = 1
+        for i in range(30):
+            qid = f"q_h2_{i}"
+            forecasts[qid] = 0.6 if i < 18 else 0.4
+            outcomes[qid] = 1 if i < 18 else 0
+            sources[qid] = "fred"
+            horizon_indices[qid] = 2
+
+        params = fit_calibration(forecasts, outcomes, sources, horizon_indices=horizon_indices)
+        assert "fred_h1" in params
+        assert "fred_h2" in params
+        assert "fred" in params
+        assert "_global" in params
+        assert "a" in params["fred_h1"] and "b" in params["fred_h1"]
+        assert "a" in params["fred_h2"] and "b" in params["fred_h2"]
+
+    def test_fallback_to_source_when_too_few_per_horizon(self) -> None:
+        """Per-horizon fit with < min_samples uses source params as prior."""
+        forecasts = {}
+        outcomes = {}
+        sources = {}
+        horizon_indices = {}
+        for i in range(30):
+            qid = f"q_big_{i}"
+            forecasts[qid] = 0.7 if i < 15 else 0.3
+            outcomes[qid] = 1 if i < 15 else 0
+            sources[qid] = "fred"
+            horizon_indices[qid] = 1
+        for i in range(5):
+            qid = f"q_small_{i}"
+            forecasts[qid] = 0.6
+            outcomes[qid] = 1 if i < 3 else 0
+            sources[qid] = "fred"
+            horizon_indices[qid] = 2
+
+        params = fit_calibration(forecasts, outcomes, sources, horizon_indices=horizon_indices)
+        assert "fred_h1" in params
+        assert "fred_h2" in params
+        assert "fred" in params
+
+    def test_backward_compatibility_without_horizons(self) -> None:
+        """fit_calibration without horizon_indices produces no _h keys."""
+        forecasts = {f"q{i}": 0.6 for i in range(20)}
+        outcomes = {f"q{i}": 1 if i < 10 else 0 for i in range(20)}
+        sources = {f"q{i}": "fred" for i in range(20)}
+
+        params = fit_calibration(forecasts, outcomes, sources)
+        assert "_global" in params
+        assert "fred" in params
+        assert not any("_h" in k for k in params)
+
+    def test_horizon_zero_not_grouped(self) -> None:
+        """Questions with horizon=0 should not produce per-horizon keys."""
+        forecasts = {f"q{i}": 0.5 for i in range(20)}
+        outcomes = {f"q{i}": i % 2 for i in range(20)}
+        sources = {f"q{i}": "src" for i in range(20)}
+        horizon_indices = {f"q{i}": 0 for i in range(20)}
+
+        params = fit_calibration(forecasts, outcomes, sources, horizon_indices=horizon_indices)
+        assert not any("_h" in k for k in params)
+
+    def test_calibrate_forecasts_uses_horizon_key(self) -> None:
+        """calibrate_forecasts should prefer per-horizon params when available."""
+        params = {
+            "_global": {"a": 1.0, "b": 0.0},
+            "fred": {"a": 1.0, "b": 0.5},
+            "fred_h1": {"a": 1.0, "b": 1.0},
+        }
+        forecasts = {"q1": 0.5, "q2": 0.5}
+        sources_map = {"q1": "fred", "q2": "fred"}
+        horizon_indices = {"q1": 1, "q2": 0}
+
+        result = calibrate_forecasts(forecasts, sources_map, params, horizon_indices=horizon_indices)
+        cal_h1 = calibrate(0.5, a=1.0, b=1.0)
+        cal_src = calibrate(0.5, a=1.0, b=0.5)
+        assert abs(result["q1"] - cal_h1) < 1e-6
+        assert abs(result["q2"] - cal_src) < 1e-6
+
+    def test_calibrate_forecasts_fallback_to_source(self) -> None:
+        """When per-horizon key is missing, falls back to source params."""
+        params = {
+            "_global": {"a": 1.0, "b": 0.0},
+            "fred": {"a": 1.0, "b": 0.5},
+        }
+        forecasts = {"q1": 0.5}
+        sources_map = {"q1": "fred"}
+        horizon_indices = {"q1": 3}
+
+        result = calibrate_forecasts(forecasts, sources_map, params, horizon_indices=horizon_indices)
+        cal_src = calibrate(0.5, a=1.0, b=0.5)
+        assert abs(result["q1"] - cal_src) < 1e-6
+
+
 class TestCalibrateForecasts:
     def test_per_source_params(self) -> None:
         params = {
