@@ -33,6 +33,7 @@ THINKING_ENABLED = os.getenv("FORECAST_THINKING", "true").lower() == "true"
 ENSEMBLE_N = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
 ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
 
+TIMESERIES_THINKING = os.getenv("FORECAST_TIMESERIES_THINKING", "false").lower() in ("1", "true", "yes")
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
 TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "0.5"))
@@ -179,7 +180,11 @@ def _forecast_kwargs(
     }
     is_timeseries = source and source.lower() in TIMESERIES_SOURCES
     is_market = source and source.lower() in MARKET_SOURCES
-    if is_timeseries or is_market:
+    if is_market:
+        kwargs["temperature"] = 0.3
+    elif is_timeseries and TIMESERIES_THINKING and THINKING_ENABLED:
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
+    elif is_timeseries:
         kwargs["temperature"] = 0.3
     elif THINKING_ENABLED:
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}

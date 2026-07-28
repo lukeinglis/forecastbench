@@ -1081,6 +1081,58 @@ class TestBaseRateHint:
             assert _load_base_rates() == {"fred": 0.5}
 
 
+class TestTimeseriesThinking:
+    """FORECAST_TIMESERIES_THINKING env var controls thinking for timeseries sources."""
+
+    def test_timeseries_thinking_disabled_by_default(self) -> None:
+        import baseline_agent
+        from baseline_agent import _forecast_kwargs
+
+        with patch.object(baseline_agent, "THINKING_ENABLED", True), \
+             patch.object(baseline_agent, "TIMESERIES_THINKING", False):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="fred",
+            )
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
+
+    def test_timeseries_thinking_enabled(self) -> None:
+        import baseline_agent
+        from baseline_agent import _forecast_kwargs
+
+        with patch.object(baseline_agent, "THINKING_ENABLED", True), \
+             patch.object(baseline_agent, "TIMESERIES_THINKING", True):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="fred",
+            )
+        assert "thinking" in kwargs
+        assert "temperature" not in kwargs
+
+    def test_timeseries_thinking_requires_global(self) -> None:
+        import baseline_agent
+        from baseline_agent import _forecast_kwargs
+
+        with patch.object(baseline_agent, "THINKING_ENABLED", False), \
+             patch.object(baseline_agent, "TIMESERIES_THINKING", True):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="fred",
+            )
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
+
+    def test_market_always_temperature(self) -> None:
+        import baseline_agent
+        from baseline_agent import _forecast_kwargs
+
+        with patch.object(baseline_agent, "THINKING_ENABLED", True), \
+             patch.object(baseline_agent, "TIMESERIES_THINKING", True):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="metaculus",
+            )
+        assert "thinking" not in kwargs
+        assert kwargs["temperature"] == 0.3
+
+
 class TestForecastParityParams:
     """Verify forecast LLM calls use _forecast_kwargs (adaptive thinking / temperature=0.3 fallback)."""
 
