@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from fetch_data import MARKET_SOURCES, ResolvedQuestion
+from fetch_data import MARKET_SOURCES, Question, ResolvedQuestion
 
 
 @dataclass
@@ -88,7 +88,7 @@ def assemble_submission(
 
 def validate_coverage(
     submission: dict[str, Any],
-    questions: list[ResolvedQuestion],
+    questions: list[Question] | list[ResolvedQuestion],
     threshold: float = 0.95,
 ) -> CoverageResult:
     """Check that submission covers 95%+ of market and dataset questions."""
@@ -98,8 +98,11 @@ def validate_coverage(
 
     mkt_covered = sum(1 for q in market_qs if q.id in forecast_ids)
     ds_covered = sum(1 for q in dataset_qs if q.id in forecast_ids)
-    mkt_cov = mkt_covered / len(market_qs) if market_qs else 1.0
-    ds_cov = ds_covered / len(dataset_qs) if dataset_qs else 1.0
+    mkt_cov = mkt_covered / len(market_qs) if market_qs else 0.0
+    ds_cov = ds_covered / len(dataset_qs) if dataset_qs else 0.0
+
+    mkt_ok = mkt_cov >= threshold if market_qs else True
+    ds_ok = ds_cov >= threshold if dataset_qs else True
 
     return CoverageResult(
         market_coverage=mkt_cov,
@@ -108,7 +111,7 @@ def validate_coverage(
         market_covered=mkt_covered,
         dataset_total=len(dataset_qs),
         dataset_covered=ds_covered,
-        passes=mkt_cov >= threshold and ds_cov >= threshold,
+        passes=mkt_ok and ds_ok and bool(questions),
     )
 
 
@@ -193,7 +196,7 @@ def main() -> None:
         )
         submission = assemble_submission(forecasts, iteration_resolved, meta)
 
-        coverage = validate_coverage(submission, iteration_resolved)
+        coverage = validate_coverage(submission, [q for qs in used_qs for q in qs.questions])
         print(f"Market coverage:  {coverage.market_covered}/{coverage.market_total} ({coverage.market_coverage:.1%})")
         print(f"Dataset coverage: {coverage.dataset_covered}/{coverage.dataset_total} ({coverage.dataset_coverage:.1%})")
         print(f"Passes threshold: {'YES' if coverage.passes else 'NO'}")
@@ -204,13 +207,12 @@ def main() -> None:
     elif args.command == "validate":
         submission = json.loads(Path(args.submission).read_text())
         validate_forecasts(submission.get("forecasts", []))
-        from fetch_data import load_data, join_resolved_questions, Resolution
-        all_qs, resolved = load_data()
-        resolutions = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
-                       for q in resolved}
-        all_resolved = join_resolved_questions(all_qs, resolutions)
+        from fetch_data import load_data
+        all_qs, _ = load_data()
 
-        coverage = validate_coverage(submission, all_resolved, threshold=args.threshold)
+        coverage = validate_coverage(
+            submission, [q for qs in all_qs for q in qs.questions], threshold=args.threshold,
+        )
         print(f"Market coverage:  {coverage.market_covered}/{coverage.market_total} ({coverage.market_coverage:.1%})")
         print(f"Dataset coverage: {coverage.dataset_covered}/{coverage.dataset_total} ({coverage.dataset_coverage:.1%})")
         print(f"Passes threshold: {'YES' if coverage.passes else 'NO'}")

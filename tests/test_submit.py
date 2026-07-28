@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fetch_data import ResolvedQuestion
+from fetch_data import Question, ResolvedQuestion
 from submit import (
     SubmissionMetadata,
     assemble_submission,
@@ -29,6 +29,19 @@ def _make_resolved(
         outcome=outcome,
         forecast_due_date=due,
         resolution_date=resolution_date,
+    )
+
+
+def _make_question(
+    qid: str,
+    source: str,
+    due: str = "2024-01-01",
+) -> Question:
+    return Question(
+        id=qid,
+        source=source,
+        question=f"Q {qid}",
+        forecast_due_date=due,
     )
 
 
@@ -91,14 +104,15 @@ class TestValidateCoverage:
     def test_validate_coverage_full(self) -> None:
         """100% coverage passes."""
         questions = [
-            _make_resolved("d1", "acled", 1),
-            _make_resolved("d2", "acled", 0),
-            _make_resolved("m1", "metaculus", 1),
-            _make_resolved("m2", "polymarket", 0),
+            _make_question("d1", "acled"),
+            _make_question("d2", "acled"),
+            _make_question("m1", "metaculus"),
+            _make_question("m2", "polymarket"),
         ]
-        forecasts = {"d1": 0.8, "d2": 0.2, "m1": 0.7, "m2": 0.3}
-        metadata = _make_metadata()
-        submission = assemble_submission(forecasts, questions, metadata)
+        submission = {"forecasts": [
+            {"id": "d1", "forecast": 0.8}, {"id": "d2", "forecast": 0.2},
+            {"id": "m1", "forecast": 0.7}, {"id": "m2", "forecast": 0.3},
+        ]}
 
         result = validate_coverage(submission, questions)
 
@@ -112,23 +126,14 @@ class TestValidateCoverage:
 
     def test_validate_coverage_below_threshold(self) -> None:
         """<95% coverage fails."""
-        # 20 market questions, only include 18 in submission (90%)
-        market_qs = [_make_resolved(f"m{i}", "metaculus", 1) for i in range(20)]
-        dataset_qs = [_make_resolved(f"d{i}", "acled", 1) for i in range(10)]
+        market_qs = [_make_question(f"m{i}", "metaculus") for i in range(20)]
+        dataset_qs = [_make_question(f"d{i}", "acled") for i in range(10)]
         all_qs = market_qs + dataset_qs
 
-        # Only forecast 18 of 20 market questions
-        forecasts = {f"m{i}": 0.5 for i in range(18)}
-        forecasts.update({f"d{i}": 0.5 for i in range(10)})
-        metadata = _make_metadata()
-
-        # Build submission with only the forecasted questions
-        submission = assemble_submission(forecasts, all_qs, metadata)
-        # Remove entries for m18 and m19 to simulate missing coverage
-        submission["forecasts"] = [
-            e for e in submission["forecasts"]
-            if e["id"] not in {"m18", "m19"}
-        ]
+        submission = {"forecasts": [
+            *({"id": f"m{i}", "forecast": 0.5} for i in range(18)),
+            *({"id": f"d{i}", "forecast": 0.5} for i in range(10)),
+        ]}
 
         result = validate_coverage(submission, all_qs)
         assert result.passes is False
@@ -136,26 +141,14 @@ class TestValidateCoverage:
 
     def test_validate_coverage_at_threshold(self) -> None:
         """Exactly 95% passes."""
-        # 20 market questions, include 19 (95%)
-        market_qs = [_make_resolved(f"m{i}", "metaculus", 1) for i in range(20)]
-        dataset_qs = [_make_resolved(f"d{i}", "acled", 1) for i in range(20)]
+        market_qs = [_make_question(f"m{i}", "metaculus") for i in range(20)]
+        dataset_qs = [_make_question(f"d{i}", "acled") for i in range(20)]
         all_qs = market_qs + dataset_qs
 
-        forecasts = {f"m{i}": 0.5 for i in range(20)}
-        forecasts.update({f"d{i}": 0.5 for i in range(20)})
-        metadata = _make_metadata()
-
-        submission = assemble_submission(forecasts, all_qs, metadata)
-        # Remove 1 of 20 market entries (keep 19/20 = 95%)
-        submission["forecasts"] = [
-            e for e in submission["forecasts"]
-            if e["id"] != "m19"
-        ]
-        # Remove 1 of 20 dataset entries (keep 19/20 = 95%)
-        submission["forecasts"] = [
-            e for e in submission["forecasts"]
-            if e["id"] != "d19"
-        ]
+        submission = {"forecasts": [
+            *({"id": f"m{i}", "forecast": 0.5} for i in range(19)),
+            *({"id": f"d{i}", "forecast": 0.5} for i in range(19)),
+        ]}
 
         result = validate_coverage(submission, all_qs)
         assert result.passes is True
@@ -165,18 +158,38 @@ class TestValidateCoverage:
     def test_validate_coverage_empty_category(self) -> None:
         """No market questions, dataset-only still works."""
         questions = [
-            _make_resolved("d1", "acled", 1),
-            _make_resolved("d2", "acled", 0),
+            _make_question("d1", "acled"),
+            _make_question("d2", "acled"),
         ]
-        forecasts = {"d1": 0.8, "d2": 0.2}
-        metadata = _make_metadata()
-        submission = assemble_submission(forecasts, questions, metadata)
+        submission = {"forecasts": [
+            {"id": "d1", "forecast": 0.8}, {"id": "d2", "forecast": 0.2},
+        ]}
 
         result = validate_coverage(submission, questions)
         assert result.passes is True
-        assert result.market_coverage == 1.0  # empty category defaults to 1.0
+        assert result.market_coverage == 0.0
         assert result.market_total == 0
         assert result.dataset_total == 2
+
+    def test_validate_coverage_empty_questions(self) -> None:
+        """Empty question list produces 0.0 coverage and fails."""
+        submission = {"forecasts": [{"id": "q1", "forecast": 0.5}]}
+        result = validate_coverage(submission, [])
+        assert result.market_coverage == 0.0
+        assert result.dataset_coverage == 0.0
+        assert result.passes is False
+
+    def test_validate_coverage_accepts_resolved_questions(self) -> None:
+        """Backward compatibility: ResolvedQuestion objects still work."""
+        questions = [
+            _make_resolved("d1", "acled", 1),
+            _make_resolved("m1", "metaculus", 0),
+        ]
+        submission = {"forecasts": [
+            {"id": "d1", "forecast": 0.8}, {"id": "m1", "forecast": 0.7},
+        ]}
+        result = validate_coverage(submission, questions)
+        assert result.passes is True
 
 
 class TestSaveSubmission:
