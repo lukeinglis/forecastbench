@@ -967,6 +967,8 @@ class TestTimeseriesDampening:
 
 
 class TestBaseRateHint:
+    _TEST_BASE_RATES = {"fred": 0.46, "dbnomics": 0.78, "yfinance": 0.43}
+
     def test_fred_prompt_contains_base_rate(self) -> None:
         q = _make_question(
             source="fred",
@@ -975,7 +977,8 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Current rate",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True):
+        with patch("baseline_agent.BASE_RATE_HINT", True), \
+             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="fred")
         assert "46%" in prompt
         assert "Historical context" in prompt
@@ -988,7 +991,8 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Index value",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True):
+        with patch("baseline_agent.BASE_RATE_HINT", True), \
+             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="dbnomics")
         assert "78%" in prompt
 
@@ -1000,14 +1004,27 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Stock price",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True):
+        with patch("baseline_agent.BASE_RATE_HINT", True), \
+             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="yfinance")
         assert "43%" in prompt
 
     def test_market_source_has_no_base_rate(self) -> None:
         q = _make_question(source="metaculus")
-        with patch("baseline_agent.BASE_RATE_HINT", True):
+        with patch("baseline_agent.BASE_RATE_HINT", True), \
+             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="metaculus")
+        assert "Historical context" not in prompt
+
+    def test_disabled_by_default(self) -> None:
+        q = _make_question(
+            source="fred",
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current rate",
+            resolution_dates=["2024-07-01"],
+        )
+        prompt = _build_prompt(q, source="fred")
         assert "Historical context" not in prompt
 
     def test_disabled_by_env_var(self) -> None:
@@ -1030,7 +1047,8 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Count",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True):
+        with patch("baseline_agent.BASE_RATE_HINT", True), \
+             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="acled")
         assert "Historical context" not in prompt
 
@@ -1042,11 +1060,25 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Current rate",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True):
+        with patch("baseline_agent.BASE_RATE_HINT", True), \
+             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="fred")
         hist_idx = prompt.index("Historical context")
         output_idx = prompt.index("Output your answer")
         assert hist_idx < output_idx
+
+    def test_load_base_rates_returns_empty_by_default(self) -> None:
+        from baseline_agent import _load_base_rates
+        with patch.dict("os.environ", {}, clear=False):
+            env = os.environ.copy()
+            env.pop("FORECAST_BASE_RATES", None)
+            with patch.dict("os.environ", env, clear=True):
+                assert _load_base_rates() == {}
+
+    def test_load_base_rates_uses_env_override(self) -> None:
+        from baseline_agent import _load_base_rates
+        with patch.dict("os.environ", {"FORECAST_BASE_RATES": '{"fred": 0.5}'}):
+            assert _load_base_rates() == {"fred": 0.5}
 
 
 class TestForecastParityParams:

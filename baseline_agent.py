@@ -36,20 +36,14 @@ ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
 TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "0.5"))
-BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "true").lower() in ("1", "true", "yes")
-
-_DEFAULT_BASE_RATES: dict[str, float] = {
-    "fred": 0.46,
-    "dbnomics": 0.78,
-    "yfinance": 0.43,
-}
+BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "false").lower() in ("1", "true", "yes")
 
 
 def _load_base_rates() -> dict[str, float]:
     override = os.getenv("FORECAST_BASE_RATES")
     if override:
         return json.loads(override)
-    return _DEFAULT_BASE_RATES
+    return {}
 
 
 TIMESERIES_BASE_RATES: dict[str, float] = _load_base_rates()
