@@ -60,12 +60,19 @@ class TestRouting:
         _mock_forecasters["baseline"].assert_awaited_once()
         _mock_forecasters["belief"].assert_not_awaited()
 
-    def test_dbnomics_routes_to_baseline(self, _mock_forecasters):
+    def test_dbnomics_routes_to_belief(self, _mock_forecasters):
         from hybrid_forecaster import hybrid_forecast
 
         result = asyncio.run(hybrid_forecast(_make_question("dbnomics")))
-        assert result == 0.3
-        _mock_forecasters["baseline"].assert_awaited_once()
+        assert result == 0.7
+        _mock_forecasters["belief"].assert_awaited_once()
+        _mock_forecasters["baseline"].assert_not_awaited()
+
+    def test_belief_sources_includes_all_timeseries(self):
+        from hybrid_forecaster import BELIEF_SOURCES
+
+        for src in ("fred", "dbnomics", "yfinance"):
+            assert src in BELIEF_SOURCES, f"{src} missing from BELIEF_SOURCES"
 
     def test_case_insensitive(self, _mock_forecasters):
         from hybrid_forecaster import hybrid_forecast

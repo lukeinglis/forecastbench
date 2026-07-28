@@ -27,6 +27,32 @@ CACHE_DIR = Path(".cache/forecasts")
 RESULTS_DIR = Path("results")
 
 
+MIN_BASE_RATE_SAMPLES = 50
+
+
+def compute_training_base_rates(
+    resolved: list[ResolvedQuestion],
+    min_samples: int = MIN_BASE_RATE_SAMPLES,
+) -> dict[str, float]:
+    """Compute per-source YES outcome rates from training-only resolved questions.
+
+    Sources with fewer than min_samples are excluded.
+    """
+    totals: dict[str, int] = {}
+    yes_counts: dict[str, int] = {}
+    for rq in resolved:
+        src = rq.source.lower()
+        totals[src] = totals.get(src, 0) + 1
+        if rq.outcome == 1:
+            yes_counts[src] = yes_counts.get(src, 0) + 1
+
+    rates: dict[str, float] = {}
+    for src, total in totals.items():
+        if total >= min_samples:
+            rates[src] = round(yes_counts.get(src, 0) / total, 3)
+    return rates
+
+
 class SyncForecaster(Protocol):
     def __call__(
         self, question: Question,
@@ -345,10 +371,24 @@ async def run_eval(
         questions = [_build_question(q) for q in iteration_resolved]
     model_slug = _model_slug()
 
-    if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
-    else:
-        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
+    import baseline_agent
+    training_rates = compute_training_base_rates(iteration_resolved)
+    if training_rates:
+        logger.info("training_base_rates_computed", rates=training_rates, n_sources=len(training_rates))
+    original_rates = baseline_agent.TIMESERIES_BASE_RATES
+    original_hint = baseline_agent.BASE_RATE_HINT
+    if training_rates:
+        baseline_agent.TIMESERIES_BASE_RATES = training_rates
+        baseline_agent.BASE_RATE_HINT = True
+
+    try:
+        if is_async_forecaster(forecaster):
+            forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
+        else:
+            forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
+    finally:
+        baseline_agent.TIMESERIES_BASE_RATES = original_rates
+        baseline_agent.BASE_RATE_HINT = original_hint
 
     if calibrate_forecasts:
         forecasts = _apply_calibration(forecasts, questions)
@@ -548,9 +588,22 @@ async def _run_async(
 
         results = list(cached_results.items())
         if probs_result is None:
+            logger.info("multi_horizon_retry_perdate", question_id=q.id, n_retry=len(uncached_dates))
+            retry_tasks = []
             for date_str in uncached_dates:
                 composite_key = f"{q.id}_{date_str}"
-                results.append((composite_key, 0.5))
+                retry_tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
+            retry_results = await asyncio.gather(*retry_tasks)
+            n_success = 0
+            for date_str, r in zip(uncached_dates, retry_results):
+                if r is not None:
+                    results.append(r)
+                    n_success += 1
+                else:
+                    composite_key = f"{q.id}_{date_str}"
+                    results.append((composite_key, 0.5))
+            logger.info("multi_horizon_retry_result", question_id=q.id,
+                        n_success=n_success, n_default=len(uncached_dates) - n_success)
         else:
             for date_str, prob in zip(uncached_dates, probs_result):
                 composite_key = f"{q.id}_{date_str}"
