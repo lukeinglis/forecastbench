@@ -635,7 +635,7 @@ def _parse_probabilities(text: str, n_horizons: int) -> list[float]:
             if isinstance(parsed, list) and len(parsed) == n_horizons:
                 return [float(v) for v in parsed]
     except Exception:
-        pass
+        logger.warning("multi_horizon_json_parse_failed", n_horizons=n_horizons, exc_info=True)
 
     raise ValueError(f"Could not extract {n_horizons} probabilities from response")
 

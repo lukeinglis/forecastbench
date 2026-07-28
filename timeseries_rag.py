@@ -7,6 +7,7 @@ caches raw values, and formats compact summaries for prompt injection.
 from __future__ import annotations
 
 import json
+import math
 import os
 from datetime import date, timedelta
 from pathlib import Path
@@ -70,7 +71,7 @@ def _fetch_fred(series_id: str, cutoff_date: date) -> dict[str, float] | None:
         )
         values: dict[str, float] = {}
         for dt, val in series.items():
-            if val is not None and not (hasattr(val, "__class__") and val != val):
+            if val is not None and not math.isnan(float(val)):
                 values[str(dt.date())] = float(val)
         return values if values else None
     except Exception:
@@ -90,7 +91,7 @@ def _fetch_yfinance(ticker: str, cutoff_date: date) -> dict[str, float] | None:
         close = hist["Close"]
         values: dict[str, float] = {}
         for dt, val in close.items():
-            if val is not None and not (hasattr(val, "__class__") and val != val):
+            if val is not None and not math.isnan(float(val)):
                 values[str(dt.date()) if hasattr(dt, "date") else str(dt)[:10]] = float(val)
         return values if values else None
     except Exception:
