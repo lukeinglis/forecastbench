@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fetch_data import QuestionSet, Question, ResolvedQuestion
-from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync
+from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync, compute_training_base_rates
 from score import ScoringResult
 
 
@@ -366,3 +366,202 @@ class TestDifficultyAdjustmentLogging:
         assert len(skip_events) == 1
         assert skip_events[0]["reason"] == "need_at_least_2_prior_results"
         assert skip_events[0]["note"] == "scores_not_difficulty_adjusted_this_run"
+
+
+def _make_training_resolved(source: str, n_total: int, n_yes: int) -> list[ResolvedQuestion]:
+    """Create n_total resolved questions for a source with n_yes YES outcomes."""
+    resolved: list[ResolvedQuestion] = []
+    for i in range(n_total):
+        resolved.append(
+            ResolvedQuestion(
+                id=f"{source}_{i}",
+                source=source,
+                question=f"Q{i}",
+                outcome=1 if i < n_yes else 0,
+                forecast_due_date="2024-01-01",
+            )
+        )
+    return resolved
+
+
+class TestTrainingBaseRatesComputed:
+    def test_correct_rates(self) -> None:
+        """Verify compute_training_base_rates returns correct per-source YES rates."""
+        resolved = (
+            _make_training_resolved("fred", 100, 46)
+            + _make_training_resolved("dbnomics", 80, 62)
+        )
+        rates = compute_training_base_rates(resolved)
+        assert rates["fred"] == round(46 / 100, 3)
+        assert rates["dbnomics"] == round(62 / 80, 3)
+
+    def test_multiple_sources(self) -> None:
+        """Verify rates are computed independently per source."""
+        resolved = (
+            _make_training_resolved("fred", 60, 30)
+            + _make_training_resolved("yfinance", 50, 25)
+            + _make_training_resolved("acled", 200, 100)
+        )
+        rates = compute_training_base_rates(resolved)
+        assert rates["fred"] == 0.5
+        assert rates["yfinance"] == 0.5
+        assert rates["acled"] == 0.5
+
+
+class TestTrainingBaseRatesNoLeakage:
+    def test_rates_from_iteration_not_all(self, tmp_path: Path, monkeypatch: object) -> None:
+        """Verify base rates come from iteration_resolved (training), not held-out data."""
+        import eval as eval_mod
+        import baseline_agent
+
+        training_resolved = _make_training_resolved("fred", 100, 70)
+        held_out_resolved = [
+            ResolvedQuestion(
+                id=f"ho_fred_{i}",
+                source="fred",
+                question=f"HO Q{i}",
+                outcome=1 if i < 10 else 0,
+                forecast_due_date="2024-06-01",
+            )
+            for i in range(50)
+        ]
+
+        training_questions = [
+            Question(id=rq.id, source=rq.source, question=rq.question)
+            for rq in training_resolved
+        ]
+        held_out_questions = [
+            Question(id=rq.id, source=rq.source, question=rq.question)
+            for rq in held_out_resolved
+        ]
+
+        question_sets = [
+            QuestionSet(
+                forecast_due_date="2024-01-01",
+                question_set="train",
+                questions=training_questions,
+            ),
+            QuestionSet(
+                forecast_due_date="2024-06-01",
+                question_set="held_out_1",
+                questions=held_out_questions[:25],
+            ),
+            QuestionSet(
+                forecast_due_date="2024-07-01",
+                question_set="held_out_2",
+                questions=held_out_questions[25:],
+            ),
+        ]
+
+        all_resolved = training_resolved + held_out_resolved
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, all_resolved))
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")
+
+        injected_rates: list[dict[str, float]] = []
+        original_forecaster = _dummy_forecaster
+
+        def capturing_forecaster(question: Question, **kwargs: object) -> float:
+            injected_rates.append(dict(baseline_agent.TIMESERIES_BASE_RATES))
+            return original_forecaster(question, **kwargs)
+
+        asyncio.run(run_eval(capturing_forecaster, n_held_out=2, raw=True))
+
+        if injected_rates:
+            assert injected_rates[0]["fred"] == round(70 / 100, 3)
+
+
+class TestTrainingBaseRatesMinSamples:
+    def test_sources_below_threshold_excluded(self) -> None:
+        """Verify sources with < 50 samples are excluded from rates."""
+        resolved = (
+            _make_training_resolved("fred", 100, 50)
+            + _make_training_resolved("dbnomics", 49, 25)
+        )
+        rates = compute_training_base_rates(resolved)
+        assert "fred" in rates
+        assert "dbnomics" not in rates
+
+    def test_exactly_50_included(self) -> None:
+        """Verify sources with exactly 50 samples are included."""
+        resolved = _make_training_resolved("fred", 50, 25)
+        rates = compute_training_base_rates(resolved)
+        assert "fred" in rates
+        assert rates["fred"] == 0.5
+
+    def test_custom_min_samples(self) -> None:
+        """Verify custom min_samples threshold works."""
+        resolved = _make_training_resolved("fred", 10, 5)
+        assert "fred" not in compute_training_base_rates(resolved, min_samples=50)
+        assert "fred" in compute_training_base_rates(resolved, min_samples=10)
+
+
+class TestTrainingBaseRatesRestore:
+    def test_module_attributes_restored_after_eval(self, tmp_path: Path, monkeypatch: object) -> None:
+        """Verify baseline_agent module attributes are restored after forecasting."""
+        import eval as eval_mod
+        import baseline_agent
+
+        original_rates = baseline_agent.TIMESERIES_BASE_RATES
+        original_hint = baseline_agent.BASE_RATE_HINT
+
+        resolved = _make_training_resolved("fred", 100, 70)
+        question_sets = [
+            QuestionSet(
+                forecast_due_date="2024-01-01",
+                question_set="set_0",
+                questions=[
+                    Question(id=rq.id, source=rq.source, question=rq.question)
+                    for rq in resolved
+                ],
+            ),
+            QuestionSet(forecast_due_date="2024-06-01", question_set="set_1", questions=[]),
+            QuestionSet(forecast_due_date="2024-07-01", question_set="set_2", questions=[]),
+        ]
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, resolved))
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")
+
+        asyncio.run(run_eval(_dummy_forecaster, n_held_out=2, raw=True))
+
+        assert baseline_agent.TIMESERIES_BASE_RATES is original_rates
+        assert baseline_agent.BASE_RATE_HINT is original_hint
+
+    def test_module_attributes_restored_on_error(self, tmp_path: Path, monkeypatch: object) -> None:
+        """Verify restoration even when forecaster raises."""
+        import eval as eval_mod
+        import baseline_agent
+
+        original_rates = baseline_agent.TIMESERIES_BASE_RATES
+        original_hint = baseline_agent.BASE_RATE_HINT
+
+        resolved = _make_training_resolved("fred", 100, 70)
+        question_sets = [
+            QuestionSet(
+                forecast_due_date="2024-01-01",
+                question_set="set_0",
+                questions=[
+                    Question(id=rq.id, source=rq.source, question=rq.question)
+                    for rq in resolved
+                ],
+            ),
+            QuestionSet(forecast_due_date="2024-06-01", question_set="set_1", questions=[]),
+            QuestionSet(forecast_due_date="2024-07-01", question_set="set_2", questions=[]),
+        ]
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, resolved))
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")
+
+        asyncio.run(run_eval(_raising_forecaster, n_held_out=2, raw=True))
+
+        assert baseline_agent.TIMESERIES_BASE_RATES is original_rates
+        assert baseline_agent.BASE_RATE_HINT is original_hint
