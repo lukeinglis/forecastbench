@@ -295,9 +295,16 @@ def fit_calibration(
     outcomes: dict[str, int],
     sources: dict[str, str],
     min_samples: int = MIN_SAMPLES_FOR_SOURCE,
+    horizon_indices: dict[str, int] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Fit per-source Platt scaling with hierarchical prior."""
+    """Fit per-source Platt scaling with hierarchical prior.
+
+    When horizon_indices is provided, also fits per-(source, horizon) models
+    with keys like 'fred_h1', 'fred_h2'. Falls back to source-only fit as
+    prior when per-horizon data is insufficient.
+    """
     by_source: dict[str, tuple[list[float], list[int]]] = defaultdict(lambda: ([], []))
+    by_source_horizon: dict[str, tuple[list[float], list[int]]] = defaultdict(lambda: ([], []))
     all_f: list[float] = []
     all_o: list[int] = []
     for qid, prob in forecasts.items():
@@ -308,6 +315,13 @@ def fit_calibration(
         by_source[source][1].append(outcomes[qid])
         all_f.append(prob)
         all_o.append(outcomes[qid])
+
+        if horizon_indices is not None:
+            horizon = horizon_indices.get(qid, 0)
+            if horizon > 0:
+                key = f"{source}_h{horizon}"
+                by_source_horizon[key][0].append(prob)
+                by_source_horizon[key][1].append(outcomes[qid])
 
     if not all_f:
         return {}
@@ -326,6 +340,21 @@ def fit_calibration(
                 regularization=1.0,
             )
             params[source] = {"a": a, "b": b}
+
+    if horizon_indices is not None:
+        for sh_key, (fs, os_) in by_source_horizon.items():
+            source = sh_key.rsplit("_h", 1)[0]
+            source_params = params.get(source, params["_global"])
+            if len(fs) >= min_samples:
+                a, b = fit_platt(fs, os_)
+                params[sh_key] = {"a": a, "b": b}
+            else:
+                a, b = fit_platt(
+                    fs, os_,
+                    prior_a=source_params["a"], prior_b=source_params["b"],
+                    regularization=1.0,
+                )
+                params[sh_key] = {"a": a, "b": b}
 
     return params
 
@@ -348,13 +377,23 @@ def calibrate_forecasts(
     forecasts: dict[str, float],
     sources: dict[str, str],
     params: dict[str, dict[str, float]],
+    horizon_indices: dict[str, int] | None = None,
 ) -> dict[str, float]:
-    """Apply per-source Platt calibration to a dict of forecasts."""
+    """Apply per-source Platt calibration to a dict of forecasts.
+
+    When horizon_indices is provided, tries per-horizon key (e.g. 'fred_h1')
+    first, falling back to source-only, then _global.
+    """
     result: dict[str, float] = {}
     for qid, prob in forecasts.items():
         src = sources.get(qid, "_global")
-        src_params = params.get(src, params.get("_global", {"a": 1.0, "b": 0.0}))
-        result[qid] = platt_calibrate(prob, src_params["a"], src_params["b"])
+        horizon = horizon_indices.get(qid, 0) if horizon_indices is not None else 0
+        if horizon > 0:
+            sh_key = f"{src}_h{horizon}"
+            p = params.get(sh_key, params.get(src, params.get("_global", {"a": 1.0, "b": 0.0})))
+        else:
+            p = params.get(src, params.get("_global", {"a": 1.0, "b": 0.0}))
+        result[qid] = platt_calibrate(prob, p["a"], p["b"])
     return result
 
 
