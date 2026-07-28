@@ -588,9 +588,22 @@ async def _run_async(
 
         results = list(cached_results.items())
         if probs_result is None:
+            logger.info("multi_horizon_retry_perdate", question_id=q.id, n_retry=len(uncached_dates))
+            retry_tasks = []
             for date_str in uncached_dates:
                 composite_key = f"{q.id}_{date_str}"
-                results.append((composite_key, 0.5))
+                retry_tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
+            retry_results = await asyncio.gather(*retry_tasks)
+            n_success = 0
+            for date_str, r in zip(uncached_dates, retry_results):
+                if r is not None:
+                    results.append(r)
+                    n_success += 1
+                else:
+                    composite_key = f"{q.id}_{date_str}"
+                    results.append((composite_key, 0.5))
+            logger.info("multi_horizon_retry_result", question_id=q.id,
+                        n_success=n_success, n_default=len(uncached_dates) - n_success)
         else:
             for date_str, prob in zip(uncached_dates, probs_result):
                 composite_key = f"{q.id}_{date_str}"

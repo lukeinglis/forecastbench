@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fetch_data import QuestionSet, Question, ResolvedQuestion
-from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync, compute_training_base_rates
+from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync, _run_async, compute_training_base_rates
 from score import ScoringResult
 
 
@@ -283,6 +283,105 @@ class TestForecastErrorFallback:
         skip_events = [e for e in log_events if "skip" in e["event"]]
         assert len(skip_events) == 1
         assert skip_events[0]["question_id"] == "mh2"
+
+
+async def _async_forecaster_ok(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+    return 0.7
+
+
+async def _async_forecaster_fail(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+    raise RuntimeError("LLM API timeout")
+
+
+async def _async_multi_raising(**kwargs: object) -> list[float] | None:
+    raise RuntimeError("multi-horizon extraction failed")
+
+
+async def _async_multi_ok(q: Question, resolution_dates: list[str], **kwargs: object) -> list[float]:
+    return [0.6] * len(resolution_dates)
+
+
+class TestMultiHorizonRetryFallback:
+    def test_multi_horizon_retry_on_failure(self) -> None:
+        """When multi-horizon fails, each date is retried via _forecast_one."""
+        q = Question(
+            id="retry1", source="acled", question="Retry?",
+            resolution_dates=["2024-01-01", "2024-06-01"],
+        )
+        with patch("eval._read_cache", return_value=None), \
+             patch("eval._write_cache"):
+            forecasts = asyncio.run(_run_async(
+                _async_forecaster_ok, [q], "test_slug",
+                multi_horizon=True,
+                async_multi_forecaster=_async_multi_raising,
+            ))
+        assert forecasts["retry1_2024-01-01"] == 0.7
+        assert forecasts["retry1_2024-06-01"] == 0.7
+
+    def test_multi_horizon_retry_partial_success(self) -> None:
+        """Some per-date retries succeed, some fail — mixed results."""
+        call_count = 0
+
+        async def _partial_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+            nonlocal call_count
+            call_count += 1
+            if resolution_date == "2024-01-01":
+                return 0.8
+            raise ValueError("parse failure")
+
+        q = Question(
+            id="partial1", source="acled", question="Partial?",
+            resolution_dates=["2024-01-01", "2024-06-01"],
+        )
+        with patch("eval._read_cache", return_value=None), \
+             patch("eval._write_cache"):
+            forecasts = asyncio.run(_run_async(
+                _partial_forecaster, [q], "test_slug",
+                multi_horizon=True,
+                async_multi_forecaster=_async_multi_raising,
+            ))
+        assert forecasts["partial1_2024-01-01"] == 0.8
+        assert forecasts["partial1_2024-06-01"] == 0.5
+
+    def test_multi_horizon_retry_all_fail(self) -> None:
+        """All per-date retries fail — 0.5 fallback for every date."""
+        q = Question(
+            id="allfail1", source="acled", question="AllFail?",
+            resolution_dates=["2024-01-01", "2024-06-01", "2024-12-01"],
+        )
+        with patch("eval._read_cache", return_value=None), \
+             patch("eval._write_cache"):
+            forecasts = asyncio.run(_run_async(
+                _async_forecaster_fail, [q], "test_slug",
+                multi_horizon=True,
+                async_multi_forecaster=_async_multi_raising,
+            ))
+        assert forecasts["allfail1_2024-01-01"] == 0.5
+        assert forecasts["allfail1_2024-06-01"] == 0.5
+        assert forecasts["allfail1_2024-12-01"] == 0.5
+
+    def test_multi_horizon_no_retry_on_success(self) -> None:
+        """When multi-horizon succeeds, no per-date retry is attempted."""
+        single_calls: list[str] = []
+
+        async def _tracking_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+            single_calls.append(resolution_date or "")
+            return 0.9
+
+        q = Question(
+            id="noretry1", source="acled", question="NoRetry?",
+            resolution_dates=["2024-01-01", "2024-06-01"],
+        )
+        with patch("eval._read_cache", return_value=None), \
+             patch("eval._write_cache"):
+            forecasts = asyncio.run(_run_async(
+                _tracking_forecaster, [q], "test_slug",
+                multi_horizon=True,
+                async_multi_forecaster=_async_multi_ok,
+            ))
+        assert forecasts["noretry1_2024-01-01"] == 0.6
+        assert forecasts["noretry1_2024-06-01"] == 0.6
+        assert len(single_calls) == 0
 
 
 class TestEvalResultCompositeIds:
