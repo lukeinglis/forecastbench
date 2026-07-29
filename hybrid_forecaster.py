@@ -13,7 +13,7 @@ from logging_config import get_logger
 logger = get_logger("hybrid_forecaster")
 
 BELIEF_SOURCES = frozenset(
-    os.getenv("FORECAST_BELIEF_SOURCES", "acled,fred,yfinance,metaculus,dbnomics").split(",")
+    os.getenv("FORECAST_BELIEF_SOURCES", "acled,fred,yfinance,metaculus").split(",")
 )
 
 
