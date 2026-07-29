@@ -371,24 +371,10 @@ async def run_eval(
         questions = [_build_question(q) for q in iteration_resolved]
     model_slug = _model_slug()
 
-    import baseline_agent
-    training_rates = compute_training_base_rates(iteration_resolved)
-    if training_rates:
-        logger.info("training_base_rates_computed", rates=training_rates, n_sources=len(training_rates))
-    original_rates = baseline_agent.TIMESERIES_BASE_RATES
-    original_hint = baseline_agent.BASE_RATE_HINT
-    if training_rates:
-        baseline_agent.TIMESERIES_BASE_RATES = training_rates
-        baseline_agent.BASE_RATE_HINT = True
-
-    try:
-        if is_async_forecaster(forecaster):
-            forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
-        else:
-            forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
-    finally:
-        baseline_agent.TIMESERIES_BASE_RATES = original_rates
-        baseline_agent.BASE_RATE_HINT = original_hint
+    if is_async_forecaster(forecaster):
+        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
+    else:
+        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
 
     if calibrate_forecasts:
         forecasts = _apply_calibration(forecasts, questions)
@@ -901,15 +887,6 @@ def main() -> None:
         all_outcomes: dict[str, int] = {q.id: q.outcome for q in eval_result.resolved}
         all_sources: dict[str, str] = {q.id: q.source.lower() for q in eval_result.resolved}
 
-        all_horizons: dict[str, int] = {}
-        for q in eval_result.resolved:
-            rd = getattr(q, "resolution_dates", None)
-            if isinstance(rd, list):
-                dates = [d for d in rd if d and str(d).upper() != "N/A"]
-                res_date = getattr(q, "resolution_date", None)
-                if res_date and res_date in dates:
-                    all_horizons[q.id] = dates.index(res_date) + 1
-
         previous = load_previous_results()
         for prev in previous:
             for qid, prob in prev.get("forecasts", {}).items():
@@ -922,15 +899,11 @@ def main() -> None:
                 if qid not in all_sources:
                     all_sources[str(qid)] = str(src)
 
-        params = fit_calibration(
-            all_forecasts, all_outcomes, all_sources,
-            horizon_indices=all_horizons if all_horizons else None,
-        )
+        params = fit_calibration(all_forecasts, all_outcomes, all_sources)
         cal_path = calibration_path(eval_result.model_slug)
         save_calibration(params, cal_path)
-        n_horizon_keys = sum(1 for k in params if "_h" in k)
         logger.info("calibration_fitted", path=str(cal_path), n_sources=len(params) - 1,
-                     n_horizon_keys=n_horizon_keys, n_samples=len(all_forecasts))
+                     n_samples=len(all_forecasts))
 
     if args.calibrate:
         from calibrate import load_calibration, calibrate_forecasts, calibration_path
@@ -939,19 +912,7 @@ def main() -> None:
             params = load_calibration(cal_path)
             sources = {q.id: q.source.lower() for q in eval_result.resolved}
 
-            cal_horizons: dict[str, int] = {}
-            for q in eval_result.resolved:
-                rd = getattr(q, "resolution_dates", None)
-                if isinstance(rd, list):
-                    dates = [d for d in rd if d and str(d).upper() != "N/A"]
-                    res_date = getattr(q, "resolution_date", None)
-                    if res_date and res_date in dates:
-                        cal_horizons[q.id] = dates.index(res_date) + 1
-
-            calibrated = calibrate_forecasts(
-                eval_result.forecasts, sources, params,
-                horizon_indices=cal_horizons if cal_horizons else None,
-            )
+            calibrated = calibrate_forecasts(eval_result.forecasts, sources, params)
             cal_result = score_forecasts(
                 calibrated, eval_result.resolved,
                 difficulty_adjusted=not args.raw,

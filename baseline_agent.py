@@ -35,8 +35,8 @@ ENSEMBLE_TEMP = float(os.getenv("FORECAST_ENSEMBLE_TEMP", "0.7"))
 
 TIMESERIES_THINKING = os.getenv("FORECAST_TIMESERIES_THINKING", "false").lower() in ("1", "true", "yes")
 TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
-HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "true").lower() in ("1", "true", "yes")
-TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "0.5"))
+HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "false").lower() in ("1", "true", "yes")
+TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "1.0"))
 BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "false").lower() in ("1", "true", "yes")
 
 

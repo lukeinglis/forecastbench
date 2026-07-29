@@ -19,7 +19,7 @@ from logging_config import get_logger
 
 logger = get_logger("timeseries_rag")
 
-FORECAST_RAG = os.getenv("FORECAST_RAG", "true").lower() == "true"
+FORECAST_RAG = os.getenv("FORECAST_RAG", "false").lower() in ("1", "true", "yes")
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 
 RAG_CACHE_DIR = Path(".cache/rag")

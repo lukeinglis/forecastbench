@@ -656,8 +656,7 @@ class TestForecastAsync:
         )
         result = await aforecast(q, prompt_variant="dataset", source="fred")
 
-        # 0.42 dampened: 0.5 + 0.5 * (0.42 - 0.5) = 0.46
-        assert result == pytest.approx(0.46)
+        assert result == pytest.approx(0.42)
 
 
 class TestMarketInfoResolutionCriteria:
