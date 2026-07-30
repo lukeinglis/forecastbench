@@ -821,6 +821,11 @@ def main() -> None:
         help="Apply saved Platt scaling calibration to forecasts before scoring",
     )
     parser.add_argument(
+        "--calibrate-hybrid",
+        action="store_true",
+        help="Hybrid calibration: Platt for events/markets, base-rate for timeseries",
+    )
+    parser.add_argument(
         "--list-rounds",
         action="store_true",
         help="List available rounds with question counts and exit",
@@ -929,6 +934,37 @@ def main() -> None:
         else:
             logger.warning("calibration_not_found", path=str(cal_path),
                            hint="Run with --fit-calibration first")
+
+    if args.calibrate_hybrid:
+        from calibrate import load_calibration, calibration_path, platt_calibrate
+        TIMESERIES_SOURCES = {"fred", "dbnomics", "yfinance"}
+        cal_path = calibration_path(eval_result.model_slug)
+        sources_map = {q.id: q.source.lower() for q in eval_result.resolved}
+        base_rates = compute_training_base_rates(eval_result.resolved)
+
+        hybrid_forecasts: dict[str, float] = {}
+        platt_params: dict[str, dict[str, float]] = {}
+        if cal_path.exists():
+            platt_params = load_calibration(cal_path)
+
+        for qid, prob in eval_result.forecasts.items():
+            src = sources_map.get(qid, "")
+            if src in TIMESERIES_SOURCES and src in base_rates:
+                hybrid_forecasts[qid] = base_rates[src]
+            elif platt_params:
+                src_p = platt_params.get(src, platt_params.get("_global", {"a": 1.0, "b": 0.0}))
+                hybrid_forecasts[qid] = platt_calibrate(prob, src_p["a"], src_p["b"])
+            else:
+                hybrid_forecasts[qid] = prob
+
+        hybrid_result = score_forecasts(
+            hybrid_forecasts, eval_result.resolved,
+            difficulty_adjusted=not args.raw,
+        )
+        logger.info("hybrid_calibrated_results",
+                     overall_index=round(hybrid_result.overall_index, 1),
+                     overall_brier=round(hybrid_result.overall_brier, 4))
+        _print_results(hybrid_result)
 
     if args.ci:
         from score import bootstrap_ci

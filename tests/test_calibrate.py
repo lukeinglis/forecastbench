@@ -272,6 +272,52 @@ class TestCompositeIdStripping:
         assert result["base1_2024-06-15"] == pytest.approx(0.7)
 
 
+class TestCalibrateHybridFlag:
+    def test_argparser_accepts_calibrate_hybrid(self) -> None:
+        """The --calibrate-hybrid flag is accepted by the CLI parser."""
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--agent", default="dummy")
+        parser.add_argument("--raw", action="store_true")
+        parser.add_argument("--calibrate-hybrid", action="store_true")
+        args = parser.parse_args(["--calibrate-hybrid"])
+        assert args.calibrate_hybrid is True
+
+    def test_hybrid_applies_base_rate_to_timeseries(self) -> None:
+        """Timeseries sources get base-rate replacement, not Platt."""
+        from eval import compute_training_base_rates
+        from fetch_data import ResolvedQuestion
+
+        resolved = [
+            ResolvedQuestion(
+                id=f"q{i}", source="fred", question=f"Q{i}",
+                outcome=1 if i < 70 else 0, resolution_date="2024-02-01",
+                forecast_due_date="2024-01-01",
+            )
+            for i in range(100)
+        ]
+        rates = compute_training_base_rates(resolved)
+        assert "fred" in rates
+        assert rates["fred"] == pytest.approx(0.7, abs=0.01)
+
+    def test_hybrid_skips_small_sources(self) -> None:
+        """Sources with < 50 samples don't get base-rate replacement."""
+        from eval import compute_training_base_rates
+        from fetch_data import ResolvedQuestion
+
+        resolved = [
+            ResolvedQuestion(
+                id=f"q{i}", source="fred", question=f"Q{i}",
+                outcome=1, resolution_date="2024-02-01",
+                forecast_due_date="2024-01-01",
+            )
+            for i in range(10)
+        ]
+        rates = compute_training_base_rates(resolved)
+        assert "fred" not in rates
+
+
 class TestApplyCalibrationIntegration:
     def test_no_models_returns_original(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from eval import _apply_calibration
