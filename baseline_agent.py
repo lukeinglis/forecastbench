@@ -170,9 +170,10 @@ def _forecast_kwargs(
     messages: list[dict[str, str]],
     timeout: int = 180,
     source: str | None = None,
+    model_override: str | None = None,
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
-        "model": MODEL,
+        "model": model_override or MODEL,
         "messages": messages,
         "max_tokens": MAX_TOKENS,
         "timeout": timeout,
@@ -832,9 +833,10 @@ async def aforecast(
     source: str | None = None,
     resolution_dates: Any = None,
     prompt_variant: str = "zero-shot",
+    model_override: str | None = None,
 ) -> float:
     effective_source = source or question.source
-    model = _select_model(effective_source)
+    model = model_override or _select_model(effective_source)
     logger.info("forecast_start", question_id=question.id, model=model, source=effective_source, prompt_variant=prompt_variant, async_mode=True)
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(
@@ -860,7 +862,7 @@ async def aforecast(
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs = _forecast_kwargs(messages, source=effective_source, model_override=model_override)
         kwargs["model"] = model
         response = await litellm.acompletion(**kwargs)
     except Exception:
@@ -1013,6 +1015,7 @@ async def aforecast_multi_horizon(
     source: str | None = None,
     prompt_variant: str = "dataset",
     forecast_due_date: str | None = None,
+    model_override: str | None = None,
 ) -> list[float] | None:
     """Forecast multiple horizons in a single LLM call.
 
@@ -1021,7 +1024,7 @@ async def aforecast_multi_horizon(
     """
     n_horizons = len(resolution_dates)
     effective_source = source or question.source
-    model = _select_model(effective_source)
+    model = model_override or _select_model(effective_source)
     logger.info(
         "multi_horizon_start",
         question_id=question.id,
@@ -1055,7 +1058,7 @@ async def aforecast_multi_horizon(
 
     try:
         messages = [{"role": "user", "content": prompt}]
-        kwargs = _forecast_kwargs(messages, source=effective_source)
+        kwargs = _forecast_kwargs(messages, source=effective_source, model_override=model_override)
         kwargs["model"] = model
         response = await litellm.acompletion(**kwargs)
     except Exception:
