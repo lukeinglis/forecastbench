@@ -1284,3 +1284,96 @@ class TestForecastParityParams:
         kwargs = mock_litellm.completion.call_args.kwargs
         assert kwargs["temperature"] == 0
         assert "thinking" not in kwargs
+
+
+class TestSourceSpecificPrompts:
+    """Source-specific prompt routing for timeseries questions."""
+
+    def _ts_question(self, source: str) -> Question:
+        return _make_question(
+            source=source,
+            freeze="2024-06-15",
+            freeze_datetime_value=3.5,
+            freeze_datetime_value_explanation="Current value",
+            resolution_dates=["2024-07-01", "2024-08-01"],
+        )
+
+    def test_fred_gets_macro_prompt(self) -> None:
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(self._ts_question("fred"))
+        assert "macroeconomic forecaster" in prompt
+        assert "monetary policy" in prompt
+        assert "mean-revert" in prompt
+
+    def test_yfinance_gets_financial_prompt(self) -> None:
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(self._ts_question("yfinance"))
+        assert "financial analyst" in prompt
+        assert "random walk" in prompt
+        assert "volatility" in prompt
+
+    def test_dbnomics_gets_statistical_prompt(self) -> None:
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(self._ts_question("dbnomics"))
+        assert "data analyst" in prompt
+        assert "seasonal" in prompt
+        assert "publication" in prompt
+
+    def test_source_specific_disabled_uses_generic(self) -> None:
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", False):
+            for source in ["fred", "yfinance", "dbnomics"]:
+                prompt = _build_prompt(self._ts_question(source))
+                assert "macroeconomic forecaster" not in prompt
+                assert "financial analyst" not in prompt
+                assert "data analyst specializing in statistical" not in prompt
+                assert "superforecaster" in prompt
+
+    def test_acled_uses_generic(self) -> None:
+        q = _make_question(
+            source="acled",
+            freeze="2024-06-15",
+            freeze_datetime_value=50.0,
+            freeze_datetime_value_explanation="Count",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(q)
+        assert "superforecaster" in prompt
+        assert "macroeconomic forecaster" not in prompt
+        assert "financial analyst" not in prompt
+        assert "data analyst specializing in statistical" not in prompt
+
+    def test_source_specific_preserves_placeholders(self) -> None:
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            for source in ["fred", "yfinance", "dbnomics"]:
+                prompt = _build_prompt(self._ts_question(source))
+                assert "3.5" in prompt
+                assert "Current value" in prompt
+                assert "2024-06-15" in prompt
+                assert "2024-07-01" in prompt
+                assert "asterisk" in prompt.lower()
+
+    def test_source_specific_with_scratchpad_variant(self) -> None:
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(self._ts_question("fred"), prompt_variant="scratchpad")
+        assert "macroeconomic forecaster" in prompt
+
+    def test_wikipedia_uses_generic(self) -> None:
+        q = _make_question(
+            source="wikipedia",
+            freeze="2024-06-15",
+            freeze_datetime_value=100.0,
+            freeze_datetime_value_explanation="Page views",
+            resolution_dates=["2024-07-01"],
+        )
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(q)
+        assert "superforecaster" in prompt
+
+    def test_market_sources_unaffected(self) -> None:
+        q = _make_question(source="metaculus")
+        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+            prompt = _build_prompt(q)
+        assert "macroeconomic forecaster" not in prompt
+        assert "financial analyst" not in prompt
+        assert "data analyst specializing in statistical" not in prompt

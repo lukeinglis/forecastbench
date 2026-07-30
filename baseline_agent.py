@@ -38,6 +38,7 @@ TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "false").lower() in ("1", "true", "yes")
 TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "1.0"))
 BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "false").lower() in ("1", "true", "yes")
+SOURCE_SPECIFIC_PROMPTS = os.getenv("FORECAST_SOURCE_PROMPTS", "true").lower() in ("1", "true", "yes")
 
 
 def _load_base_rates() -> dict[str, float]:
@@ -321,6 +322,129 @@ Output your answer (a number between 0 and 1) with an asterisk at the beginning 
 Do not output anything else.
 Answer: {{ Insert answer here }}"""
 
+FRED_DATASET_PROMPT = """\
+You are an expert macroeconomic forecaster specializing in FRED economic indicators. \
+You understand monetary policy cycles, mean-reversion in rates, and the relationship between economic indicators.
+
+Given the current value and threshold in the question, estimate the probability of the threshold being crossed by each resolution date.
+
+Key principles for economic indicators:
+- Interest rates and yields tend to mean-revert over multi-year horizons
+- Consider the current monetary policy stance and likely trajectory
+- Short-term momentum can persist but long-term mean-reversion dominates
+- Economic indicators often move in regimes (expansion vs contraction)
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution dates: {list_of_resolution_dates}
+
+For each resolution date, estimate the probability that the condition in the question will be met. \
+Consider the current value relative to the threshold, the typical volatility of this indicator, and the time horizon.
+
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. \
+(For example, if there are n resolution dates, you would output different *p* for each resolution date) \
+Do not output anything else.
+Answer: {{ Insert answer here }}"""
+
+YFINANCE_DATASET_PROMPT = """\
+You are an expert financial analyst specializing in equity and index forecasting. \
+You understand market dynamics, volatility, and the base rates of stock price movements.
+
+Given the current price and threshold in the question, estimate the probability of the threshold being crossed by each resolution date.
+
+Key principles for financial prices:
+- Stock prices are approximately a random walk with positive drift (~7-10% annual return for broad indices)
+- Individual stocks have higher volatility and less predictable drift
+- The further the threshold is from the current price, the less likely it is to be crossed in a short time
+- Market indices are more predictable than individual stocks
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution dates: {list_of_resolution_dates}
+
+For each resolution date, estimate the probability that the price condition will be met. \
+Consider the distance between current value and threshold, typical volatility for this asset, and the time available.
+
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. \
+(For example, if there are n resolution dates, you would output different *p* for each resolution date) \
+Do not output anything else.
+Answer: {{ Insert answer here }}"""
+
+DBNOMICS_DATASET_PROMPT = """\
+You are an expert data analyst specializing in statistical time series. \
+You understand seasonal patterns, publication lags, and the base rates of threshold-crossing events in official statistics.
+
+Given the current value and threshold in the question, estimate the probability of the threshold being crossed by each resolution date.
+
+Key principles for statistical time series:
+- Temperature data is strongly seasonal — consider the time of year for each resolution date
+- Many economic statistics have publication delays — the freeze value may be weeks old
+- Historical base rates are highly informative — if this type of value exceeds the threshold 65% of the time historically, that should anchor your estimate
+- Consider whether the threshold is above or below the typical range for this metric
+
+Question:
+{question}
+
+Question Background:
+{background}
+
+Resolution Criteria:
+{resolution_criteria}
+
+Current value on {freeze_datetime}:
+{freeze_datetime_value}
+
+Value Explanation:
+{freeze_datetime_value_explanation}
+
+Today's Date: {today_date}
+
+Question resolution dates: {list_of_resolution_dates}
+
+For each resolution date, estimate the probability that the condition will be met. \
+Pay special attention to seasonal patterns if this is weather/climate data, and to the historical frequency of threshold crossings.
+
+Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. \
+(For example, if there are n resolution dates, you would output different *p* for each resolution date) \
+Do not output anything else.
+Answer: {{ Insert answer here }}"""
+
+_SOURCE_PROMPT_MAP: dict[str, str] = {
+    "fred": FRED_DATASET_PROMPT,
+    "yfinance": YFINANCE_DATASET_PROMPT,
+    "dbnomics": DBNOMICS_DATASET_PROMPT,
+}
+
 SINGLE_DATE_DATASET_PROMPT = """\
 You are an expert superforecaster, familiar with the work of Tetlock and others. \
 Make a prediction of the probability that the question will be resolved as true. \
@@ -517,7 +641,10 @@ def _build_prompt(
     formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
 
     if prompt_variant in ("zero-shot", "zero-shot-fv", "dataset"):
-        prompt = ZERO_SHOT_DATASET_PROMPT.format(
+        template = ZERO_SHOT_DATASET_PROMPT
+        if SOURCE_SPECIFIC_PROMPTS:
+            template = _SOURCE_PROMPT_MAP.get(effective_source.lower(), template)
+        prompt = template.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
@@ -549,7 +676,10 @@ def _build_prompt(
         return prompt
 
     if effective_source.lower() in TIMESERIES_SOURCES:
-        return ZERO_SHOT_DATASET_PROMPT.format(
+        template = ZERO_SHOT_DATASET_PROMPT
+        if SOURCE_SPECIFIC_PROMPTS:
+            template = _SOURCE_PROMPT_MAP.get(effective_source.lower(), template)
+        return template.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
