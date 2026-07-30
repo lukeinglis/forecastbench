@@ -1,8 +1,10 @@
 """Calibration tools for forecast probabilities.
 
-Provides two approaches:
+Provides multiple approaches:
 1. Isotonic regression (PAVA) — learned from result files, applied per-source
 2. Hierarchical Platt scaling — fitted from forecasts+outcomes, saved/loaded as params
+3. Beta calibration — 3-parameter generalization of Platt scaling
+4. Feature-rich Platt — Platt scaling extended with question-level features
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import json
 import math
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -395,6 +398,197 @@ def calibrate_forecasts(
             p = params.get(src, params.get("_global", {"a": 1.0, "b": 0.0}))
         result[qid] = platt_calibrate(prob, p["a"], p["b"])
     return result
+
+
+# ---------------------------------------------------------------------------
+# Beta calibration — 3-parameter generalization of Platt scaling
+# ---------------------------------------------------------------------------
+
+@dataclass
+class BetaCalibrationModel:
+    a: float = 1.0
+    b: float = 1.0
+    c: float = 0.0
+
+
+def _beta_nll(
+    params: Any,
+    log_p: Any,
+    log_1mp: Any,
+    outcomes: Any,
+) -> float:
+    import numpy as np
+    a, b, c = float(params[0]), float(params[1]), float(params[2])
+    z = a * log_p + b * log_1mp + c
+    z = np.clip(z, -500, 500)
+    p = 1.0 / (1.0 + np.exp(-z))
+    p = np.clip(p, 1e-15, 1 - 1e-15)
+    nll = -np.sum(outcomes * np.log(p) + (1 - outcomes) * np.log(1 - p))
+    return float(nll)
+
+
+def fit_beta_calibration(
+    predictions: list[float],
+    outcomes: list[int],
+) -> BetaCalibrationModel:
+    """Fit 3-parameter beta calibration via maximum likelihood.
+
+    Maps: logit(calibrated) = a * log(p) + b * log(1-p) + c
+    with constraints a >= 0, b >= 0 for monotonicity.
+    """
+    import numpy as np
+    from scipy.optimize import minimize as sp_minimize
+
+    if len(predictions) < 3:
+        return BetaCalibrationModel()
+
+    EPS = 1e-6
+    raw = np.clip(predictions, EPS, 1 - EPS)
+    log_p = np.log(raw)
+    log_1mp = np.log(1 - raw)
+    outs = np.array(outcomes, dtype=np.float64)
+
+    result = sp_minimize(
+        _beta_nll,
+        x0=np.array([1.0, 1.0, 0.0]),
+        args=(log_p, log_1mp, outs),
+        method="L-BFGS-B",
+        bounds=[(0.0, None), (0.0, None), (None, None)],
+        options={"maxiter": 1000},
+    )
+    return BetaCalibrationModel(
+        a=float(result.x[0]),
+        b=float(result.x[1]),
+        c=float(result.x[2]),
+    )
+
+
+def apply_beta_calibration(
+    predictions: list[float],
+    model: BetaCalibrationModel,
+) -> list[float]:
+    """Apply fitted beta calibration to a list of predictions."""
+    EPS = 1e-6
+    calibrated: list[float] = []
+    for p in predictions:
+        p_clamped = max(EPS, min(1 - EPS, p))
+        z = model.a * math.log(p_clamped) + model.b * math.log(1 - p_clamped) + model.c
+        cal = _logistic(z)
+        calibrated.append(max(0.001, min(0.999, cal)))
+    return calibrated
+
+
+def beta_calibrate(probability: float, model: BetaCalibrationModel) -> float:
+    """Apply beta calibration to a single probability."""
+    return apply_beta_calibration([probability], model)[0]
+
+
+# ---------------------------------------------------------------------------
+# Feature-rich Platt scaling — Platt extended with question-level features
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FeaturePlattModel:
+    a: float = 1.0
+    b: float = 0.0
+    w_horizon: float = 0.0
+    w_threshold: float = 0.0
+
+
+def _feature_platt_nll(
+    params: Any,
+    logits: Any,
+    horizon_features: Any,
+    threshold_features: Any,
+    outcomes: Any,
+) -> float:
+    import numpy as np
+    a, b, w1, w2 = (float(params[0]), float(params[1]),
+                     float(params[2]), float(params[3]))
+    z = a * logits + b + w1 * horizon_features + w2 * threshold_features
+    z = np.clip(z, -500, 500)
+    p = 1.0 / (1.0 + np.exp(-z))
+    p = np.clip(p, 1e-15, 1 - 1e-15)
+    nll = -np.sum(outcomes * np.log(p) + (1 - outcomes) * np.log(1 - p))
+    reg = 0.1 * (w1 ** 2 + w2 ** 2)
+    return float(nll + reg)
+
+
+def fit_feature_platt(
+    predictions: list[float],
+    outcomes: list[int],
+    features_dict: dict[str, list[float]],
+) -> FeaturePlattModel:
+    """Fit feature-rich Platt scaling.
+
+    Formula: calibrated = logistic(a * logit(p) + b + w1 * log(horizon_days+1) + w2 * threshold_distance_norm)
+
+    features_dict keys:
+        'horizon_days': list of (resolution_date - forecast_due_date).days per question
+        'threshold_distance': (optional) list of normalized threshold distances per question
+    """
+    import numpy as np
+    from scipy.optimize import minimize as sp_minimize
+
+    if len(predictions) < 4:
+        return FeaturePlattModel()
+
+    logits = np.array([_logit(p) for p in predictions])
+    outs = np.array(outcomes, dtype=np.float64)
+
+    horizon_days = features_dict.get("horizon_days", [0.0] * len(predictions))
+    horizon_features = np.log(np.array(horizon_days, dtype=np.float64) + 1.0)
+
+    threshold_raw = features_dict.get("threshold_distance", [0.0] * len(predictions))
+    threshold_features = np.array(threshold_raw, dtype=np.float64)
+
+    result = sp_minimize(
+        _feature_platt_nll,
+        x0=np.array([1.0, 0.0, 0.0, 0.0]),
+        args=(logits, horizon_features, threshold_features, outs),
+        method="Nelder-Mead",
+        options={"maxiter": 2000, "xatol": 1e-8, "fatol": 1e-8},
+    )
+    return FeaturePlattModel(
+        a=float(result.x[0]),
+        b=float(result.x[1]),
+        w_horizon=float(result.x[2]),
+        w_threshold=float(result.x[3]),
+    )
+
+
+def apply_feature_platt(
+    predictions: list[float],
+    model: FeaturePlattModel,
+    features_dict: dict[str, list[float]],
+) -> list[float]:
+    """Apply fitted feature-rich Platt scaling to a list of predictions."""
+    horizon_days = features_dict.get("horizon_days", [0.0] * len(predictions))
+    threshold_raw = features_dict.get("threshold_distance", [0.0] * len(predictions))
+
+    calibrated: list[float] = []
+    for i, p in enumerate(predictions):
+        logit_p = _logit(p)
+        h = math.log(float(horizon_days[i]) + 1.0)
+        td = float(threshold_raw[i])
+        z = model.a * logit_p + model.b + model.w_horizon * h + model.w_threshold * td
+        cal = _logistic(z)
+        calibrated.append(max(0.001, min(0.999, cal)))
+    return calibrated
+
+
+def feature_platt_calibrate(
+    probability: float,
+    model: FeaturePlattModel,
+    horizon_days: float = 0.0,
+    threshold_distance: float = 0.0,
+) -> float:
+    """Apply feature-rich Platt calibration to a single probability."""
+    return apply_feature_platt(
+        [probability],
+        model,
+        {"horizon_days": [horizon_days], "threshold_distance": [threshold_distance]},
+    )[0]
 
 
 if __name__ == "__main__":

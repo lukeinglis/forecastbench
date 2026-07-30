@@ -10,7 +10,16 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from calibrate import platt_calibrate as calibrate, fit_calibration
+from calibrate import (
+    platt_calibrate as calibrate,
+    fit_calibration,
+    fit_beta_calibration,
+    beta_calibrate,
+    BetaCalibrationModel,
+    fit_feature_platt,
+    apply_feature_platt,
+    FeaturePlattModel,
+)
 from score import brier_index, brier_score
 
 RESULTS_DIR = Path("results")
@@ -246,6 +255,156 @@ def evaluate_isotonic(results: list[dict]) -> list[dict] | None:
     return folds
 
 
+def evaluate_beta(results: list[dict]) -> list[dict]:
+    """Leave-one-round-out cross-validation for beta calibration."""
+    folds = []
+    for test_idx in range(len(results)):
+        test = results[test_idx]
+        test_sources = test.get("sources", {})
+        if not test_sources:
+            continue
+
+        train_f, train_o, train_s = _merge_train(results, test_idx)
+
+        by_source: dict[str, tuple[list[float], list[int]]] = defaultdict(lambda: ([], []))
+        all_train_f: list[float] = []
+        all_train_o: list[int] = []
+        for qid in train_f:
+            if qid in train_o:
+                all_train_f.append(train_f[qid])
+                all_train_o.append(train_o[qid])
+                src = train_s.get(qid, "_global")
+                by_source[src][0].append(train_f[qid])
+                by_source[src][1].append(train_o[qid])
+
+        global_model = fit_beta_calibration(all_train_f, all_train_o)
+        source_models: dict[str, BetaCalibrationModel] = {}
+        for src, (fs, os_) in by_source.items():
+            if len(fs) >= 10:
+                source_models[src] = fit_beta_calibration(fs, os_)
+
+        test_f = dict(test.get("forecasts", {}))
+        test_o = test.get("outcomes", {})
+
+        calibrated: dict[str, float] = {}
+        for qid, prob in test_f.items():
+            src = test_sources.get(qid, "")
+            model = source_models.get(src, global_model)
+            calibrated[qid] = beta_calibrate(prob, model)
+
+        uncal_bs = _mean_brier(_pairs(test_f, test_o))
+        cal_bs = _mean_brier(_pairs(calibrated, test_o))
+
+        folds.append({
+            "round": _round_name(test, test_idx),
+            "uncal_index": brier_index(uncal_bs),
+            "beta_index": brier_index(cal_bs),
+            "delta": brier_index(cal_bs) - brier_index(uncal_bs),
+            "n": len([q for q in test_f if q in test_o]),
+            "by_source": {
+                src: {"index": brier_index(_mean_brier(pairs)), "n": len(pairs)}
+                for src, pairs in _by_source_scores(calibrated, test_o, test_sources).items()
+            },
+        })
+    return folds
+
+
+def evaluate_feature_platt(results: list[dict], min_samples: int = 10) -> list[dict]:
+    """Leave-one-round-out cross-validation for feature-rich Platt scaling.
+
+    Extracts horizon_days from result metadata when available. Threshold distance
+    is set to 0 when not computable (non-timeseries questions).
+    """
+    folds = []
+    for test_idx in range(len(results)):
+        test = results[test_idx]
+        test_sources = test.get("sources", {})
+        if not test_sources:
+            continue
+
+        train_f, train_o, train_s = _merge_train(results, test_idx)
+
+        by_source: dict[str, tuple[list[float], list[int], list[float], list[float]]] = (
+            defaultdict(lambda: ([], [], [], []))
+        )
+        all_preds: list[float] = []
+        all_outs: list[int] = []
+        all_horizon: list[float] = []
+        all_threshold: list[float] = []
+
+        for i, r in enumerate(results):
+            if i == test_idx:
+                continue
+            horizons = r.get("horizon_days", {})
+            thresholds = r.get("threshold_distances", {})
+            for qid, prob in r.get("forecasts", {}).items():
+                if qid not in r.get("outcomes", {}):
+                    continue
+                outcome = r["outcomes"][qid]
+                h = float(horizons.get(qid, 30))
+                td = float(thresholds.get(qid, 0.0))
+                src = train_s.get(qid, "_global")
+
+                all_preds.append(prob)
+                all_outs.append(outcome)
+                all_horizon.append(h)
+                all_threshold.append(td)
+
+                by_source[src][0].append(prob)
+                by_source[src][1].append(outcome)
+                by_source[src][2].append(h)
+                by_source[src][3].append(td)
+
+        if not all_preds:
+            all_preds = list(train_f.values())
+            all_outs = [train_o[qid] for qid in train_f if qid in train_o]
+            all_horizon = [30.0] * len(all_preds)
+            all_threshold = [0.0] * len(all_preds)
+
+        global_model = fit_feature_platt(
+            all_preds, all_outs,
+            {"horizon_days": all_horizon, "threshold_distance": all_threshold},
+        )
+        source_models: dict[str, FeaturePlattModel] = {}
+        for src, (fs, os_, hs, tds) in by_source.items():
+            if len(fs) >= min_samples:
+                source_models[src] = fit_feature_platt(
+                    fs, os_, {"horizon_days": hs, "threshold_distance": tds},
+                )
+
+        test_f = dict(test.get("forecasts", {}))
+        test_o = test.get("outcomes", {})
+        test_horizons = test.get("horizon_days", {})
+        test_thresholds = test.get("threshold_distances", {})
+
+        calibrated: dict[str, float] = {}
+        for qid, prob in test_f.items():
+            src = test_sources.get(qid, "")
+            model = source_models.get(src, global_model)
+            h = float(test_horizons.get(qid, 30))
+            td = float(test_thresholds.get(qid, 0.0))
+            calibrated[qid] = apply_feature_platt(
+                [prob], model,
+                {"horizon_days": [h], "threshold_distance": [td]},
+            )[0]
+
+        uncal_bs = _mean_brier(_pairs(test_f, test_o))
+        cal_bs = _mean_brier(_pairs(calibrated, test_o))
+
+        folds.append({
+            "round": _round_name(test, test_idx),
+            "uncal_index": brier_index(uncal_bs),
+            "fplatt_index": brier_index(cal_bs),
+            "delta": brier_index(cal_bs) - brier_index(uncal_bs),
+            "n": len([q for q in test_f if q in test_o]),
+            "by_source": {
+                src: {"index": brier_index(_mean_brier(pairs)), "n": len(pairs)}
+                for src, pairs in _by_source_scores(calibrated, test_o, test_sources).items()
+            },
+        })
+    return folds
+
+
 def _print_folds(folds: list[dict], cal_key: str) -> float:
     total_delta = 0.0
     for fold in folds:
@@ -344,6 +503,24 @@ def crossval() -> None:
         avg = _print_folds(folds, "iso_index")
         configs.append(("isotonic", avg))
     print()
+
+    # 6. Beta calibration
+    print("--- beta ---")
+    folds = evaluate_beta(results)
+    if folds:
+        avg = _print_folds(folds, "beta_index")
+        configs.append(("beta", avg))
+    print()
+
+    # 7. Feature-rich Platt scaling
+    for min_s in [5, 10, 20]:
+        label = f"feature_platt_min{min_s}"
+        print(f"--- {label} ---")
+        folds = evaluate_feature_platt(results, min_samples=min_s)
+        if folds:
+            avg = _print_folds(folds, "fplatt_index")
+            configs.append((label, avg))
+        print()
 
     # Summary
     print("=" * 60)
