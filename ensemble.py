@@ -2,6 +2,12 @@
 
 Fans out forecasts to multiple LLMs in parallel and aggregates via log-odds
 extremization. Event sources (acled, wikipedia) use only the primary model.
+
+Aggregation methods controlled by FORECAST_ENSEMBLE_AGGREGATION env var:
+- 'mean': arithmetic mean (default)
+- 'geometric_mean_odds': geometric mean of odds ratios
+- 'trimmed_mean': drop min/max then arithmetic mean (N>=4, else falls back to mean)
+- 'extremized': log-odds extremization with FORECAST_EXTREMIZE_GAMMA (legacy default)
 """
 
 from __future__ import annotations
@@ -28,6 +34,8 @@ logger = get_logger("ensemble")
 
 EXTREMIZE_GAMMA = float(os.getenv("FORECAST_EXTREMIZE_GAMMA", "1.5"))
 
+ENSEMBLE_AGGREGATION = os.getenv("FORECAST_ENSEMBLE_AGGREGATION", "mean")
+
 ENSEMBLE_MODELS = os.getenv(
     "FORECAST_ENSEMBLE_MODELS",
     "vertex_ai/claude-sonnet-4@20250514,openai/gpt-4o",
@@ -36,9 +44,63 @@ ENSEMBLE_MODELS = os.getenv(
 EVENT_SOURCES = frozenset(["acled", "wikipedia"])
 
 
+def _arithmetic_mean(predictions: list[float]) -> float:
+    return sum(predictions) / len(predictions)
+
+
+def _geometric_mean_odds(predictions: list[float]) -> float:
+    EPS = 0.02
+    clamped = [max(EPS, min(1 - EPS, p)) for p in predictions]
+    odds = [p / (1 - p) for p in clamped]
+    clipped_odds = [max(0.01, min(100.0, o)) for o in odds]
+    log_mean = sum(math.log(o) for o in clipped_odds) / len(clipped_odds)
+    gmean_odds = math.exp(log_mean)
+    result = gmean_odds / (1.0 + gmean_odds)
+    return max(0.02, min(0.98, result))
+
+
+def _trimmed_mean(predictions: list[float]) -> float:
+    if len(predictions) < 4:
+        return _arithmetic_mean(predictions)
+    sorted_preds = sorted(predictions)
+    trimmed = sorted_preds[1:-1]
+    return sum(trimmed) / len(trimmed)
+
+
+def _extremized_aggregate(predictions: list[float], gamma: float) -> float:
+    EPS = 1e-6
+    clamped = [max(EPS, min(1 - EPS, p)) for p in predictions]
+    mean_logit = sum(math.log(p / (1 - p)) for p in clamped) / len(clamped)
+    return 1.0 / (1.0 + math.exp(-gamma * mean_logit))
+
+
+def aggregate_predictions(
+    predictions: list[float],
+    method: str = ENSEMBLE_AGGREGATION,
+    gamma: float = EXTREMIZE_GAMMA,
+) -> float:
+    if len(predictions) == 1:
+        return predictions[0]
+    if method == "geometric_mean_odds":
+        return _geometric_mean_odds(predictions)
+    if method == "trimmed_mean":
+        return _trimmed_mean(predictions)
+    if method == "extremized":
+        return _extremized_aggregate(predictions, gamma)
+    return _arithmetic_mean(predictions)
+
+
 def _aggregate_forecasts(predictions: list[float], gamma: float = EXTREMIZE_GAMMA) -> float:
     if len(predictions) == 1:
         return predictions[0]
+    if ENSEMBLE_AGGREGATION == "geometric_mean_odds":
+        return _geometric_mean_odds(predictions)
+    if ENSEMBLE_AGGREGATION == "trimmed_mean":
+        return _trimmed_mean(predictions)
+    if ENSEMBLE_AGGREGATION == "extremized":
+        return _extremized_aggregate(predictions, gamma)
+    if ENSEMBLE_AGGREGATION == "mean":
+        return _arithmetic_mean(predictions)
     EPS = 1e-6
     clamped = [max(EPS, min(1 - EPS, p)) for p in predictions]
     mean_logit = sum(math.log(p / (1 - p)) for p in clamped) / len(clamped)

@@ -9,7 +9,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ensemble import _aggregate_forecasts
+from ensemble import (
+    _aggregate_forecasts,
+    _arithmetic_mean,
+    _geometric_mean_odds,
+    _trimmed_mean,
+    aggregate_predictions,
+)
 from fetch_data import Question
 
 
@@ -123,7 +129,7 @@ class TestMultiModelEnsembleForecast:
             with pytest.raises(ValueError, match="All .* ensemble models failed"):
                 asyncio.run(ensemble_forecast(q))
 
-    def test_three_model_extremized(self) -> None:
+    def test_three_model_aggregated(self) -> None:
         from ensemble import ensemble_forecast
 
         q = _make_question(source="infer")
@@ -138,7 +144,7 @@ class TestMultiModelEnsembleForecast:
             result = asyncio.run(ensemble_forecast(q))
 
         assert result == pytest.approx(expected, abs=1e-6)
-        assert result > 0.6
+        assert result == pytest.approx(0.6, abs=1e-6)
 
 
 class TestEventSourceSingleModel:
@@ -533,7 +539,20 @@ class TestItshubEnsembleForecastMultiHorizon:
 # ===================================================================
 
 class TestAggregateForecasts:
-    def test_gamma_1_is_geometric_mean_of_odds(self) -> None:
+    def test_default_is_arithmetic_mean(self) -> None:
+        preds = [0.3, 0.7]
+        result = _aggregate_forecasts(preds)
+        assert result == pytest.approx(0.5, abs=1e-6)
+
+    def test_single_prediction_returned_unchanged(self) -> None:
+        assert _aggregate_forecasts([0.73]) == 0.73
+        assert _aggregate_forecasts([0.01]) == 0.01
+        assert _aggregate_forecasts([0.99]) == 0.99
+
+    def test_extremized_mode_gamma_1_is_geometric_mean_of_odds(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ensemble.ENSEMBLE_AGGREGATION", "extremized")
         preds = [0.3, 0.7, 0.8]
         result = _aggregate_forecasts(preds, gamma=1.0)
         odds = [p / (1 - p) for p in preds]
@@ -541,47 +560,183 @@ class TestAggregateForecasts:
         expected = geo_mean_odds / (1 + geo_mean_odds)
         assert result == pytest.approx(expected, abs=1e-6)
 
-    def test_gamma_1_5_pushes_away_from_half(self) -> None:
+    def test_extremized_mode_pushes_away_from_half(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ensemble.ENSEMBLE_AGGREGATION", "extremized")
         preds = [0.6, 0.7, 0.8]
         result_neutral = _aggregate_forecasts(preds, gamma=1.0)
         result_extremized = _aggregate_forecasts(preds, gamma=1.5)
         assert result_neutral > 0.5
         assert result_extremized > result_neutral
 
-    def test_single_prediction_returned_unchanged(self) -> None:
-        assert _aggregate_forecasts([0.73]) == 0.73
-        assert _aggregate_forecasts([0.01]) == 0.01
-        assert _aggregate_forecasts([0.99]) == 0.99
-
-    def test_edge_cases_clamped(self) -> None:
-        result = _aggregate_forecasts([0.0, 1.0], gamma=1.0)
-        assert 0.0 < result < 1.0
-        assert result == pytest.approx(0.5, abs=1e-3)
-
-    def test_ensemble_uses_extremization(self) -> None:
-        preds = [0.6, 0.8]
-        simple_mean = sum(preds) / len(preds)
-        extremized = _aggregate_forecasts(preds)
-        assert extremized != pytest.approx(simple_mean, abs=1e-3)
-        assert extremized > simple_mean
-
-    def test_gamma_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("FORECAST_EXTREMIZE_GAMMA", "2.5")
-        val = float("2.5")
-        result = _aggregate_forecasts([0.6, 0.7], gamma=val)
-        result_default = _aggregate_forecasts([0.6, 0.7], gamma=1.5)
-        assert result != pytest.approx(result_default, abs=1e-3)
-
-    def test_higher_gamma_more_extreme(self) -> None:
+    def test_extremized_mode_higher_gamma_more_extreme(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ensemble.ENSEMBLE_AGGREGATION", "extremized")
         preds = [0.6, 0.7, 0.8]
         result_1 = _aggregate_forecasts(preds, gamma=1.0)
         result_2 = _aggregate_forecasts(preds, gamma=2.0)
         assert result_2 > result_1
         assert result_2 > 0.5
 
-    def test_below_half_pushed_lower(self) -> None:
+    def test_extremized_mode_below_half_pushed_lower(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ensemble.ENSEMBLE_AGGREGATION", "extremized")
         preds = [0.2, 0.3, 0.4]
         result_1 = _aggregate_forecasts(preds, gamma=1.0)
         result_2 = _aggregate_forecasts(preds, gamma=2.0)
         assert result_2 < result_1
         assert result_2 < 0.5
+
+    def test_geometric_mean_odds_via_env(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ensemble.ENSEMBLE_AGGREGATION", "geometric_mean_odds")
+        preds = [0.3, 0.7, 0.8]
+        result = _aggregate_forecasts(preds)
+        expected = _geometric_mean_odds(preds)
+        assert result == pytest.approx(expected, abs=1e-6)
+
+    def test_trimmed_mean_via_env(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("ensemble.ENSEMBLE_AGGREGATION", "trimmed_mean")
+        preds = [0.1, 0.4, 0.6, 0.9]
+        result = _aggregate_forecasts(preds)
+        expected = _trimmed_mean(preds)
+        assert result == pytest.approx(expected, abs=1e-6)
+
+
+# ===================================================================
+# Geometric mean of odds tests
+# ===================================================================
+
+class TestGeometricMeanOdds:
+    def test_identity_at_half(self) -> None:
+        assert _geometric_mean_odds([0.5, 0.5, 0.5]) == pytest.approx(0.5, abs=1e-6)
+
+    def test_known_values(self) -> None:
+        result = _geometric_mean_odds([0.8, 0.8, 0.8])
+        assert result == pytest.approx(0.8, abs=1e-6)
+
+    def test_emphasizes_agreement(self) -> None:
+        agreeing = [0.8, 0.8, 0.8]
+        mixed = [0.6, 0.8, 1.0]
+        result_agree = _geometric_mean_odds(agreeing)
+        result_mixed = _geometric_mean_odds(mixed)
+        mean_agree = _arithmetic_mean(agreeing)
+        mean_mixed = _arithmetic_mean(mixed)
+        assert result_agree >= mean_agree - 1e-6
+        assert abs(result_agree - mean_agree) < abs(result_mixed - mean_mixed) + 0.05
+
+    def test_symmetric_around_half(self) -> None:
+        preds_high = [0.7, 0.8]
+        preds_low = [0.3, 0.2]
+        result_high = _geometric_mean_odds(preds_high)
+        result_low = _geometric_mean_odds(preds_low)
+        assert result_high == pytest.approx(1.0 - result_low, abs=1e-6)
+
+    def test_extreme_probabilities_clamped(self) -> None:
+        result = _geometric_mean_odds([0.001, 0.999])
+        assert 0.02 <= result <= 0.98
+
+    def test_single_prediction(self) -> None:
+        result = _geometric_mean_odds([0.7])
+        assert 0.02 <= result <= 0.98
+
+    def test_output_bounded(self) -> None:
+        result_low = _geometric_mean_odds([0.01, 0.01, 0.01])
+        result_high = _geometric_mean_odds([0.99, 0.99, 0.99])
+        assert result_low >= 0.02
+        assert result_high <= 0.98
+
+    def test_two_predictions(self) -> None:
+        result = _geometric_mean_odds([0.3, 0.7])
+        assert result == pytest.approx(0.5, abs=0.05)
+
+
+# ===================================================================
+# Trimmed mean tests
+# ===================================================================
+
+class TestTrimmedMean:
+    def test_drops_extremes_with_four_values(self) -> None:
+        preds = [0.1, 0.4, 0.6, 0.9]
+        result = _trimmed_mean(preds)
+        expected = (0.4 + 0.6) / 2
+        assert result == pytest.approx(expected, abs=1e-6)
+
+    def test_drops_extremes_with_five_values(self) -> None:
+        preds = [0.1, 0.3, 0.5, 0.7, 0.9]
+        result = _trimmed_mean(preds)
+        expected = (0.3 + 0.5 + 0.7) / 3
+        assert result == pytest.approx(expected, abs=1e-6)
+
+    def test_fallback_to_mean_with_two(self) -> None:
+        preds = [0.3, 0.7]
+        result = _trimmed_mean(preds)
+        expected = 0.5
+        assert result == pytest.approx(expected, abs=1e-6)
+
+    def test_fallback_to_mean_with_three(self) -> None:
+        preds = [0.2, 0.5, 0.8]
+        result = _trimmed_mean(preds)
+        expected = 0.5
+        assert result == pytest.approx(expected, abs=1e-6)
+
+    def test_single_prediction(self) -> None:
+        result = _trimmed_mean([0.65])
+        assert result == pytest.approx(0.65, abs=1e-6)
+
+    def test_unsorted_input(self) -> None:
+        preds = [0.9, 0.1, 0.6, 0.4]
+        result = _trimmed_mean(preds)
+        expected = (0.4 + 0.6) / 2
+        assert result == pytest.approx(expected, abs=1e-6)
+
+    def test_extreme_probabilities(self) -> None:
+        preds = [0.01, 0.4, 0.6, 0.99]
+        result = _trimmed_mean(preds)
+        expected = (0.4 + 0.6) / 2
+        assert result == pytest.approx(expected, abs=1e-6)
+
+
+# ===================================================================
+# aggregate_predictions dispatch tests
+# ===================================================================
+
+class TestAggregatePredictions:
+    def test_single_prediction_passthrough(self) -> None:
+        for method in ["mean", "geometric_mean_odds", "trimmed_mean", "extremized"]:
+            assert aggregate_predictions([0.73], method=method) == 0.73
+
+    def test_mean_method(self) -> None:
+        result = aggregate_predictions([0.3, 0.7], method="mean")
+        assert result == pytest.approx(0.5, abs=1e-6)
+
+    def test_geometric_mean_odds_method(self) -> None:
+        result = aggregate_predictions([0.5, 0.5, 0.5], method="geometric_mean_odds")
+        assert result == pytest.approx(0.5, abs=1e-6)
+
+    def test_trimmed_mean_method(self) -> None:
+        result = aggregate_predictions([0.1, 0.4, 0.6, 0.9], method="trimmed_mean")
+        assert result == pytest.approx(0.5, abs=1e-6)
+
+    def test_extremized_method(self) -> None:
+        result = aggregate_predictions([0.6, 0.8], method="extremized", gamma=1.5)
+        assert result > 0.7
+
+    def test_unknown_method_falls_back_to_mean(self) -> None:
+        result = aggregate_predictions([0.3, 0.7], method="unknown")
+        assert result == pytest.approx(0.5, abs=1e-6)
+
+    def test_multi_horizon_independent_aggregation(self) -> None:
+        horizons = [[0.3, 0.7], [0.2, 0.8], [0.4, 0.6]]
+        n_horizons = len(horizons[0])
+        n_models = len(horizons)
+        for h in range(n_horizons):
+            preds = [horizons[m][h] for m in range(n_models)]
+            result = aggregate_predictions(preds, method="geometric_mean_odds")
+            assert 0.02 <= result <= 0.98
