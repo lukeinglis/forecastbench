@@ -199,6 +199,55 @@ def format_historical_context(values: dict[str, float], cutoff_date: str) -> str
     )
 
 
+def get_raw_historical_data(question: Any) -> dict[str, float] | None:
+    """Return cached historical data dict for a timeseries question.
+
+    Unlike fetch_historical_context() which returns a formatted string for LLM prompts,
+    this returns the raw {date: value} dict for statistical modeling.
+    Returns None if RAG is disabled, source unsupported, or no data available.
+    """
+    if not FORECAST_RAG:
+        return None
+
+    source = getattr(question, "source", "").lower()
+    if source not in _FETCHERS:
+        return None
+
+    question_id = getattr(question, "id", "")
+    if not question_id:
+        return None
+
+    cutoff_str = getattr(question, "forecast_due_date", None) or getattr(
+        question, "freeze_datetime", None
+    )
+    if not cutoff_str:
+        return None
+
+    cutoff_str = str(cutoff_str)[:10]
+
+    cached = _read_cache(source, question_id, cutoff_str)
+    if cached is not None:
+        return cached
+
+    try:
+        cutoff = date.fromisoformat(cutoff_str)
+    except ValueError:
+        return None
+
+    fetcher = _FETCHERS[source]
+    try:
+        values = fetcher(question_id, cutoff)
+    except Exception:
+        logger.warning("rag_fetch_error", source=source, question_id=question_id, exc_info=True)
+        return None
+
+    if values is None:
+        return None
+
+    _write_cache(source, question_id, cutoff_str, values)
+    return values
+
+
 def fetch_historical_context(question: Any) -> str:
     """Fetch and format historical context for a timeseries question.
 
