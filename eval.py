@@ -872,6 +872,7 @@ def main() -> None:
         from multi_model_forecaster import multi_model_forecast, multi_model_forecast_multi_horizon
         forecaster = multi_model_forecast  # type: ignore[assignment]
         async_multi_forecaster_fn = multi_model_forecast_multi_horizon  # type: ignore[assignment]
+        os.environ["FORECAST_MODEL"] = "multi"
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
