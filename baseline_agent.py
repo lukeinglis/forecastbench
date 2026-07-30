@@ -38,7 +38,7 @@ TIMESERIES_SOURCES = frozenset(["fred", "dbnomics", "yfinance"])
 HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "false").lower() in ("1", "true", "yes")
 TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "1.0"))
 BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "false").lower() in ("1", "true", "yes")
-SOURCE_SPECIFIC_PROMPTS = os.getenv("FORECAST_SOURCE_PROMPTS", "true").lower() in ("1", "true", "yes")
+SOURCE_SPECIFIC_PROMPTS = os.getenv("FORECAST_SOURCE_PROMPTS", "false").lower() in ("1", "true", "yes")
 
 
 def _load_base_rates() -> dict[str, float]:
