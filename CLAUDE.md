@@ -53,6 +53,7 @@
 - FORECAST_ENSEMBLE_N env var sets ensemble size for self-consistency averaging (default: 1, disabled). Set to 3+ to enable.
 - FORECAST_ENSEMBLE_TEMP env var sets temperature for ensemble members (default: 0.7). Ensemble disables thinking to allow temperature.
 - FORECAST_RAG env var enables/disables timeseries historical data retrieval (default: false). When enabled, fetches data from FRED/yfinance/dbnomics for timeseries questions missing freeze_datetime_value.
+- FORECAST_STATS_CONTEXT env var enables/disables computed statistics injection into timeseries prompts (default: false). When enabled, injects current value, threshold, % distance, position, and days to resolution for questions with a parseable threshold.
 - FRED_API_KEY env var required for FRED data retrieval (sign up at https://fred.stlouisfed.org/docs/api/api_key.html). yfinance and dbnomics require no API keys.
 - Multi-horizon forecasting is enabled by default for all dataset sources. Use --per-date to force per-date calling for all sources.
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude

@@ -40,6 +40,7 @@ TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "1.0")
 BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "false").lower() in ("1", "true", "yes")
 SOURCE_SPECIFIC_PROMPTS = os.getenv("FORECAST_SOURCE_PROMPTS", "false").lower() in ("1", "true", "yes")
 STATISTICAL_BLEND = float(os.getenv("FORECAST_STATISTICAL_BLEND", "0"))
+STATS_CONTEXT = os.getenv("FORECAST_STATS_CONTEXT", "false").lower() in ("1", "true", "yes")
 
 
 def _load_base_rates() -> dict[str, float]:
@@ -50,6 +51,60 @@ def _load_base_rates() -> dict[str, float]:
 
 
 TIMESERIES_BASE_RATES: dict[str, float] = _load_base_rates()
+
+
+def _compute_statistics_context(
+    question: Question,
+    resolution_date: str,
+    forecast_due_date: str,
+) -> str | None:
+    """Compute structured statistics for timeseries threshold questions.
+
+    Returns a formatted block with current value, threshold, distance, and days
+    to resolution, or None if the question doesn't have the required data.
+    """
+    if question.source.lower() not in TIMESERIES_SOURCES:
+        return None
+    if question.freeze_datetime_value is None:
+        return None
+
+    try:
+        current_value = float(question.freeze_datetime_value)
+    except (TypeError, ValueError):
+        return None
+
+    from statistical_baseline import extract_threshold
+
+    result = extract_threshold(question.question, question.resolution_criteria or "")
+    if result is None:
+        return None
+    threshold, _ = result
+
+    distance = abs(current_value - threshold)
+    if current_value != 0:
+        pct_distance = distance / abs(current_value) * 100
+    else:
+        pct_distance = 0.0
+    position = "above" if current_value > threshold else "below"
+
+    try:
+        from datetime import date as date_cls
+        due = date_cls.fromisoformat(str(forecast_due_date)[:10])
+        res = date_cls.fromisoformat(str(resolution_date)[:10])
+        days_to_resolution = max((res - due).days, 0)
+    except (ValueError, TypeError):
+        days_to_resolution = None
+
+    lines = [
+        "Statistical Context:",
+        f"- Current value: {current_value}",
+        f"- Threshold: {threshold}",
+        f"- Current position: {pct_distance:.1f}% {position} the threshold",
+    ]
+    if days_to_resolution is not None:
+        lines.append(f"- Days to resolution: {days_to_resolution}")
+
+    return "\n".join(lines)
 
 
 def _select_model(source: str | None) -> str:
@@ -675,6 +730,10 @@ def _build_prompt(
             ctx = get_statistical_context(question)
             if ctx:
                 prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+        if STATS_CONTEXT:
+            stats = _compute_statistics_context(question, resolution_date, today_date)
+            if stats:
+                prompt = prompt.replace("Output your answer", stats + "\n\nOutput your answer")
         return prompt
 
     effective_rd = resolution_dates or getattr(question, "resolution_dates", None)
@@ -717,13 +776,17 @@ def _build_prompt(
             ctx = get_statistical_context(question)
             if ctx:
                 prompt = prompt.replace("Output your answer", ctx + "\n\nOutput your answer")
+        if STATS_CONTEXT and dates_list:
+            stats = _compute_statistics_context(question, dates_list[0], today_date)
+            if stats:
+                prompt = prompt.replace("Output your answer", stats + "\n\nOutput your answer")
         return prompt
 
     if effective_source.lower() in TIMESERIES_SOURCES:
         template = ZERO_SHOT_DATASET_PROMPT
         if SOURCE_SPECIFIC_PROMPTS:
             template = _SOURCE_PROMPT_MAP.get(effective_source.lower(), template)
-        return template.format(
+        prompt = template.format(
             question=formatted_q,
             background=background,
             resolution_criteria=question.resolution_criteria or "",
@@ -733,6 +796,11 @@ def _build_prompt(
             today_date=today_date,
             list_of_resolution_dates=dates_list,
         )
+        if STATS_CONTEXT and dates_list:
+            stats = _compute_statistics_context(question, dates_list[0], today_date)
+            if stats:
+                prompt = prompt.replace("Output your answer", stats + "\n\nOutput your answer")
+        return prompt
 
     return SCRATCHPAD_DATASET_PROMPT.format(
         question=formatted_q,

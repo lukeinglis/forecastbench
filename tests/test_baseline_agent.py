@@ -1377,3 +1377,127 @@ class TestSourceSpecificPrompts:
         assert "macroeconomic forecaster" not in prompt
         assert "financial analyst" not in prompt
         assert "data analyst specializing in statistical" not in prompt
+
+
+class TestComputeStatisticsContext:
+    """Tests for _compute_statistics_context and FORECAST_STATS_CONTEXT integration."""
+
+    def _ts_question(
+        self,
+        source: str = "fred",
+        freeze_value: float | None = 4.5,
+        question_text: str = "Will the rate exceed 5.0 by the resolution date?",
+        resolution_criteria: str = "Resolves YES if the rate exceeds 5.0.",
+    ) -> Question:
+        return Question(
+            id="stats1",
+            source=source,
+            question=question_text,
+            background="Economic indicator",
+            resolution_criteria=resolution_criteria,
+            freeze_datetime="2024-06-15",
+            forecast_due_date="2024-06-15",
+            freeze_datetime_value=freeze_value,
+            resolution_dates=["2024-07-15", "2024-08-15"],
+        )
+
+    def test_returns_context_for_timeseries_with_threshold(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(freeze_value=4.5)
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is not None
+        assert "Current value: 4.5" in ctx
+        assert "Threshold: 5.0" in ctx
+        assert "below the threshold" in ctx
+        assert "Days to resolution: 30" in ctx
+
+    def test_returns_correct_above_position(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(freeze_value=6.0)
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is not None
+        assert "above the threshold" in ctx
+
+    def test_computes_pct_distance(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(freeze_value=4.0)
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is not None
+        assert "25.0% below the threshold" in ctx
+
+    def test_returns_none_for_missing_freeze_value(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(freeze_value=None)
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is None
+
+    def test_returns_none_for_non_timeseries_source(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(source="metaculus")
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is None
+
+    def test_returns_none_for_unparseable_threshold(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(question_text="Will something happen?", resolution_criteria="Resolves YES if yes.")
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is None
+
+    def test_all_timeseries_sources_work(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        for source in ["fred", "dbnomics", "yfinance"]:
+            q = self._ts_question(source=source)
+            ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+            assert ctx is not None, f"Source {source} returned None"
+
+    def test_zero_current_value_handles_pct(self) -> None:
+        from baseline_agent import _compute_statistics_context
+        q = self._ts_question(freeze_value=0.0)
+        ctx = _compute_statistics_context(q, "2024-07-15", "2024-06-15")
+        assert ctx is not None
+        assert "0.0% below the threshold" in ctx
+
+    def test_stats_context_disabled_by_default(self) -> None:
+        q = self._ts_question()
+        prompt = _build_prompt(q, resolution_date="2024-07-15")
+        assert "Statistical Context:" not in prompt
+
+    def test_stats_context_enabled_injects_into_single_date(self) -> None:
+        q = self._ts_question()
+        with patch("baseline_agent.STATS_CONTEXT", True):
+            prompt = _build_prompt(q, resolution_date="2024-07-15")
+        assert "Statistical Context:" in prompt
+        assert "Current value: 4.5" in prompt
+        assert "Threshold: 5.0" in prompt
+        assert prompt.index("Statistical Context:") < prompt.index("Output your answer")
+
+    def test_stats_context_enabled_injects_into_multi_date(self) -> None:
+        q = self._ts_question()
+        with patch("baseline_agent.STATS_CONTEXT", True):
+            prompt = _build_prompt(q, prompt_variant="dataset")
+        assert "Statistical Context:" in prompt
+        assert "Current value: 4.5" in prompt
+
+    def test_stats_context_false_no_change(self) -> None:
+        q = self._ts_question()
+        with patch("baseline_agent.STATS_CONTEXT", False):
+            prompt = _build_prompt(q, resolution_date="2024-07-15")
+        assert "Statistical Context:" not in prompt
+
+    def test_stats_context_market_source_not_injected(self) -> None:
+        q = _make_question(source="metaculus", freeze_datetime_value=0.5)
+        with patch("baseline_agent.STATS_CONTEXT", True):
+            prompt = _build_prompt(q)
+        assert "Statistical Context:" not in prompt
+
+    def test_stats_context_no_threshold_no_injection(self) -> None:
+        q = self._ts_question(question_text="Will something happen?", resolution_criteria="Resolves YES if yes.")
+        with patch("baseline_agent.STATS_CONTEXT", True):
+            prompt = _build_prompt(q, resolution_date="2024-07-15")
+        assert "Statistical Context:" not in prompt
+
+    def test_stats_context_scratchpad_fallback_path(self) -> None:
+        q = self._ts_question()
+        with patch("baseline_agent.STATS_CONTEXT", True):
+            prompt = _build_prompt(q, prompt_variant="scratchpad")
+        assert "Statistical Context:" in prompt
