@@ -80,7 +80,7 @@ class TestJoinPropagatesNewFields:
             forecast_due_date="2024-01-01",
             questions=[q],
         )
-        resolutions = {"q1": Resolution(id="q1", outcome=1)}
+        resolutions: dict[str, list[Resolution]] = {"q1": [Resolution(id="q1", outcome=1)]}
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 1
         rq = result[0]
@@ -90,7 +90,7 @@ class TestJoinPropagatesNewFields:
     def test_none_fields_propagated(self) -> None:
         q = Question(id="q2", source="acled", question="Test?")
         qs = QuestionSet(forecast_due_date="2024-01-01", questions=[q])
-        resolutions = {"q2": Resolution(id="q2", outcome=0)}
+        resolutions: dict[str, list[Resolution]] = {"q2": [Resolution(id="q2", outcome=0)]}
         result = join_resolved_questions([qs], resolutions)
         rq = result[0]
         for field in NEW_FIELDS:

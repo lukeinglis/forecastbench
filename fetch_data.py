@@ -197,15 +197,20 @@ def fetch_all_question_sets() -> list[QuestionSet]:
     return result
 
 
-def fetch_all_resolutions() -> dict[str, Resolution]:
-    """Fetch all resolutions, returning a dict keyed by question id."""
+def fetch_all_resolutions() -> dict[str, list[Resolution]]:
+    """Fetch all resolutions, returning a dict keyed by question id.
+
+    A question ID may appear multiple times across resolution files with
+    different resolution_date and outcome values (multi-horizon dataset
+    questions). All entries are preserved.
+    """
     filenames = list_resolution_files()
-    resolutions: dict[str, Resolution] = {}
+    resolutions: dict[str, list[Resolution]] = {}
     for f in filenames:
         try:
             res_list = fetch_resolution(f)
             for r in res_list:
-                resolutions[r.id] = r
+                resolutions.setdefault(r.id, []).append(r)
         except Exception as e:
             logger.warning("fetch_resolution_failed", filename=f, error=str(e))
     return resolutions
@@ -213,14 +218,22 @@ def fetch_all_resolutions() -> dict[str, Resolution]:
 
 def join_resolved_questions(
     question_sets: list[QuestionSet],
-    resolutions: dict[str, Resolution],
+    resolutions: dict[str, list[Resolution]],
 ) -> list[ResolvedQuestion]:
-    """Join questions with their resolutions, returning only resolved questions."""
+    """Join questions with their resolutions, returning only resolved questions.
+
+    Each question may have multiple resolutions (one per resolution date for
+    multi-horizon dataset questions). One ResolvedQuestion is produced per
+    valid resolution entry, each with its own outcome and resolution_date.
+    """
     resolved = []
     for qs in question_sets:
         for q in qs.questions:
-            if q.id in resolutions and resolutions[q.id].outcome is not None and getattr(resolutions[q.id], "resolved", None) is not False:
-                r = resolutions[q.id]
+            if q.id not in resolutions:
+                continue
+            for r in resolutions[q.id]:
+                if r.outcome is None or getattr(r, "resolved", None) is False:
+                    continue
                 resolved.append(
                     ResolvedQuestion(
                         id=q.id,
