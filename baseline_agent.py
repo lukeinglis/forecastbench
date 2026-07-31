@@ -39,6 +39,7 @@ HORIZON_DAMPENING = os.getenv("FORECAST_HORIZON_DAMPENING", "false").lower() in 
 TIMESERIES_CONFIDENCE = float(os.getenv("FORECAST_TIMESERIES_CONFIDENCE", "1.0"))
 BASE_RATE_HINT = os.getenv("FORECAST_BASE_RATE_HINT", "false").lower() in ("1", "true", "yes")
 SOURCE_SPECIFIC_PROMPTS = os.getenv("FORECAST_SOURCE_PROMPTS", "false").lower() in ("1", "true", "yes")
+STATISTICAL_BLEND = float(os.getenv("FORECAST_STATISTICAL_BLEND", "0"))
 
 
 def _load_base_rates() -> dict[str, float]:
@@ -61,6 +62,49 @@ def _apply_timeseries_dampening(prob: float, source: str) -> float:
     if source.lower() not in TIMESERIES_SOURCES:
         return prob
     return 0.5 + TIMESERIES_CONFIDENCE * (prob - 0.5)
+
+
+def _compute_statistical_blend(
+    llm_prob: float,
+    question: Question,
+    resolution_date: str,
+    forecast_due_date: str | None,
+) -> float:
+    """Blend LLM probability with statistical forecast for timeseries questions.
+
+    Returns blended probability, or llm_prob unchanged if statistical forecast unavailable.
+    """
+    if STATISTICAL_BLEND <= 0:
+        return llm_prob
+
+    from statistical_baseline import get_statistical_forecast
+    from timeseries_rag import get_raw_historical_data
+
+    historical = get_raw_historical_data(question)
+
+    effective_due = forecast_due_date or question.freeze_datetime or ""
+    try:
+        from datetime import date as date_cls
+        due = date_cls.fromisoformat(str(effective_due)[:10])
+        res = date_cls.fromisoformat(str(resolution_date)[:10])
+        horizon_days = max((res - due).days, 1)
+    except (ValueError, TypeError):
+        return llm_prob
+
+    stat_prob = get_statistical_forecast(question, historical_data=historical, horizon_days=horizon_days)
+    if stat_prob is None:
+        return llm_prob
+
+    blended = STATISTICAL_BLEND * stat_prob + (1 - STATISTICAL_BLEND) * llm_prob
+    logger.info(
+        "statistical_blend",
+        source=question.source,
+        llm=round(llm_prob, 4),
+        stat=round(stat_prob, 4),
+        blend=round(blended, 4),
+        weight=STATISTICAL_BLEND,
+    )
+    return blended
 
 
 def _apply_horizon_dampening(
@@ -937,6 +981,10 @@ def forecast(
         raise
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
+    if effective_source.lower() in TIMESERIES_SOURCES:
+        prob = _compute_statistical_blend(
+            prob, question, resolution_date or "", getattr(question, "forecast_due_date", None),
+        )
     logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
     return prob
 
@@ -1001,6 +1049,10 @@ async def aforecast(
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
     prob = _apply_timeseries_dampening(prob, effective_source)
+    if effective_source.lower() in TIMESERIES_SOURCES:
+        prob = _compute_statistical_blend(
+            prob, question, resolution_date or "", getattr(question, "forecast_due_date", None),
+        )
     logger.info("forecast_complete", question_id=question.id, probability=prob)
     return prob
 
@@ -1214,6 +1266,11 @@ async def aforecast_multi_horizon(
         if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
             probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
         probs = [_apply_timeseries_dampening(p, effective_source) for p in probs]
+        if effective_source.lower() in TIMESERIES_SOURCES:
+            probs = [
+                _compute_statistical_blend(p, question, rd, forecast_due_date)
+                for p, rd in zip(probs, resolution_dates)
+            ]
         return probs
 
     logger.info("multi_horizon_regex_failed", question_id=question.id, trying="llm_extraction")
@@ -1229,6 +1286,11 @@ async def aforecast_multi_horizon(
         if HORIZON_DAMPENING and n_horizons > 1 and forecast_due_date:
             probs = _apply_horizon_dampening(probs, resolution_dates, forecast_due_date)
         probs = [_apply_timeseries_dampening(p, effective_source) for p in probs]
+        if effective_source.lower() in TIMESERIES_SOURCES:
+            probs = [
+                _compute_statistical_blend(p, question, rd, forecast_due_date)
+                for p, rd in zip(probs, resolution_dates)
+            ]
         return probs
 
     logger.warning(
