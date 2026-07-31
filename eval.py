@@ -416,7 +416,13 @@ async def run_eval(
         questions = all_questions
         logger.info("submit_mode_enabled", n_all=len(questions), n_resolved=len(iteration_resolved))
     else:
-        questions = [_build_question(q) for q in iteration_resolved]
+        seen_ids: set[str] = set()
+        questions = []
+        for q in iteration_resolved:
+            if q.id not in seen_ids:
+                seen_ids.add(q.id)
+                questions.append(_build_question(q))
+        logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
     model_slug = _model_slug()
 
     if is_async_forecaster(forecaster):
