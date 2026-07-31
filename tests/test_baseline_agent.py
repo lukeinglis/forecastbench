@@ -1443,6 +1443,17 @@ class TestSanitizeKwargsForModel:
         result = _sanitize_kwargs_for_model(kwargs)
         assert "temperature" not in result
 
+    def test_removes_thinking_for_o3(self) -> None:
+        kwargs = {"model": "openai/o3", "thinking": {"type": "enabled", "budget_tokens": 8192}, "messages": []}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert "thinking" not in result
+        assert "messages" in result
+
+    def test_preserves_thinking_for_claude(self) -> None:
+        kwargs = {"model": "vertex_ai/claude-sonnet-4@20250514", "thinking": {"type": "enabled", "budget_tokens": 8192}}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 8192}
+
 
 class TestOSeriesForecastKwargs:
     def test_forecast_kwargs_drops_temp_for_o3_market(self) -> None:
@@ -1462,6 +1473,16 @@ class TestOSeriesForecastKwargs:
             kwargs = _forecast_kwargs(
                 [{"role": "user", "content": "test"}], source="fred",
             )
+        assert "temperature" not in kwargs
+
+    def test_forecast_kwargs_drops_thinking_for_o3_event(self) -> None:
+        import baseline_agent
+        with patch.object(baseline_agent, "MODEL", "openai/o3"), \
+             patch.object(baseline_agent, "THINKING_ENABLED", True):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="acled",
+            )
+        assert "thinking" not in kwargs
         assert "temperature" not in kwargs
 
     def test_forecast_kwargs_keeps_temp_for_claude_market(self) -> None:

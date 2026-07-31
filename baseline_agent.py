@@ -58,11 +58,12 @@ def _is_o_series_model(model: str) -> bool:
 
 
 def _sanitize_kwargs_for_model(kwargs: dict[str, Any], model: str | None = None) -> dict[str, Any]:
-    """Remove unsupported params for o-series models (only temperature=1 allowed)."""
+    """Remove unsupported params for o-series models."""
     effective = model or kwargs.get("model", MODEL)
     if _is_o_series_model(effective):
         kwargs.pop("temperature", None)
         kwargs.pop("top_p", None)
+        kwargs.pop("thinking", None)
     return kwargs
 
 
