@@ -234,6 +234,10 @@ def join_resolved_questions(
             for r in resolutions[q.id]:
                 if r.outcome is None or getattr(r, "resolved", None) is False:
                     continue
+                q_dates = getattr(q, "resolution_dates", None)
+                if isinstance(q_dates, list) and q_dates and r.resolution_date:
+                    if r.resolution_date not in q_dates:
+                        continue
                 resolved.append(
                     ResolvedQuestion(
                         id=q.id,
