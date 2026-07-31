@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import requests
+
 
 UPSTREAM_PROMPTS_URL = (
     "https://raw.githubusercontent.com/forecastingresearch/"
@@ -152,7 +154,7 @@ def check_resolution_matching() -> tuple[bool, str]:
             f"[PASS] Resolution matching: {expanded_count} resolved "
             f"from {base_count} base questions (ratio {ratio:.1f}x)",
         )
-    except Exception as e:
+    except (requests.RequestException, OSError) as e:
         return True, f"[WARN] Resolution matching check failed: {e}"
 
 
@@ -247,7 +249,7 @@ def check_multi_horizon_batching() -> tuple[bool, str]:
             f"[PASS] Multi-horizon batching: {base_questions} base questions "
             f"(not {expanded_entries} expanded entries)",
         )
-    except Exception as e:
+    except (requests.RequestException, OSError) as e:
         return True, f"[WARN] Multi-horizon check failed: {e}"
 
 
@@ -283,7 +285,7 @@ def check_question_count(leaderboard: list[dict[str, str]] | None) -> tuple[bool
             True,
             f"[PASS] Question count: {our_count} (leaderboard reference range: {lo}-{hi})",
         )
-    except Exception as e:
+    except (requests.RequestException, OSError) as e:
         return True, f"[WARN] Question count check failed: {e}"
 
 
