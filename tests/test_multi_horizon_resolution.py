@@ -156,6 +156,83 @@ class TestJoinResolvedQuestionsMultiHorizon:
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 0
 
+    def test_filters_resolutions_not_in_question_dates(self) -> None:
+        """Resolutions from other rounds with dates NOT in question's resolution_dates are excluded."""
+        qs = QuestionSet(
+            forecast_due_date="2024-06-01",
+            question_set="round_1",
+            questions=[
+                Question(
+                    id="q1", source="fred", question="Will X?",
+                    resolution_dates=["2024-07-01", "2024-08-01"],
+                )
+            ],
+        )
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [
+                Resolution(id="q1", outcome=0, resolution_date="2024-07-01"),
+                Resolution(id="q1", outcome=1, resolution_date="2024-08-01"),
+                Resolution(id="q1", outcome=0, resolution_date="2024-09-01"),
+                Resolution(id="q1", outcome=1, resolution_date="2024-12-01"),
+                Resolution(id="q1", outcome=0, resolution_date="2025-03-01"),
+            ],
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 2
+        dates = {rq.resolution_date for rq in result}
+        assert dates == {"2024-07-01", "2024-08-01"}
+
+    def test_market_questions_unaffected_by_date_filter(self) -> None:
+        """Market questions (no resolution_dates list) pass through all resolutions."""
+        qs = QuestionSet(
+            forecast_due_date="2024-06-01",
+            question_set="round_1",
+            questions=[
+                Question(id="m1", source="metaculus", question="Market Q?")
+            ],
+        )
+        resolutions: dict[str, list[Resolution]] = {
+            "m1": [Resolution(id="m1", outcome=1, resolution_date="2024-06-15")],
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 1
+
+    def test_resolution_without_date_passes_through(self) -> None:
+        """Resolutions with no resolution_date are not filtered out."""
+        qs = QuestionSet(
+            forecast_due_date="2024-06-01",
+            question_set="round_1",
+            questions=[
+                Question(
+                    id="q1", source="fred", question="Will X?",
+                    resolution_dates=["2024-07-01"],
+                )
+            ],
+        )
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [
+                Resolution(id="q1", outcome=1, resolution_date=None),
+            ],
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 1
+
+    def test_na_resolution_dates_no_filtering(self) -> None:
+        """Questions with resolution_dates='N/A' don't filter resolutions."""
+        qs = QuestionSet(
+            forecast_due_date="2024-06-01",
+            question_set="round_1",
+            questions=[
+                Question(id="q1", source="fred", question="Will X?",
+                         resolution_dates="N/A")
+            ],
+        )
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=1, resolution_date="2024-07-01")],
+        }
+        result = join_resolved_questions([qs], resolutions)
+        assert len(result) == 1
+
 
 class TestExpandResolvedForHorizonsWithPerDateJoin:
     """After the join fix, expansion should create composite IDs with correct outcomes."""
