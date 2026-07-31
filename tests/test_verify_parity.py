@@ -9,6 +9,7 @@ from verify_parity import (
     check_missing_forecast_default,
     _strip_enhancements,
     _find_reference_model,
+    _extract_model_keywords,
 )
 
 
@@ -180,8 +181,22 @@ class TestCheckPromptTemplates:
         assert "4/4" in msg
 
 
+class TestExtractModelKeywords:
+    def test_vertex_ai_slug(self) -> None:
+        keywords = _extract_model_keywords("vertex_ai_claude-sonnet-4_20250514")
+        assert "claude-sonnet-4" in keywords
+
+    def test_openai_slug(self) -> None:
+        keywords = _extract_model_keywords("openai_gpt-4o")
+        assert "gpt-4o" in keywords
+
+    def test_simple_slug(self) -> None:
+        keywords = _extract_model_keywords("o3")
+        assert "o3" in keywords
+
+
 class TestFindReferenceModel:
-    def test_prefers_o3(self) -> None:
+    def test_prefers_o3_as_fallback(self) -> None:
         rows = [
             {"Model": "gpt-4o-2024-05", "Overall": "55.0"},
             {"Model": "o3-2025-04-16", "Overall": "60.0"},
@@ -189,8 +204,46 @@ class TestFindReferenceModel:
         ]
         result = _find_reference_model(rows)
         assert result is not None
-        assert "o3" in result[0]
-        assert result[1] == 60.0
+        model, score, is_fallback = result
+        assert "o3" in model
+        assert score == 60.0
+        assert is_fallback is True
+
+    def test_model_hint_matches_sonnet(self) -> None:
+        rows = [
+            {"Model": "o3-2025-04-16", "Overall": "60.0"},
+            {"Model": "claude-3.5-sonnet-20241022", "Overall": "53.0"},
+            {"Model": "claude-sonnet-4-20250514", "Overall": "57.0"},
+        ]
+        result = _find_reference_model(rows, model_hint="vertex_ai_claude-sonnet-4_20250514")
+        assert result is not None
+        model, score, is_fallback = result
+        assert "sonnet-4" in model
+        assert score == 57.0
+        assert is_fallback is False
+
+    def test_model_hint_matches_gpt4o(self) -> None:
+        rows = [
+            {"Model": "o3-2025-04-16", "Overall": "60.0"},
+            {"Model": "gpt-4o-2024-05-13", "Overall": "55.0"},
+        ]
+        result = _find_reference_model(rows, model_hint="openai_gpt-4o")
+        assert result is not None
+        model, score, is_fallback = result
+        assert "gpt-4o" in model
+        assert score == 55.0
+        assert is_fallback is False
+
+    def test_model_hint_no_match_falls_back(self) -> None:
+        rows = [
+            {"Model": "o3-2025-04-16", "Overall": "60.0"},
+            {"Model": "gpt-4o-2024-05", "Overall": "55.0"},
+        ]
+        result = _find_reference_model(rows, model_hint="vertex_ai_gemini-pro_20250101")
+        assert result is not None
+        model, score, is_fallback = result
+        assert "o3" in model
+        assert is_fallback is True
 
     def test_falls_back_to_gpt4o(self) -> None:
         rows = [
@@ -200,6 +253,7 @@ class TestFindReferenceModel:
         result = _find_reference_model(rows)
         assert result is not None
         assert "gpt-4o" in result[0]
+        assert result[2] is True
 
     def test_falls_back_to_first_parseable(self) -> None:
         rows = [
@@ -209,6 +263,7 @@ class TestFindReferenceModel:
         assert result is not None
         assert result[0] == "some-model"
         assert result[1] == 45.0
+        assert result[2] is True
 
     def test_empty_leaderboard(self) -> None:
         assert _find_reference_model([]) is None
