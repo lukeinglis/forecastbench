@@ -302,9 +302,50 @@ def _load_latest_result() -> dict[str, Any] | None:
         return None
 
 
+def _clean_model_slug(model_slug: str) -> str:
+    """Strip provider prefix and trailing date from a model slug."""
+    slug = model_slug.replace("/", "_").replace("@", "_")
+    slug = re.sub(r"_\d{8,}$", "", slug)
+    slug = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", slug)
+    for prefix in ["vertex_ai_", "openai_", "anthropic_", "google_"]:
+        if slug.startswith(prefix):
+            slug = slug[len(prefix):]
+            break
+    return slug
+
+
 def _find_reference_model(
     leaderboard: list[dict[str, str]],
-) -> tuple[str, float] | None:
+    model_hint: str | None = None,
+) -> tuple[str, float, bool] | None:
+    """Find a reference model on the leaderboard.
+
+    Returns (model_name, overall_score, is_fallback) or None.
+    When model_hint is provided, finds the closest match by overlap ratio.
+    """
+    if model_hint:
+        cleaned = _clean_model_slug(model_hint).lower()
+        best: tuple[str, float, int] | None = None
+        for row in leaderboard:
+            model = row.get("Model", "")
+            model_lower = model.lower()
+            model_core = re.sub(r"-?\d{6,}.*$", "", model_lower).rstrip("-")
+            if cleaned == model_core:
+                tier = 2
+            elif cleaned in model_lower or model_lower in cleaned:
+                tier = 1
+            else:
+                continue
+            try:
+                overall_str = row.get("Overall", "").strip().rstrip("%")
+                score = float(overall_str)
+            except (ValueError, TypeError):
+                continue
+            if best is None or tier > best[2]:
+                best = (model, score, tier)
+        if best is not None:
+            return best[0], best[1], False
+
     preferred = ["o3", "gpt-4o", "claude"]
     for prefix in preferred:
         for row in leaderboard:
@@ -312,13 +353,13 @@ def _find_reference_model(
             if prefix.lower() in model.lower():
                 try:
                     overall_str = row.get("Overall", "").strip().rstrip("%")
-                    return model, float(overall_str)
+                    return model, float(overall_str), True
                 except (ValueError, TypeError):
                     continue
     for row in leaderboard:
         try:
             overall_str = row.get("Overall", "").strip().rstrip("%")
-            return row.get("Model", "Unknown"), float(overall_str)
+            return row.get("Model", "Unknown"), float(overall_str), True
         except (ValueError, TypeError):
             continue
     return None
@@ -335,21 +376,23 @@ def check_score_comparison(leaderboard: list[dict[str, str]] | None) -> tuple[bo
     scoring = result.get("scoring_result", {})
     our_bi = float(scoring.get("overall_index", 0))
 
-    ref = _find_reference_model(leaderboard)
+    model_slug = result.get("model_slug")
+    ref = _find_reference_model(leaderboard, model_hint=model_slug)
     if ref is None:
         return True, "[WARN] No reference model found on leaderboard"
 
-    model_name, ref_bi = ref
+    model_name, ref_bi, is_fallback = ref
+    label = f"{model_name} (fallback reference)" if is_fallback else model_name
     gap = abs(our_bi - ref_bi)
     threshold = 2.0
     if gap > threshold:
         return (
             False,
-            f"[FAIL] Score gap vs {model_name}: {gap:.1f}pts > {threshold:.0f}pt threshold",
+            f"[FAIL] Score gap vs {label}: {gap:.1f}pts > {threshold:.0f}pt threshold",
         )
     return (
         True,
-        f"[PASS] Score gap vs {model_name}: {gap:.1f}pts (threshold: {threshold:.0f}pts)",
+        f"[PASS] Score gap vs {label}: {gap:.1f}pts (threshold: {threshold:.0f}pts)",
     )
 
 
@@ -365,11 +408,12 @@ def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tupl
     our_dataset = float(scoring.get("dataset_index", 0))
     our_market = float(scoring.get("market_index", 0))
 
-    ref = _find_reference_model(leaderboard)
+    model_slug = result.get("model_slug")
+    ref = _find_reference_model(leaderboard, model_hint=model_slug)
     if ref is None:
         return True, "[WARN] No reference model found on leaderboard"
 
-    model_name, _ = ref
+    model_name, _, _is_fallback = ref
     ref_row = None
     for row in leaderboard:
         if row.get("Model", "") == model_name:
@@ -436,6 +480,22 @@ def _fetch_leaderboard(refresh: bool = False) -> list[dict[str, str]] | None:
 
 
 def main() -> None:
+    import os
+    os.environ["FORECASTBENCH_LOG_FORMAT"] = "json"
+
+    import logging_config
+    logging_config.reset_logging()
+
+    import structlog
+    structlog.configure(
+        processors=[structlog.dev.ConsoleRenderer()],
+        wrapper_class=structlog.make_filtering_bound_logger(40),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(),
+        cache_logger_on_first_use=False,
+    )
+    logging_config._configured = True
+
     parser = argparse.ArgumentParser(description="ForecastBench Parity Verifier")
     parser.add_argument("--score", action="store_true", help="Run score comparison checks")
     parser.add_argument("--refresh", action="store_true", help="Clear cached upstream data first")
