@@ -302,23 +302,16 @@ def _load_latest_result() -> dict[str, Any] | None:
         return None
 
 
-def _extract_model_keywords(model_slug: str) -> list[str]:
-    """Extract meaningful matching keywords from a model_slug like 'vertex_ai_claude-sonnet-4_20250514'."""
-    slug = model_slug.replace("/", "_")
+def _clean_model_slug(model_slug: str) -> str:
+    """Strip provider prefix and trailing date from a model slug."""
+    slug = model_slug.replace("/", "_").replace("@", "_")
     slug = re.sub(r"_\d{8,}$", "", slug)
     slug = re.sub(r"_\d{4}-\d{2}-\d{2}$", "", slug)
     for prefix in ["vertex_ai_", "openai_", "anthropic_", "google_"]:
         if slug.startswith(prefix):
-            slug = slug[len(prefix) :]
+            slug = slug[len(prefix):]
             break
-    keywords = [slug]
-    parts = re.split(r"[-_]", slug)
-    for length in range(len(parts), 1, -1):
-        for start in range(len(parts) - length + 1):
-            sub = "-".join(parts[start : start + length])
-            if sub not in keywords and len(sub) > 2:
-                keywords.append(sub)
-    return keywords
+    return slug
 
 
 def _find_reference_model(
@@ -328,19 +321,30 @@ def _find_reference_model(
     """Find a reference model on the leaderboard.
 
     Returns (model_name, overall_score, is_fallback) or None.
-    When model_hint is provided, tries to match it first.
+    When model_hint is provided, finds the closest match by overlap ratio.
     """
     if model_hint:
-        keywords = _extract_model_keywords(model_hint)
-        for kw in keywords:
-            for row in leaderboard:
-                model = row.get("Model", "")
-                if kw.lower() in model.lower():
-                    try:
-                        overall_str = row.get("Overall", "").strip().rstrip("%")
-                        return model, float(overall_str), False
-                    except (ValueError, TypeError):
-                        continue
+        cleaned = _clean_model_slug(model_hint).lower()
+        best: tuple[str, float, int] | None = None
+        for row in leaderboard:
+            model = row.get("Model", "")
+            model_lower = model.lower()
+            model_core = re.sub(r"-?\d{6,}.*$", "", model_lower).rstrip("-")
+            if cleaned == model_core:
+                tier = 2
+            elif cleaned in model_lower or model_lower in cleaned:
+                tier = 1
+            else:
+                continue
+            try:
+                overall_str = row.get("Overall", "").strip().rstrip("%")
+                score = float(overall_str)
+            except (ValueError, TypeError):
+                continue
+            if best is None or tier > best[2]:
+                best = (model, score, tier)
+        if best is not None:
+            return best[0], best[1], False
 
     preferred = ["o3", "gpt-4o", "claude"]
     for prefix in preferred:

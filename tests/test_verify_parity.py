@@ -9,7 +9,7 @@ from verify_parity import (
     check_missing_forecast_default,
     _strip_enhancements,
     _find_reference_model,
-    _extract_model_keywords,
+    _clean_model_slug,
 )
 
 
@@ -181,18 +181,21 @@ class TestCheckPromptTemplates:
         assert "4/4" in msg
 
 
-class TestExtractModelKeywords:
+class TestCleanModelSlug:
     def test_vertex_ai_slug(self) -> None:
-        keywords = _extract_model_keywords("vertex_ai_claude-sonnet-4_20250514")
-        assert "claude-sonnet-4" in keywords
+        assert _clean_model_slug("vertex_ai_claude-sonnet-4_20250514") == "claude-sonnet-4"
 
     def test_openai_slug(self) -> None:
-        keywords = _extract_model_keywords("openai_gpt-4o")
-        assert "gpt-4o" in keywords
+        assert _clean_model_slug("openai_gpt-4o") == "gpt-4o"
 
     def test_simple_slug(self) -> None:
-        keywords = _extract_model_keywords("o3")
-        assert "o3" in keywords
+        assert _clean_model_slug("o3") == "o3"
+
+    def test_at_style_slug(self) -> None:
+        assert _clean_model_slug("vertex_ai_claude-sonnet-4@20250514") == "claude-sonnet-4"
+
+    def test_date_style_slug(self) -> None:
+        assert _clean_model_slug("openai_o3-2025-04-16") == "o3-2025-04-16"
 
 
 class TestFindReferenceModel:
@@ -209,17 +212,17 @@ class TestFindReferenceModel:
         assert score == 60.0
         assert is_fallback is True
 
-    def test_model_hint_matches_sonnet(self) -> None:
+    def test_model_hint_matches_sonnet4_not_sonnet45(self) -> None:
         rows = [
-            {"Model": "o3-2025-04-16", "Overall": "60.0"},
-            {"Model": "claude-3.5-sonnet-20241022", "Overall": "53.0"},
-            {"Model": "claude-sonnet-4-20250514", "Overall": "57.0"},
+            {"Model": "claude-sonnet-4-5-20250929-1024", "Overall": "61.3"},
+            {"Model": "claude-sonnet-4-20250514", "Overall": "60.1"},
+            {"Model": "o3-2025-04-16", "Overall": "62.2"},
         ]
         result = _find_reference_model(rows, model_hint="vertex_ai_claude-sonnet-4_20250514")
         assert result is not None
         model, score, is_fallback = result
-        assert "sonnet-4" in model
-        assert score == 57.0
+        assert model == "claude-sonnet-4-20250514"
+        assert score == 60.1
         assert is_fallback is False
 
     def test_model_hint_matches_gpt4o(self) -> None:
