@@ -51,6 +51,22 @@ def _load_base_rates() -> dict[str, float]:
 TIMESERIES_BASE_RATES: dict[str, float] = _load_base_rates()
 
 
+def _is_o_series_model(model: str) -> bool:
+    """Return True for OpenAI o-series models (o1, o3, o3-mini, etc.)."""
+    base = model.split("/")[-1]
+    return base.startswith(("o1", "o3"))
+
+
+def _sanitize_kwargs_for_model(kwargs: dict[str, Any], model: str | None = None) -> dict[str, Any]:
+    """Remove unsupported params for o-series models."""
+    effective = model or kwargs.get("model", MODEL)
+    if _is_o_series_model(effective):
+        kwargs.pop("temperature", None)
+        kwargs.pop("top_p", None)
+        kwargs.pop("thinking", None)
+    return kwargs
+
+
 def _select_model(source: str | None) -> str:
     if TIMESERIES_MODEL and source and source.lower() in TIMESERIES_SOURCES:
         return TIMESERIES_MODEL
@@ -163,6 +179,7 @@ class LiteLLMAdapter:
         if stop:
             call_kwargs["stop"] = stop
         call_kwargs["timeout"] = 180
+        _sanitize_kwargs_for_model(call_kwargs)
         response = await litellm.acompletion(**call_kwargs)
         return {"role": "assistant", "content": response.choices[0].message.content or ""}
 
@@ -192,7 +209,7 @@ def _forecast_kwargs(
         kwargs["thinking"] = {"type": "enabled", "budget_tokens": MAX_TOKENS // 2}
     else:
         kwargs["temperature"] = 0.3
-    return kwargs
+    return _sanitize_kwargs_for_model(kwargs)
 
 
 RESPONSE_LOG_DIR = Path(".cache/response_logs")
@@ -913,6 +930,7 @@ def forecast(
             "temperature": ENSEMBLE_TEMP,
             "timeout": 180,
         }
+        _sanitize_kwargs_for_model(ensemble_kwargs)
         probabilities: list[float] = []
         for i in range(ENSEMBLE_N):
             try:
