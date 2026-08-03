@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ast
 import json
 import os
@@ -180,7 +181,7 @@ class LiteLLMAdapter:
             call_kwargs["stop"] = stop
         call_kwargs["timeout"] = 180
         _sanitize_kwargs_for_model(call_kwargs)
-        response = await litellm.acompletion(**call_kwargs)
+        response = await asyncio.wait_for(litellm.acompletion(**call_kwargs), timeout=200)
         return {"role": "assistant", "content": response.choices[0].message.content or ""}
 
 
@@ -1012,7 +1013,7 @@ async def aforecast(
         messages = [{"role": "user", "content": prompt}]
         kwargs = _forecast_kwargs(messages, source=effective_source, model_override=model_override)
         kwargs["model"] = model
-        response = await litellm.acompletion(**kwargs)
+        response = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=200)
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
@@ -1134,12 +1135,12 @@ async def _extract_with_llm(text: str, n_expected: int) -> list[float] | None:
         model_response=text,
     )
     try:
-        response = await litellm.acompletion(
+        response = await asyncio.wait_for(litellm.acompletion(
             model=EXTRACTION_MODEL,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
             timeout=30,
-        )
+        ), timeout=200)
         result_text = response.choices[0].message.content or ""
         logger.debug("extraction_llm_response", response_text=result_text[:200])
         parsed = ast.literal_eval(result_text.strip())
@@ -1208,7 +1209,7 @@ async def aforecast_multi_horizon(
         messages = [{"role": "user", "content": prompt}]
         kwargs = _forecast_kwargs(messages, source=effective_source, model_override=model_override)
         kwargs["model"] = model
-        response = await litellm.acompletion(**kwargs)
+        response = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=200)
     except Exception:
         logger.error(
             "multi_horizon_api_error",
@@ -1269,12 +1270,11 @@ async def aforecast_multi(
     messages = [{"role": "user", "content": prompt}]
     kwargs = _forecast_kwargs(messages, source=question.source)
     kwargs["model"] = model
-    response = await litellm.acompletion(**kwargs)
+    response = await asyncio.wait_for(litellm.acompletion(**kwargs), timeout=200)
     text = response.choices[0].message.content or ""
     return _parse_probabilities(text, len(resolution_dates))
 
 
 if __name__ == "__main__":
-    import asyncio
     from eval import run_eval
     asyncio.run(run_eval(aforecast))
