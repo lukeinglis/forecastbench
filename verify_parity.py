@@ -2,7 +2,7 @@
 
 Verifies our pipeline stays in parity with ForecastBench by fetching live
 reference data from the upstream repo and leaderboard. Zero hardcoded
-reference values.
+reference values. Also runs behavioral checks for pipeline correctness.
 """
 
 from __future__ import annotations
@@ -452,6 +452,182 @@ def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tupl
     return True, f"[PASS] Per-source gap within threshold ({', '.join(gaps)})"
 
 
+# --- Behavioral checks (pipeline correctness) ---
+
+
+def check_dummy_score() -> tuple[bool, str]:
+    """Dummy forecaster (always 0.5) must score overall_index == 50.0 ± 0.01."""
+    from dummy_forecaster import forecast as dummy_forecast
+    from eval import _expand_resolved_for_horizons
+    from fetch_data import (
+        Question,
+        fetch_all_question_sets,
+        fetch_all_resolutions,
+        join_resolved_questions,
+    )
+    from score import score_forecasts
+
+    question_sets = fetch_all_question_sets()
+    if not question_sets:
+        return False, "[FAIL] check_dummy_score: no question sets fetched"
+
+    qs = question_sets[0]
+    resolutions = fetch_all_resolutions()
+    resolved = join_resolved_questions([qs], resolutions)
+
+    if not resolved:
+        return False, "[FAIL] check_dummy_score: no resolved questions after join"
+
+    expanded = _expand_resolved_for_horizons(resolved)
+
+    forecasts: dict[str, float] = {}
+    for rq in expanded:
+        q = Question(
+            id=rq.id,
+            source=rq.source,
+            question=rq.question,
+            background=rq.background,
+            resolution_criteria=rq.resolution_criteria,
+            freeze_datetime=rq.freeze_datetime,
+            freeze_datetime_value=rq.freeze_datetime_value,
+            resolution_dates=rq.resolution_dates,
+            url=rq.url,
+            forecast_due_date=rq.forecast_due_date,
+        )
+        prob = dummy_forecast(q, resolution_date=rq.resolution_date, source=rq.source)
+        forecasts[rq.id] = prob
+
+    result = score_forecasts(forecasts, expanded, difficulty_adjusted=False)
+
+    if abs(result.overall_index - 50.0) <= 0.01:
+        return (
+            True,
+            f"[PASS] check_dummy_score: overall_index={result.overall_index:.4f} "
+            f"(n={result.n_dataset + result.n_market})",
+        )
+    return (
+        False,
+        f"[FAIL] check_dummy_score: overall_index={result.overall_index:.4f}, "
+        f"expected 50.0 ± 0.01",
+    )
+
+
+def _fetch_all_resolutions_as_lists() -> dict[str, list[Any]]:
+    """Fetch all resolutions preserving every entry per question ID."""
+    from fetch_data import Resolution, fetch_resolution, list_resolution_files
+
+    filenames = list_resolution_files()
+    resolutions: dict[str, list[Resolution]] = {}
+    for f in filenames:
+        try:
+            res_list = fetch_resolution(f)
+            for r in res_list:
+                resolutions.setdefault(r.id, []).append(r)
+        except Exception:
+            continue
+    return resolutions
+
+
+def check_resolution_outcome_diversity() -> tuple[bool, str]:
+    """Resolution entries with the same ID but different dates must have diverse outcomes."""
+    resolutions = _fetch_all_resolutions_as_lists()
+
+    multi_entry_ids: dict[str, set[int | None]] = {}
+    for qid, res_list in resolutions.items():
+        if len(res_list) > 1:
+            multi_entry_ids[qid] = {r.outcome for r in res_list}
+
+    if not multi_entry_ids:
+        return True, "[PASS] check_resolution_outcome_diversity: no multi-entry IDs found"
+
+    diverse_count = sum(1 for outcomes in multi_entry_ids.values() if len(outcomes) > 1)
+    total = len(multi_entry_ids)
+    ratio = diverse_count / total if total > 0 else 0.0
+
+    if ratio >= 0.30:
+        return (
+            True,
+            f"[PASS] check_resolution_outcome_diversity: {diverse_count}/{total} "
+            f"({ratio:.1%}) multi-entry IDs have diverse outcomes",
+        )
+    return (
+        False,
+        f"[FAIL] check_resolution_outcome_diversity: {diverse_count}/{total} "
+        f"({ratio:.1%}) < 30% threshold",
+    )
+
+
+def check_resolution_entry_preservation() -> tuple[bool, str]:
+    """Total resolution entries must significantly exceed unique question IDs."""
+    resolutions = _fetch_all_resolutions_as_lists()
+
+    unique_ids = len(resolutions)
+    total_entries = sum(len(entries) for entries in resolutions.values())
+
+    ratio = total_entries / unique_ids if unique_ids > 0 else 0.0
+
+    if ratio > 3.0:
+        return (
+            True,
+            f"[PASS] check_resolution_entry_preservation: "
+            f"{total_entries} entries / {unique_ids} IDs = {ratio:.1f}x",
+        )
+    return (
+        False,
+        f"[FAIL] check_resolution_entry_preservation: "
+        f"{total_entries} entries / {unique_ids} IDs = {ratio:.1f}x (< 3.0)",
+    )
+
+
+def check_cross_round_filtering() -> tuple[bool, str]:
+    """Resolved questions must only contain resolution_dates from the original question."""
+    from fetch_data import (
+        fetch_all_question_sets,
+        fetch_all_resolutions,
+        join_resolved_questions,
+    )
+
+    question_sets = fetch_all_question_sets()
+    resolutions = fetch_all_resolutions()
+
+    if not question_sets:
+        return False, "[FAIL] check_cross_round_filtering: no question sets"
+
+    resolved = join_resolved_questions(question_sets, resolutions)
+
+    original_res_dates: dict[str, set[str]] = {}
+    for qs in question_sets:
+        for q in qs.questions:
+            rd = q.resolution_dates
+            if isinstance(rd, list):
+                dates = {str(d) for d in rd if d and str(d).upper() != "N/A"}
+                if dates:
+                    original_res_dates[q.id] = dates
+
+    violations = 0
+    checked = 0
+    for rq in resolved:
+        if rq.id not in original_res_dates:
+            continue
+        if rq.resolution_date is None:
+            continue
+        checked += 1
+        if rq.resolution_date not in original_res_dates[rq.id]:
+            violations += 1
+
+    if violations == 0:
+        return (
+            True,
+            f"[PASS] check_cross_round_filtering: "
+            f"{checked} resolution dates checked, 0 violations",
+        )
+    return (
+        False,
+        f"[FAIL] check_cross_round_filtering: "
+        f"{violations}/{checked} resolution dates not in original question's list",
+    )
+
+
 def _fetch_upstream_prompts(refresh: bool = False) -> str | None:
     try:
         from fetch_data import _fetch_text
@@ -507,6 +683,7 @@ def main() -> None:
     upstream_source = _fetch_upstream_prompts(refresh=args.refresh)
     leaderboard = _fetch_leaderboard(refresh=args.refresh)
 
+    # Structural checks (from main)
     checks: list[tuple[bool, str]] = []
 
     checks.append(check_prompt_templates(upstream_source))
@@ -519,6 +696,27 @@ def main() -> None:
     for _, msg in checks:
         print(msg)
 
+    # Behavioral checks (pipeline correctness)
+    print()
+    print("Behavioral Checks:")
+    behavioral_checks: list[tuple[bool, str]] = []
+
+    behavioral_check_fns = [
+        check_dummy_score,
+        check_resolution_outcome_diversity,
+        check_resolution_entry_preservation,
+        check_cross_round_filtering,
+    ]
+    for check_fn in behavioral_check_fns:
+        try:
+            behavioral_checks.append(check_fn())
+        except Exception as e:
+            behavioral_checks.append((False, f"[FAIL] {check_fn.__name__}: {e}"))
+
+    for _, msg in behavioral_checks:
+        print(msg)
+
+    # Score comparison checks (optional, --score flag)
     score_checks: list[tuple[bool, str]] = []
     if args.score:
         print()
@@ -528,7 +726,7 @@ def main() -> None:
         for _, msg in score_checks:
             print(msg)
 
-    all_checks = checks + score_checks
+    all_checks = checks + behavioral_checks + score_checks
     passed = sum(1 for ok, _ in all_checks if ok)
     total = len(all_checks)
 

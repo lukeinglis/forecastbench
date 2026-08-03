@@ -22,7 +22,7 @@
 - `uv run python analyze.py --compare` to compare all saved results
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage
-- `uv run python verify_parity.py` to run structural parity checks against upstream ForecastBench
+- `uv run python verify_parity.py` to run structural and behavioral parity checks against upstream ForecastBench
 - `uv run python verify_parity.py --score` to also compare scores against leaderboard
 - `uv run python verify_parity.py --refresh` to clear cached upstream data first
 
@@ -66,3 +66,11 @@
 - Use --raw flag to disable difficulty adjustment
 - MARKET_SOURCES defined in fetch_data.py, imported by score.py, eval.py, submit.py
 - Submissions staged in submissions/ directory with ForecastBench file naming
+
+## Competition Rules
+- Baseline track: no tools, no search, no web access during forecasting
+- Scoring methodology is fixed — never modify score.py formulas
+- Missing forecasts default to 0.5 — never change this default
+- Resolution pipeline must match upstream — changes to fetch_data.py resolution logic require running verify_parity.py and tests/test_compliance.py
+- No data leakage — prompts cannot contain information from after forecast_due_date
+- Submission format must pass submit.py validate
