@@ -6,17 +6,19 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 ## Scope
 
 ### Mutable (files the factory MAY modify)
-- `fetch_data.py`
-- `score.py`
 - `eval.py`
 - `dummy_forecaster.py`
 - `cutoff.py`
 - `baseline_agent.py`
 - `analyze.py`
+- `verify_parity.py`
 - `tests/**`
 - `pyproject.toml`
 
 ### Read-Only (files the factory MUST NOT modify)
+- `fetch_data.py` — competition pipeline (data fetching + resolution matching)
+- `score.py` — competition scoring (Brier score/index formulas)
+- `submit.py` — competition submission format
 - `CLAUDE.md`
 - `factory.md`
 - `.github/**`
