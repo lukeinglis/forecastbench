@@ -95,17 +95,34 @@ def _has_multi_horizon(question: Question) -> bool:
 def _expand_resolved_for_horizons(
     resolved: list[ResolvedQuestion],
 ) -> list[ResolvedQuestion]:
+    """Expand resolved questions into per-horizon entries with composite IDs.
+
+    After the join phase, multi-horizon dataset questions already have one
+    ResolvedQuestion per resolution date (each with its own outcome). This
+    function creates composite IDs (base_id + resolution_date) and deduplicates
+    to avoid double-expansion.
+    """
     expanded: list[ResolvedQuestion] = []
+    seen_composite: set[str] = set()
+
+    def _is_multi_horizon(rq: ResolvedQuestion) -> bool:
+        rd = rq.resolution_dates
+        return isinstance(rd, list) and len(rd) > 0 and any(d for d in rd)
+
     for rq in resolved:
         if rq.source.lower() in MARKET_SOURCES:
             expanded.append(rq)
             continue
-        rd = rq.resolution_dates
-        if not isinstance(rd, list) or len(rd) == 0:
+
+        if not _is_multi_horizon(rq):
             expanded.append(rq)
             continue
-        for date_str in rd:
-            composite_id = f"{rq.id}_{date_str}"
+
+        if rq.resolution_date:
+            composite_id = f"{rq.id}_{rq.resolution_date}"
+            if composite_id in seen_composite:
+                continue
+            seen_composite.add(composite_id)
             expanded.append(
                 ResolvedQuestion(
                     id=composite_id,
@@ -124,11 +141,40 @@ def _expand_resolved_for_horizons(
                     market_info_close_datetime=rq.market_info_close_datetime,
                     market_info_resolution_criteria=rq.market_info_resolution_criteria,
                     outcome=rq.outcome,
-                    resolution_date=date_str,
+                    resolution_date=rq.resolution_date,
                     forecast_due_date=rq.forecast_due_date,
                     question_set=rq.question_set,
                 )
             )
+        else:
+            for date_str in rq.resolution_dates:
+                composite_id = f"{rq.id}_{date_str}"
+                if composite_id in seen_composite:
+                    continue
+                seen_composite.add(composite_id)
+                expanded.append(
+                    ResolvedQuestion(
+                        id=composite_id,
+                        source=rq.source,
+                        question=rq.question,
+                        background=rq.background,
+                        resolution_criteria=rq.resolution_criteria,
+                        freeze_datetime=rq.freeze_datetime,
+                        freeze_datetime_value=rq.freeze_datetime_value,
+                        resolution_dates=rq.resolution_dates,
+                        url=rq.url,
+                        combination_of=rq.combination_of,
+                        source_intro=rq.source_intro,
+                        freeze_datetime_value_explanation=rq.freeze_datetime_value_explanation,
+                        market_info_open_datetime=rq.market_info_open_datetime,
+                        market_info_close_datetime=rq.market_info_close_datetime,
+                        market_info_resolution_criteria=rq.market_info_resolution_criteria,
+                        outcome=rq.outcome,
+                        resolution_date=date_str,
+                        forecast_due_date=rq.forecast_due_date,
+                        question_set=rq.question_set,
+                    )
+                )
     return expanded
 
 
@@ -136,9 +182,12 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
     return inspect.iscoroutinefunction(forecaster)
 
 
-def _model_slug() -> str:
+def _model_slug(agent_name: str | None = None) -> str:
     raw = os.getenv("FORECAST_MODEL", "unknown")
-    return re.sub(r"[^\w\-.]", "_", raw)
+    slug = re.sub(r"[^\w\-.]", "_", raw)
+    if agent_name and agent_name not in ("baseline", "dummy"):
+        slug = f"{slug}.{agent_name}"
+    return slug
 
 
 def _cache_path_for(model_slug: str, question_id: str) -> Path:
@@ -333,6 +382,7 @@ async def run_eval(
     async_multi_forecaster: MultiForecaster | None = None,
     submit_mode: bool = False,
     calibrate_forecasts: bool = False,
+    agent_name: str | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -353,11 +403,13 @@ async def run_eval(
     else:
         question_sets, resolved = load_data()
         iteration_set, _held_out = split_held_out(question_sets, n_held_out)
-        resolutions_by_id = {q.id: q for q in resolved}
+        resolutions_by_id: dict[str, list[Resolution]] = {}
+        for q in resolved:
+            resolutions_by_id.setdefault(q.id, []).append(
+                Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+            )
         iteration_resolved = join_resolved_questions(
-            iteration_set,
-            {q_id: Resolution(id=q_id, outcome=r.outcome, resolution_date=r.resolution_date)
-             for q_id, r in resolutions_by_id.items()},
+            iteration_set, resolutions_by_id,
         )
 
     if submit_mode:
@@ -368,8 +420,14 @@ async def run_eval(
         questions = all_questions
         logger.info("submit_mode_enabled", n_all=len(questions), n_resolved=len(iteration_resolved))
     else:
-        questions = [_build_question(q) for q in iteration_resolved]
-    model_slug = _model_slug()
+        seen_ids: set[str] = set()
+        questions = []
+        for q in iteration_resolved:
+            if q.id not in seen_ids:
+                seen_ids.add(q.id)
+                questions.append(_build_question(q))
+        logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
+    model_slug = _model_slug(agent_name)
 
     if is_async_forecaster(forecaster):
         forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
@@ -889,6 +947,7 @@ def main() -> None:
         async_multi_forecaster=async_multi_forecaster_fn,
         submit_mode=args.submit,
         calibrate_forecasts=args.calibrate,
+        agent_name=args.agent,
     ))
 
     if args.fit_calibration:

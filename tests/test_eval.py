@@ -429,6 +429,74 @@ class TestEvalResultCompositeIds:
         assert "mq1" in resolved_ids
         assert "dq1" not in resolved_ids
 
+    def test_per_date_resolved_deduplicates_for_forecasting(self, tmp_path: Path, monkeypatch: object) -> None:
+        """When join produces per-date entries, forecasting must deduplicate by base ID."""
+        import eval as eval_mod
+
+        resolved = [
+            ResolvedQuestion(
+                id="dq1", source="fred", question="Dataset Q",
+                outcome=1, forecast_due_date="2024-01-01",
+                resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+                resolution_date="2024-07-01",
+            ),
+            ResolvedQuestion(
+                id="dq1", source="fred", question="Dataset Q",
+                outcome=0, forecast_due_date="2024-01-01",
+                resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+                resolution_date="2024-08-01",
+            ),
+            ResolvedQuestion(
+                id="dq1", source="fred", question="Dataset Q",
+                outcome=1, forecast_due_date="2024-01-01",
+                resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+                resolution_date="2024-09-01",
+            ),
+            ResolvedQuestion(
+                id="mq1", source="metaculus", question="Market Q",
+                outcome=0, forecast_due_date="2024-01-01",
+            ),
+        ]
+        question_sets = [
+            QuestionSet(
+                forecast_due_date="2024-01-01",
+                question_set="set_0",
+                questions=[
+                    Question(id="dq1", source="fred", question="Dataset Q",
+                             resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"]),
+                    Question(id="mq1", source="metaculus", question="Market Q"),
+                ],
+            ),
+            QuestionSet(forecast_due_date="2024-02-01", question_set="set_1", questions=[]),
+            QuestionSet(forecast_due_date="2024-03-01", question_set="set_2", questions=[]),
+        ]
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+
+        call_count = 0
+
+        def _counting_forecaster(question, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return 0.5
+
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, resolved))
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")
+
+        eval_result = asyncio.run(run_eval(_counting_forecaster, n_held_out=2, raw=True))
+
+        assert call_count == 1 + 3, (
+            f"Expected 4 forecaster calls (1 market + 3 per-date for dataset), "
+            f"NOT 4+3=7 (one per resolved entry). Got {call_count}"
+        )
+        resolved_ids = {rq.id for rq in eval_result.resolved}
+        assert "dq1_2024-07-01" in resolved_ids
+        assert "dq1_2024-08-01" in resolved_ids
+        assert "dq1_2024-09-01" in resolved_ids
+        assert "mq1" in resolved_ids
+
 
 class TestDifficultyAdjustmentLogging:
     def test_skip_message_includes_reason(self, tmp_path: Path, monkeypatch: object, caplog: object) -> None:

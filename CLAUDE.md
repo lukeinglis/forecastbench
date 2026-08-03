@@ -22,7 +22,9 @@
 - `uv run python analyze.py --compare` to compare all saved results
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage
-- `uv run python verify_parity.py` to run behavioral parity checks
+- `uv run python verify_parity.py` to run structural and behavioral parity checks against upstream ForecastBench
+- `uv run python verify_parity.py --score` to also compare scores against leaderboard
+- `uv run python verify_parity.py --refresh` to clear cached upstream data first
 
 ## Architecture
 - **fetch_data.py** - Fetches question sets and resolutions from forecastbench-datasets GitHub repo
@@ -34,6 +36,7 @@
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
 - **timeseries_rag.py** - RAG for timeseries sources (FRED, yfinance, dbnomics historical data)
 - **submit.py** - Submission assembly, coverage validation, GCS upload
+- **verify_parity.py** - Pipeline parity verifier (fetches live from upstream ForecastBench repo/leaderboard)
 - **tests/** - pytest test suite
 
 ## Style

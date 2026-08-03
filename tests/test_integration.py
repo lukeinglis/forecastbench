@@ -50,7 +50,12 @@ class TestFetchRealResolutions:
 
     def test_some_have_outcomes(self) -> None:
         resolutions = fetch_all_resolutions()
-        with_outcome = [r for r in resolutions.values() if r.outcome is not None]
+        with_outcome = [
+            r
+            for res_list in resolutions.values()
+            for r in res_list
+            if r.outcome is not None
+        ]
         assert len(with_outcome) > 0
 
 

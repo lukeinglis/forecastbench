@@ -76,8 +76,8 @@ class TestResolutionModelPreservation:
             questions=[question],
         )
 
-        resolutions: dict[str, Resolution] = {
-            "ts1": Resolution(id="ts1", outcome=1, resolution_date="2024-03-01"),
+        resolutions: dict[str, list[Resolution]] = {
+            "ts1": [Resolution(id="ts1", outcome=1, resolution_date="2024-03-01")],
         }
         resolved = join_resolved_questions([qs], resolutions)
 
@@ -97,8 +97,8 @@ class TestResolutionModelPreservation:
             forecast_due_date="2024-01-01",
             questions=[question],
         )
-        resolutions: dict[str, Resolution] = {
-            "ts2": Resolution(id="ts2", outcome=0, resolution_date="2024-03-01"),
+        resolutions: dict[str, list[Resolution]] = {
+            "ts2": [Resolution(id="ts2", outcome=0, resolution_date="2024-03-01")],
         }
         resolved = join_resolved_questions([qs], resolutions)
 
