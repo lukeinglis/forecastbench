@@ -68,8 +68,11 @@
 - Submissions staged in submissions/ directory with ForecastBench file naming
 
 ## Competition Rules
-- Baseline track: no tools, no search, no web access during forecasting
+- Two tracks: baseline (no tools/search/ensemble/RAG/calibration) and tournament (all features allowed)
+- Baseline track: zero-shot prompt only, no web access, no ensemble, no calibration, no RAG
+- Tournament track: tools, search, ensemble, RAG, calibration, fine-tuning all permitted
 - Scoring methodology is fixed — never modify score.py formulas
+- Overall score = equal-weight average of dataset and market Brier scores: (dataset + market) / 2
 - Missing forecasts default to 0.5 — never change this default
 - Resolution pipeline must match upstream — changes to fetch_data.py resolution logic require running verify_parity.py and tests/test_compliance.py
 - No data leakage — prompts cannot contain information from after forecast_due_date

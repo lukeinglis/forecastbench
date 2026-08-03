@@ -254,7 +254,8 @@ class TestScoringMathInvariants:
     def test_brier_score_symmetry(self) -> None:
         assert brier_score(0.7, 1) == pytest.approx(brier_score(0.3, 0))
 
-    def test_overall_brier_is_weighted_mean(self) -> None:
+    def test_overall_brier_is_equal_weight_mean(self) -> None:
+        """Overall = (dataset_brier + market_brier) / 2, per ForecastBench leaderboard."""
         resolved = [
             ResolvedQuestion(id="d1", source="fred", question="D1",
                              outcome=1, forecast_due_date="2024-01-01"),
@@ -266,8 +267,23 @@ class TestScoringMathInvariants:
         forecasts = {"d1": 0.8, "d2": 0.2, "m1": 0.7}
         result = score_forecasts(forecasts, resolved, difficulty_adjusted=False)
 
-        expected_overall = (
-            result.dataset_brier * result.n_dataset
-            + result.market_brier * result.n_market
-        ) / (result.n_dataset + result.n_market)
+        expected_overall = (result.dataset_brier + result.market_brier) / 2.0
         assert result.overall_brier == pytest.approx(expected_overall)
+
+    def test_overall_brier_dataset_only(self) -> None:
+        """When only dataset questions exist, overall = dataset_brier."""
+        resolved = [
+            ResolvedQuestion(id="d1", source="fred", question="D1",
+                             outcome=1, forecast_due_date="2024-01-01"),
+        ]
+        result = score_forecasts({"d1": 0.8}, resolved, difficulty_adjusted=False)
+        assert result.overall_brier == pytest.approx(result.dataset_brier)
+
+    def test_overall_brier_market_only(self) -> None:
+        """When only market questions exist, overall = market_brier."""
+        resolved = [
+            ResolvedQuestion(id="m1", source="metaculus", question="M1",
+                             outcome=1, forecast_due_date="2024-01-01"),
+        ]
+        result = score_forecasts({"m1": 0.7}, resolved, difficulty_adjusted=False)
+        assert result.overall_brier == pytest.approx(result.market_brier)
