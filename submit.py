@@ -192,8 +192,11 @@ def main() -> None:
         from fetch_data import load_data, join_resolved_questions, Resolution
         all_qs, resolved = load_data()
         used_qs = [qs for qs in all_qs if qs.forecast_due_date in question_sets_used]
-        resolutions = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
-                       for q in resolved}
+        resolutions: dict[str, list[Resolution]] = {}
+        for q in resolved:
+            resolutions.setdefault(q.id, []).append(
+                Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+            )
         iteration_resolved = join_resolved_questions(used_qs, resolutions)
 
         meta = SubmissionMetadata(
