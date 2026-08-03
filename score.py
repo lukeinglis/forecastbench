@@ -432,9 +432,12 @@ def score_forecasts(
     ds_index = brier_index(ds_brier) if n_dataset > 0 else 0.0
     mk_index = brier_index(mk_brier) if n_market > 0 else 0.0
 
-    total_questions = n_dataset + n_market
-    if total_questions > 0:
-        overall_bs = (ds_brier * n_dataset + mk_brier * n_market) / total_questions
+    if n_dataset > 0 and n_market > 0:
+        overall_bs = (ds_brier + mk_brier) / 2.0
+    elif n_dataset > 0:
+        overall_bs = ds_brier
+    elif n_market > 0:
+        overall_bs = mk_brier
     else:
         overall_bs = 0.0
 
@@ -454,7 +457,7 @@ def score_forecasts(
 
     logger.info(
         "scoring_complete",
-        question_count=total_questions,
+        question_count=n_dataset + n_market,
         overall_brier=round(result.overall_brier, 6),
         overall_index=round(result.overall_index, 2),
         dataset_brier=round(result.dataset_brier, 6),

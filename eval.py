@@ -836,7 +836,35 @@ def main() -> None:
         default=False,
         help="Forecast all questions (including unresolved) for submission coverage",
     )
+    parser.add_argument(
+        "--track",
+        choices=["baseline", "tournament"],
+        default="baseline",
+        help="Competition track: baseline (no tools/ensemble/RAG/calibration) or tournament (all features allowed)",
+    )
     args = parser.parse_args()
+
+    if args.track == "baseline":
+        baseline_forbidden_agents = {"ensemble", "belief", "hybrid", "multi"}
+        if args.agent in baseline_forbidden_agents:
+            print(f"Error: --track baseline forbids --agent {args.agent} (tournament-only feature)")
+            raise SystemExit(1)
+        if getattr(args, "calibrate", False):
+            print("Error: --track baseline forbids --calibrate (tournament-only feature)")
+            raise SystemExit(1)
+        if getattr(args, "calibrate_hybrid", False):
+            print("Error: --track baseline forbids --calibrate-hybrid (tournament-only feature)")
+            raise SystemExit(1)
+        if getattr(args, "fit_calibration", False):
+            print("Error: --track baseline forbids --fit-calibration (tournament-only feature)")
+            raise SystemExit(1)
+        ensemble_n = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
+        if ensemble_n > 1:
+            print(f"Error: --track baseline forbids FORECAST_ENSEMBLE_N={ensemble_n} (tournament-only feature)")
+            raise SystemExit(1)
+        if os.getenv("FORECAST_RAG", "").lower() == "true":
+            print("Error: --track baseline forbids FORECAST_RAG=true (tournament-only feature)")
+            raise SystemExit(1)
 
     if args.refresh:
         logger.info("cache_refresh_requested")

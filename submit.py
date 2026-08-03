@@ -18,6 +18,7 @@ class SubmissionMetadata:
     model_organization: str
     question_set: str
     sequence_number: int = 1
+    track: str = "baseline"
 
 
 @dataclass
@@ -82,6 +83,7 @@ def assemble_submission(
         "model": metadata.model,
         "model_organization": metadata.model_organization,
         "question_set": metadata.question_set,
+        "track": metadata.track,
         "forecasts": entries,
     }
 
@@ -169,6 +171,12 @@ def main() -> None:
     assemble_p.add_argument("--model-org", required=True, help="Model organization")
     assemble_p.add_argument("--result", required=True, help="Path to result JSON from eval pipeline")
     assemble_p.add_argument("--output-dir", default="submissions", help="Output directory")
+    assemble_p.add_argument(
+        "--track",
+        choices=["baseline", "tournament"],
+        default="baseline",
+        help="Competition track: baseline or tournament",
+    )
 
     validate_p = sub.add_parser("validate", help="Validate coverage of a submission")
     validate_p.add_argument("submission", help="Path to submission JSON")
@@ -193,6 +201,7 @@ def main() -> None:
             model=args.model,
             model_organization=args.model_org,
             question_set=question_sets_used[-1] if question_sets_used else "unknown",
+            track=args.track,
         )
         submission = assemble_submission(forecasts, iteration_resolved, meta)
 
