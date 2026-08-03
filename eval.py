@@ -182,9 +182,12 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
     return inspect.iscoroutinefunction(forecaster)
 
 
-def _model_slug() -> str:
+def _model_slug(agent_name: str | None = None) -> str:
     raw = os.getenv("FORECAST_MODEL", "unknown")
-    return re.sub(r"[^\w\-.]", "_", raw)
+    slug = re.sub(r"[^\w\-.]", "_", raw)
+    if agent_name and agent_name not in ("baseline", "dummy"):
+        slug = f"{slug}.{agent_name}"
+    return slug
 
 
 def _cache_path_for(model_slug: str, question_id: str) -> Path:
@@ -379,6 +382,7 @@ async def run_eval(
     async_multi_forecaster: MultiForecaster | None = None,
     submit_mode: bool = False,
     calibrate_forecasts: bool = False,
+    agent_name: str | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -423,7 +427,7 @@ async def run_eval(
                 seen_ids.add(q.id)
                 questions.append(_build_question(q))
         logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
-    model_slug = _model_slug()
+    model_slug = _model_slug(agent_name)
 
     if is_async_forecaster(forecaster):
         forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
@@ -943,6 +947,7 @@ def main() -> None:
         async_multi_forecaster=async_multi_forecaster_fn,
         submit_mode=args.submit,
         calibrate_forecasts=args.calibrate,
+        agent_name=args.agent,
     ))
 
     if args.fit_calibration:
