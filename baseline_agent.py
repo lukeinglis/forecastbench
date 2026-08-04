@@ -215,6 +215,25 @@ def _forecast_kwargs(
 
 RESPONSE_LOG_DIR = Path(".cache/response_logs")
 
+_cost_tracker: dict[str, float] = {}
+
+
+def get_tracked_costs() -> dict[str, float]:
+    return dict(_cost_tracker)
+
+
+def clear_tracked_costs() -> None:
+    _cost_tracker.clear()
+
+
+def _track_cost(question_id: str, response: Any) -> None:
+    try:
+        cost = response._hidden_params.get("response_cost")
+        if cost is not None:
+            _cost_tracker[question_id] = float(cost)
+    except (AttributeError, TypeError, ValueError):
+        pass
+
 
 def _save_response_log(question_id: str, response_text: str, outcome: str, n_expected: int) -> None:
     """Save raw model response for diagnostic analysis. Does not affect scoring."""
@@ -954,6 +973,7 @@ def forecast(
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
     logger.info("forecast_complete", question_id=question.id, forecast_value=prob, parse_success=True)
@@ -1017,6 +1037,7 @@ async def aforecast(
     except Exception:
         logger.error("forecast_api_error", question_id=question.id, model=model, exc_info=True)
         raise
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
     prob = _apply_timeseries_dampening(prob, effective_source)
@@ -1219,6 +1240,7 @@ async def aforecast_multi_horizon(
         )
         return None
 
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
 
     probs = _extract_probabilities(text, n_horizons)

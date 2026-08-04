@@ -614,10 +614,18 @@ if __name__ == "__main__":
     parser.add_argument("--versus", nargs=2, metavar=("A", "B"), help="Paired comparison of two result files")
     parser.add_argument("--leaderboard", action="store_true", help="Compare saved results against the ForecastBench leaderboard")
     parser.add_argument("--superforecaster", metavar="RESULT", help="Compare a result file against superforecaster medians")
+    parser.add_argument("--tournament", action="store_true", help="Generate tournament report comparing all result files")
     parser.add_argument("--top-n", type=int, default=50, help="Number of worst questions to show")
     args = parser.parse_args()
 
-    if args.superforecaster:
+    if args.tournament:
+        from tournament import load_tournament_results, tournament_report
+        results = load_tournament_results(args.results_dir)
+        if not results:
+            print("No result files found. Run eval first.")
+        else:
+            print(tournament_report(results))
+    elif args.superforecaster:
         from fetch_data import fetch_superforecaster_forecasts, superforecaster_medians
         forecasts, resolved = _load_result_forecasts(args.superforecaster)
         sf_raw = fetch_superforecaster_forecasts()
