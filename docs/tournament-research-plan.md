@@ -49,8 +49,8 @@ Run multiple models through the corrected pipeline. Understand per-source streng
 ### Stream 2: Web Search Integration
 **Issues:** #111, #112
 **Branch:** `research/web-search`
-**Phase:** 1 (start immediately)
-**Dependencies:** None
+**Phase:** 2 (gated on Stream 1 findings)
+**Dependencies:** Stream 1 — proceed if models lack current information for specific question types
 **Status:** Not started
 
 Add web search capability during forecasting. Two evaluation strategies:
@@ -62,6 +62,8 @@ Add web search capability during forecasting. Two evaluation strategies:
 
 **Key question:** Does web search provide information the model doesn't already have from training?
 
+**Filtering layer (leakage prevention):** Build a filtering layer between raw search results and the forecasting agent. This filter enforces temporal cutoffs, strips results that reference outcomes or resolution data, and ensures the agent only sees information that would have been available to a human forecaster at the time. This is critical for both backtesting validity and production safety.
+
 **Results:**
 | Date | Experiment | Brier Score (with) | Brier Score (without) | Delta | Notes |
 |------|-----------|-------------------|----------------------|-------|-------|
@@ -72,8 +74,8 @@ Add web search capability during forecasting. Two evaluation strategies:
 ### Stream 3: Crowd Forecast Integration
 **Issue:** #113
 **Branch:** `research/crowd-forecasts`
-**Phase:** 1 (start immediately)
-**Dependencies:** None (API research prerequisite built into issue)
+**Phase:** 2 (gated on Stream 1 findings)
+**Dependencies:** Stream 1 — proceed if market source scores are weak
 **Status:** Not started
 
 Anchor market question forecasts on historical crowd/market probabilities from 10 days before forecast_due_date (matching official ForecastBench approach).
@@ -96,8 +98,8 @@ Anchor market question forecasts on historical crowd/market probabilities from 1
 ### Stream 4: RAG Improvements
 **Issue:** #119
 **Branch:** `research/rag-improvements`
-**Phase:** 1 (start immediately)
-**Dependencies:** None, but findings feed into Stream 5 Lane B
+**Phase:** 2 (gated on Stream 1 findings)
+**Dependencies:** Stream 1 — proceed if timeseries source scores are weak
 **Status:** Not started
 
 **Areas to test:**
@@ -119,8 +121,8 @@ Anchor market question forecasts on historical crowd/market probabilities from 1
 ### Stream 5: Source-Specific Optimization
 **Issues:** #115 (market), #116 (timeseries), #117 (ACLED/Wikipedia)
 **Branches:** `research/source-optimization-market`, `research/source-optimization-timeseries`, `research/source-optimization-acled-wikipedia`
-**Phase:** 2 (after Stream 1 results)
-**Dependencies:** Informed by Stream 1 per-model analysis
+**Phase:** 2 (gated on Stream 1 findings)
+**Dependencies:** Stream 1 — target the worst-scoring sources identified by per-model analysis
 **Status:** Not started
 
 Three parallel lanes optimizing strategies per source type.
@@ -201,23 +203,25 @@ Sources: acled, wikipedia
 
 ## Execution Order
 
+Stream 1 runs first and alone. Its failure pattern analysis determines which subsequent streams are worth pursuing and in what order. Do not start other streams until Stream 1 results are reviewed.
+
 ```
-Phase 1 (parallel, start immediately):
-  Stream 1: Per-model analysis ──────────────────┐
-  Stream 2: Web search integration               │
-  Stream 3: Crowd forecast API research           │
-  Stream 4: RAG improvements                      │
-                                                  │
-Phase 2 (after Stream 1 results):                 │
-  Stream 5: Source-specific optimization ◄────────┘
-    Lane A: Market sources
-    Lane B: Timeseries sources
-    Lane C: ACLED/Wikipedia
+Phase 1 (start here — understand before building):
+  Stream 1: Per-model analysis
+    └─ Run all models, analyze per-source scores, identify failure patterns
+    └─ Review results → decide which streams to activate next
                          │
-Phase 3 (after Stream 5):│
-  Stream 6: Calibration ◄┘
+Phase 2 (selected based on Stream 1 findings):
+  Streams 2-5: Chosen based on where the biggest gaps are
+    Stream 2: Web search ──── if models lack current information
+    Stream 3: Crowd forecasts ── if market scores are weak
+    Stream 4: RAG improvements ── if timeseries scores are weak
+    Stream 5: Source-specific optimization ── targeted at worst sources
                          │
-Phase 4 (after Streams 2,3,4,6):
+Phase 3 (after Phase 2 interventions):
+  Stream 6: Calibration ◄┘ calibrate the improved forecasts
+                         │
+Phase 4 (after earlier streams provide tools):
   Stream 7: Agentic forecasting
   Stream 8: Question decomposition
 ```
@@ -237,6 +241,8 @@ Record key decisions and pivots here as research progresses.
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-08-03 | Start clean — do not trust pre-PR#102 experimental results | Pipeline had resolution data bug corrupting 87% of dataset scoring |
+| 2026-08-04 | Stream 1 (per-model analysis) runs first and alone | Kai feedback: understand failure patterns fully before deciding what to build. Streams 2-4 gated on Stream 1 results |
+| 2026-08-04 | Web search needs a filtering layer for leakage prevention | Kai feedback: build a filter between raw search and agent that strips temporal leakage, outcome references, and resolution data |
 | 2026-08-03 | 9 research branches to keep main clean | Experiments should prove value before merging |
 | 2026-08-03 | Calibration after source optimization | Calibrating bad forecasts just makes well-calibrated bad forecasts |
 | 2026-08-04 | Reordered streams to match execution flow | Stream numbers now correspond to execution priority |
