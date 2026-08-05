@@ -226,6 +226,7 @@ def save_result(
     round_name: str | None = None,
     sources: dict[str, str] | None = None,
     prefix: str = "",
+    costs: dict[str, float] | None = None,
 ) -> Path:
     """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -236,7 +237,7 @@ def save_result(
     }
     if round_name is not None:
         metadata["round"] = round_name
-    payload = {
+    payload: dict[str, Any] = {
         "timestamp": timestamp,
         "model_slug": model_slug,
         "scoring_result": {
@@ -256,6 +257,20 @@ def save_result(
         "sources": sources,
         "metadata": metadata,
     }
+    if costs:
+        payload["costs"] = costs
+        source_costs: dict[str, list[float]] = {}
+        for qid, cost in costs.items():
+            src = (sources or {}).get(qid, "unknown")
+            source_costs.setdefault(src, []).append(cost)
+        payload["cost_summary"] = {
+            "total_usd": sum(costs.values()),
+            "mean_usd": sum(costs.values()) / len(costs) if costs else 0.0,
+            "by_source": {
+                src: {"total_usd": sum(vals), "mean_usd": sum(vals) / len(vals), "count": len(vals)}
+                for src, vals in sorted(source_costs.items())
+            },
+        }
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     if round_name is not None:
         safe_round = re.sub(r"[^\w\-.]", "_", round_name)
@@ -383,6 +398,7 @@ async def run_eval(
     submit_mode: bool = False,
     calibrate_forecasts: bool = False,
     agent_name: str | None = None,
+    n_rounds: int | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline.
 
@@ -402,6 +418,11 @@ async def run_eval(
         logger.info("round_eval_loaded", round=round_name, n_questions=len(iteration_resolved))
     else:
         question_sets, resolved = load_data()
+        if n_rounds is not None:
+            sorted_qs = sorted(question_sets, key=lambda qs: qs.forecast_due_date, reverse=True)
+            question_sets = sorted_qs[:n_rounds]
+            logger.info("rounds_filter", n_rounds=n_rounds, n_selected=len(question_sets),
+                        dates=[qs.forecast_due_date for qs in question_sets])
         iteration_set, _held_out = split_held_out(question_sets, n_held_out)
         resolutions_by_id: dict[str, list[Resolution]] = {}
         for q in resolved:
@@ -464,18 +485,30 @@ async def run_eval(
     outcomes = {q.id: q.outcome for q in expanded_resolved}
     sources = {q.id: q.source.lower() for q in expanded_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
+
+    costs: dict[str, float] | None = None
+    try:
+        from baseline_agent import get_tracked_costs
+        tracked = get_tracked_costs()
+        if tracked:
+            costs = tracked
+    except ImportError:
+        pass
+
     if submit_mode:
         result_path = save_result(
             result, forecasts, outcomes, model_slug,
             question_sets_used, n_held_out, round_name=round_name,
             sources=sources,
             prefix="submit_",
+            costs=costs,
         )
     else:
         result_path = save_result(
             result, forecasts, outcomes, model_slug,
             question_sets_used, n_held_out, round_name=round_name,
             sources=sources,
+            costs=costs,
         )
     logger.info("results_saved", path=str(result_path))
 
@@ -900,6 +933,13 @@ def main() -> None:
         default="baseline",
         help="Competition track: baseline (no tools/ensemble/RAG/calibration) or tournament (all features allowed)",
     )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        metavar="N",
+        default=None,
+        help="Limit evaluation to the N most recent question sets by forecast_due_date",
+    )
     args = parser.parse_args()
 
     if args.track == "baseline":
@@ -976,6 +1016,7 @@ def main() -> None:
         submit_mode=args.submit,
         calibrate_forecasts=args.calibrate,
         agent_name=args.agent,
+        n_rounds=args.rounds,
     ))
 
     if args.fit_calibration:

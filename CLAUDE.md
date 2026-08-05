@@ -25,6 +25,7 @@
 - `uv run python verify_parity.py` to run structural and behavioral parity checks against upstream ForecastBench
 - `uv run python verify_parity.py --score` to also compare scores against leaderboard
 - `uv run python verify_parity.py --refresh` to clear cached upstream data first
+- `uv run python check_staleness.py` to check if local main is behind remote
 
 ## Architecture
 - **fetch_data.py** - Fetches question sets and resolutions from forecastbench-datasets GitHub repo
