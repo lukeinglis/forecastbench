@@ -66,9 +66,9 @@ def extract_template(source: str, var_name: str) -> str | None:
 
 
 def _get_local_template(name: str) -> str | None:
-    import baseline_agent
+    import lab_forecaster
 
-    val = getattr(baseline_agent, name, None)
+    val = getattr(lab_forecaster, name, None)
     if val is None:
         return None
     return str(val)
@@ -297,7 +297,8 @@ def _load_latest_result() -> dict[str, Any] | None:
     if not result_files:
         return None
     try:
-        return json.loads(result_files[-1].read_text())
+        data: dict[str, Any] = json.loads(result_files[-1].read_text())
+        return data
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -638,7 +639,8 @@ def _fetch_upstream_prompts(refresh: bool = False) -> str | None:
             if cache_path.exists():
                 cache_path.unlink()
 
-        return _fetch_text(UPSTREAM_PROMPTS_URL, cache_key)
+        text: str = _fetch_text(UPSTREAM_PROMPTS_URL, cache_key)
+        return text
     except Exception:
         return None
 
@@ -650,7 +652,8 @@ def _fetch_leaderboard(refresh: bool = False) -> list[dict[str, str]] | None:
             refresh_cache()
 
         from fetch_data import fetch_leaderboard
-        return fetch_leaderboard("baseline")
+        rows: list[dict[str, str]] = fetch_leaderboard("baseline")
+        return rows
     except Exception:
         return None
 

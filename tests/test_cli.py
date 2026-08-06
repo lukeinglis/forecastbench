@@ -78,7 +78,7 @@ class TestEvalDummyAgent:
             ],
         )
         mock_resolutions = {
-            "q1": [Resolution(id="q1", outcome=1, resolution_date="2026-07-19")],
+            "q1": Resolution(id="q1", outcome=1, resolution_date="2026-07-19"),
         }
 
         with patch("eval.fetch_question_set", return_value=mock_qs), \
@@ -105,8 +105,8 @@ class TestEvalRoundWithDummy:
             ],
         )
         mock_resolutions = {
-            "q1": [Resolution(id="q1", outcome=0, resolution_date="2026-07-19")],
-            "q2": [Resolution(id="q2", outcome=1, resolution_date="2026-07-19")],
+            "q1": Resolution(id="q1", outcome=0, resolution_date="2026-07-19"),
+            "q2": Resolution(id="q2", outcome=1, resolution_date="2026-07-19"),
         }
 
         with patch("eval.fetch_question_set", return_value=mock_qs), \
@@ -132,7 +132,7 @@ class TestSubmitFlag:
 
         with _patch("sys.argv", ["eval.py", "--agent", "dummy"]):
             parser = argparse.ArgumentParser()
-            parser.add_argument("--agent", choices=["dummy", "baseline"], default="dummy")
+            parser.add_argument("--agent", choices=["dummy", "lab"], default="dummy")
             parser.add_argument("--submit", action="store_true", default=False)
             args = parser.parse_args(["--agent", "dummy"])
             assert args.submit is False
@@ -149,7 +149,7 @@ class TestSubmitFlag:
             ],
         )
         mock_resolutions = {
-            "q1": [Resolution(id="q1", outcome=1, resolution_date="2026-07-19")],
+            "q1": Resolution(id="q1", outcome=1, resolution_date="2026-07-19"),
         }
 
         with patch("eval.fetch_question_set", return_value=mock_qs), \

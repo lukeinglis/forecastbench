@@ -162,7 +162,7 @@ class TestCheckPromptTemplates:
         assert "[WARN]" in msg
 
     def test_matching_templates_pass(self) -> None:
-        import baseline_agent
+        import lab_forecaster
 
         source_parts: list[str] = []
         for name in [
@@ -171,7 +171,7 @@ class TestCheckPromptTemplates:
             "ZERO_SHOT_DATASET_PROMPT",
             "FORECAST_EXTRACTION_PROMPT",
         ]:
-            local_val = getattr(baseline_agent, name)
+            local_val = getattr(lab_forecaster, name)
             source_parts.append(f'{name} = """\n{local_val}\n"""')
 
         fake_source = "\n\n".join(source_parts)

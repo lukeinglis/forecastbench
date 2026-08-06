@@ -34,9 +34,9 @@ def _make_round_question_set(round_name: str = "2026-07-05-llm") -> QuestionSet:
     )
 
 
-def _make_resolutions() -> dict[str, list[Resolution]]:
+def _make_resolutions() -> dict[str, Resolution]:
     return {
-        f"rq{i}": [Resolution(id=f"rq{i}", outcome=i % 2, resolution_date="2026-07-19")]
+        f"rq{i}": Resolution(id=f"rq{i}", outcome=i % 2, resolution_date="2026-07-19")
         for i in range(5)
     }
 
@@ -250,10 +250,10 @@ class TestRoundWithMixedSources:
             ],
         )
         resolutions = {
-            "d1": [Resolution(id="d1", outcome=1, resolution_date="2026-07-19")],
-            "d2": [Resolution(id="d2", outcome=0, resolution_date="2026-07-19")],
-            "m1": [Resolution(id="m1", outcome=1, resolution_date="2026-07-19")],
-            "m2": [Resolution(id="m2", outcome=0, resolution_date="2026-07-19")],
+            "d1": Resolution(id="d1", outcome=1, resolution_date="2026-07-19"),
+            "d2": Resolution(id="d2", outcome=0, resolution_date="2026-07-19"),
+            "m1": Resolution(id="m1", outcome=1, resolution_date="2026-07-19"),
+            "m2": Resolution(id="m2", outcome=0, resolution_date="2026-07-19"),
         }
 
         monkeypatch.setattr(eval_mod, "fetch_question_set", lambda f: mixed_qs)  # type: ignore[attr-defined]

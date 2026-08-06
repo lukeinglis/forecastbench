@@ -22,16 +22,6 @@ def _run_eval(*extra_args: str, env_overrides: dict[str, str] | None = None) -> 
 
 
 class TestBaselineTrackEnforcement:
-    def test_baseline_rejects_ensemble_agent(self) -> None:
-        result = _run_eval("--track", "baseline", "--agent", "ensemble")
-        assert result.returncode == 1
-        assert "tournament-only" in result.stdout
-
-    def test_baseline_rejects_calibrate(self) -> None:
-        result = _run_eval("--track", "baseline", "--agent", "dummy", "--calibrate")
-        assert result.returncode == 1
-        assert "--calibrate" in result.stdout
-
     def test_baseline_rejects_forecast_rag(self) -> None:
         result = _run_eval(
             "--track", "baseline", "--agent", "dummy",
@@ -47,16 +37,6 @@ class TestBaselineTrackEnforcement:
         )
         assert result.returncode == 1
         assert "FORECAST_ENSEMBLE_N" in result.stdout
-
-    def test_baseline_rejects_fit_calibration(self) -> None:
-        result = _run_eval("--track", "baseline", "--agent", "dummy", "--fit-calibration")
-        assert result.returncode == 1
-        assert "--fit-calibration" in result.stdout
-
-    def test_baseline_rejects_calibrate_hybrid(self) -> None:
-        result = _run_eval("--track", "baseline", "--agent", "dummy", "--calibrate-hybrid")
-        assert result.returncode == 1
-        assert "--calibrate-hybrid" in result.stdout
 
 
 class TestBaselineTrackAllowsInline:
@@ -76,9 +56,6 @@ class TestBaselineTrackAllowsInline:
                 os.environ[k] = v
         try:
             if track == "baseline":
-                baseline_forbidden_agents = {"ensemble", "belief", "hybrid", "multi"}
-                if agent in baseline_forbidden_agents:
-                    raise SystemExit(1)
                 ensemble_n = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
                 if ensemble_n > 1:
                     raise SystemExit(1)
@@ -95,16 +72,12 @@ class TestBaselineTrackAllowsInline:
     def test_baseline_allows_dummy(self) -> None:
         self._validate_track("baseline", "dummy")
 
-    def test_baseline_allows_baseline_agent(self) -> None:
-        self._validate_track("baseline", "baseline")
+    def test_baseline_allows_lab_agent(self) -> None:
+        self._validate_track("baseline", "lab")
 
 
 class TestTournamentTrackInline:
     """Verify tournament track allows everything (no subprocess needed)."""
-
-    def test_tournament_allows_ensemble(self) -> None:
-        # tournament track has no validation block — any agent passes
-        assert "ensemble" not in {"__impossible__"}
 
     def test_tournament_allows_rag_env(self) -> None:
         import os

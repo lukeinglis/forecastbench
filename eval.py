@@ -16,7 +16,6 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from calibrate import calibrate, load_calibration_models  # noqa: E402
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
@@ -25,32 +24,6 @@ logger = get_logger("eval")
 
 CACHE_DIR = Path(".cache/forecasts")
 RESULTS_DIR = Path("results")
-
-
-MIN_BASE_RATE_SAMPLES = 50
-
-
-def compute_training_base_rates(
-    resolved: list[ResolvedQuestion],
-    min_samples: int = MIN_BASE_RATE_SAMPLES,
-) -> dict[str, float]:
-    """Compute per-source YES outcome rates from training-only resolved questions.
-
-    Sources with fewer than min_samples are excluded.
-    """
-    totals: dict[str, int] = {}
-    yes_counts: dict[str, int] = {}
-    for rq in resolved:
-        src = rq.source.lower()
-        totals[src] = totals.get(src, 0) + 1
-        if rq.outcome == 1:
-            yes_counts[src] = yes_counts.get(src, 0) + 1
-
-    rates: dict[str, float] = {}
-    for src, total in totals.items():
-        if total >= min_samples:
-            rates[src] = round(yes_counts.get(src, 0) / total, 3)
-    return rates
 
 
 class SyncForecaster(Protocol):
@@ -185,7 +158,7 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
 def _model_slug(agent_name: str | None = None) -> str:
     raw = os.getenv("FORECAST_MODEL", "unknown")
     slug = re.sub(r"[^\w\-.]", "_", raw)
-    if agent_name and agent_name not in ("baseline", "dummy"):
+    if agent_name and agent_name not in ("lab", "dummy"):
         slug = f"{slug}.{agent_name}"
     return slug
 
@@ -301,10 +274,7 @@ def split_held_out(
     question_sets: list[QuestionSet],
     n_held_out: int = 2,
 ) -> tuple[list[QuestionSet], list[QuestionSet]]:
-    """Split question sets into iteration and held-out sets by forecast_due_date.
-
-    The most recent n_held_out sets (by date descending) go to held-out.
-    """
+    """Split question sets into iteration and held-out sets by forecast_due_date."""
     if n_held_out < 0:
         raise ValueError(f"n_held_out must be non-negative, got {n_held_out}")
     if n_held_out >= len(question_sets):
@@ -318,7 +288,6 @@ def split_held_out(
 
 
 def _build_question(q: Question | ResolvedQuestion, forecast_due_date: str | None = None) -> Question:
-    """Build a Question from a ResolvedQuestion or Question-like object."""
     fdd = forecast_due_date or getattr(q, "forecast_due_date", None)
     return Question(
         id=q.id,
@@ -340,52 +309,6 @@ def _build_question(q: Question | ResolvedQuestion, forecast_due_date: str | Non
     )
 
 
-def _apply_calibration(
-    forecasts: dict[str, float],
-    questions: list[Question],
-) -> dict[str, float]:
-    """Apply source-specific calibration post-processing to forecasts."""
-    models = load_calibration_models()
-    if not models:
-        logger.info("calibration_no_models")
-        return forecasts
-
-    source_map: dict[str, str] = {}
-    for q in questions:
-        source_map[q.id] = q.source
-
-    composite_re = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})$")
-    calibrated = dict(forecasts)
-    n_calibrated = 0
-    n_uncalibrated = 0
-    source_deltas: dict[str, list[float]] = {}
-
-    for qid, prob in forecasts.items():
-        source = source_map.get(qid)
-        if source is None:
-            m = composite_re.match(qid)
-            if m:
-                source = source_map.get(m.group(1))
-        if source is None or source not in models:
-            n_uncalibrated += 1
-            continue
-
-        new_prob = calibrate(prob, source, models)
-        delta = new_prob - prob
-        calibrated[qid] = new_prob
-        n_calibrated += 1
-        source_deltas.setdefault(source, []).append(delta)
-
-    for source, deltas in sorted(source_deltas.items()):
-        mean_delta = sum(deltas) / len(deltas)
-        logger.info("calibration_applied", source=source, n=len(deltas),
-                     mean_delta=round(mean_delta, 4))
-
-    logger.info("calibration_summary", n_calibrated=n_calibrated,
-                 n_uncalibrated=n_uncalibrated)
-    return calibrated
-
-
 async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
@@ -396,24 +319,16 @@ async def run_eval(
     multi_forecaster: MultiForecaster | None = None,
     async_multi_forecaster: MultiForecaster | None = None,
     submit_mode: bool = False,
-    calibrate_forecasts: bool = False,
     agent_name: str | None = None,
     n_rounds: int | None = None,
 ) -> EvalResult:
-    """Run the full evaluation pipeline.
-
-    When round_name is set, only that single question set is evaluated
-    (no held-out split). Otherwise, all question sets are loaded and the
-    most recent n_held_out sets are held out.
-    """
+    """Run the full evaluation pipeline."""
     if round_name is not None:
         logger.info("round_eval_start", round=round_name)
         filename = round_name if round_name.endswith(".json") else round_name + ".json"
         question_set = fetch_question_set(filename)
         resolutions = fetch_all_resolutions()
-        iteration_resolved = join_resolved_questions(
-            [question_set], resolutions,
-        )
+        iteration_resolved = join_resolved_questions([question_set], resolutions)
         iteration_set = [question_set]
         logger.info("round_eval_loaded", round=round_name, n_questions=len(iteration_resolved))
     else:
@@ -424,11 +339,8 @@ async def run_eval(
             logger.info("rounds_filter", n_rounds=n_rounds, n_selected=len(question_sets),
                         dates=[qs.forecast_due_date for qs in question_sets])
         iteration_set, _held_out = split_held_out(question_sets, n_held_out)
-        resolutions_by_id: dict[str, list[Resolution]] = {}
-        for q in resolved:
-            resolutions_by_id.setdefault(q.id, []).append(
-                Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
-            )
+        resolutions_by_id = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+                             for q in resolved}
         iteration_resolved = join_resolved_questions(
             iteration_set, resolutions_by_id,
         )
@@ -454,9 +366,6 @@ async def run_eval(
         forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
     else:
         forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
-
-    if calibrate_forecasts:
-        forecasts = _apply_calibration(forecasts, questions)
 
     expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
 
@@ -488,11 +397,11 @@ async def run_eval(
 
     costs: dict[str, float] | None = None
     try:
-        from baseline_agent import get_tracked_costs
+        from lab_forecaster import get_tracked_costs
         tracked = get_tracked_costs()
         if tracked:
             costs = tracked
-    except ImportError:
+    except (ImportError, AttributeError):
         pass
 
     if submit_mode:
@@ -652,7 +561,7 @@ async def _run_async(
                 if async_multi_forecaster is not None:
                     probs_result = await async_multi_forecaster(q, resolution_dates=uncached_dates)
                 else:
-                    from baseline_agent import aforecast_multi_horizon
+                    from lab_forecaster import aforecast_multi_horizon
                     probs_result = await aforecast_multi_horizon(
                         q,
                         resolution_dates=uncached_dates,
@@ -717,7 +626,6 @@ async def _run_async(
 
 
 def _normalize_round_name(name: str) -> str:
-    """Ensure round name has the -llm suffix and no .json extension."""
     name = name.removesuffix(".json")
     if not name.endswith(("-llm", "-human")):
         name = name + "-llm"
@@ -725,7 +633,6 @@ def _normalize_round_name(name: str) -> str:
 
 
 def list_rounds() -> list[tuple[str, int]]:
-    """List available rounds with question counts."""
     filenames = list_question_set_files()
     rounds: list[tuple[str, int]] = []
     for fname in sorted(filenames, reverse=True):
@@ -742,7 +649,6 @@ def print_leaderboard_comparison(
     user_index: float,
     leaderboard_name: str = "baseline",
 ) -> None:
-    """Fetch the leaderboard and show where the user's score ranks."""
     try:
         rows = fetch_leaderboard(leaderboard_name)
     except Exception:
@@ -847,86 +753,30 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="ForecastBench evaluation")
     parser.add_argument(
         "--agent",
-        choices=["dummy", "baseline", "ensemble", "belief", "hybrid", "multi"],
+        choices=["dummy", "lab"],
         default="dummy",
         help="Forecaster agent to use (default: dummy)",
     )
-    parser.add_argument(
-        "--raw",
-        action="store_true",
-        help="Disable difficulty adjustment, use raw Brier scores",
-    )
-    parser.add_argument(
-        "--round",
-        metavar="ROUND",
-        help="Evaluate a single round (e.g. 2026-07-05-llm or 2026-07-05)",
-    )
+    parser.add_argument("--raw", action="store_true", help="Disable difficulty adjustment")
+    parser.add_argument("--round", metavar="ROUND", help="Evaluate a single round")
     parser.add_argument(
         "--prompt",
         choices=["default", "zero-shot", "zero-shot-fv", "zero-shot-no-fv", "dataset"],
         default="default",
-        help="Prompt variant: default (scratchpad for dataset, freeze values for market), "
-             "zero-shot (original prompts), zero-shot-fv (freeze values for market, same as default), "
-             "zero-shot-no-fv (force no freeze values for market), "
-             "dataset (force dataset prompt for all questions).",
+        help="Prompt variant",
     )
-    parser.add_argument(
-        "--leaderboard",
-        nargs="?",
-        const="baseline",
-        default=None,
-        choices=["baseline", "tournament", "dataset", "preliminary"],
-        help="Compare against leaderboard (default: baseline)",
-    )
-    parser.add_argument(
-        "--refresh",
-        action="store_true",
-        help="Clear cached data and fetch fresh from ForecastBench repo",
-    )
-    parser.add_argument(
-        "--ci",
-        action="store_true",
-        help="Show bootstrap confidence intervals for Brier scores",
-    )
-    parser.add_argument(
-        "--multi-horizon",
-        action="store_true",
-        dest="multi_horizon",
-        default=True,
-        help="Use single-call multi-horizon forecasting for dataset questions (default: enabled)",
-    )
-    parser.add_argument(
-        "--per-date",
-        action="store_false",
-        dest="multi_horizon",
-        help="Disable multi-horizon batching; forecast each resolution date separately",
-    )
-    parser.add_argument(
-        "--fit-calibration",
-        action="store_true",
-        help="Fit Platt scaling calibration from iteration-set forecasts and save params",
-    )
-    parser.add_argument(
-        "--calibrate",
-        action="store_true",
-        help="Apply saved Platt scaling calibration to forecasts before scoring",
-    )
-    parser.add_argument(
-        "--calibrate-hybrid",
-        action="store_true",
-        help="Hybrid calibration: Platt for events/markets, base-rate for timeseries",
-    )
-    parser.add_argument(
-        "--list-rounds",
-        action="store_true",
-        help="List available rounds with question counts and exit",
-    )
-    parser.add_argument(
-        "--submit",
-        action="store_true",
-        default=False,
-        help="Forecast all questions (including unresolved) for submission coverage",
-    )
+    parser.add_argument("--leaderboard", nargs="?", const="baseline", default=None,
+                        choices=["baseline", "tournament", "dataset", "preliminary"],
+                        help="Compare against leaderboard")
+    parser.add_argument("--refresh", action="store_true", help="Clear cached data")
+    parser.add_argument("--ci", action="store_true", help="Show bootstrap confidence intervals")
+    parser.add_argument("--multi-horizon", action="store_true", dest="multi_horizon", default=True,
+                        help="Use multi-horizon forecasting (default: enabled)")
+    parser.add_argument("--per-date", action="store_false", dest="multi_horizon",
+                        help="Disable multi-horizon batching")
+    parser.add_argument("--list-rounds", action="store_true", help="List available rounds and exit")
+    parser.add_argument("--submit", action="store_true", default=False,
+                        help="Forecast all questions for submission coverage")
     parser.add_argument(
         "--track",
         choices=["baseline", "tournament"],
@@ -943,19 +793,6 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.track == "baseline":
-        baseline_forbidden_agents = {"ensemble", "belief", "hybrid", "multi"}
-        if args.agent in baseline_forbidden_agents:
-            print(f"Error: --track baseline forbids --agent {args.agent} (tournament-only feature)")
-            raise SystemExit(1)
-        if getattr(args, "calibrate", False):
-            print("Error: --track baseline forbids --calibrate (tournament-only feature)")
-            raise SystemExit(1)
-        if getattr(args, "calibrate_hybrid", False):
-            print("Error: --track baseline forbids --calibrate-hybrid (tournament-only feature)")
-            raise SystemExit(1)
-        if getattr(args, "fit_calibration", False):
-            print("Error: --track baseline forbids --fit-calibration (tournament-only feature)")
-            raise SystemExit(1)
         ensemble_n = int(os.getenv("FORECAST_ENSEMBLE_N", "1"))
         if ensemble_n > 1:
             print(f"Error: --track baseline forbids FORECAST_ENSEMBLE_N={ensemble_n} (tournament-only feature)")
@@ -983,27 +820,10 @@ def main() -> None:
         round_name = _normalize_round_name(args.round)
 
     async_multi_forecaster_fn: MultiForecaster | None = None
-    if args.agent == "baseline":
-        from baseline_agent import aforecast, aforecast_multi
+    if args.agent == "lab":
+        from lab_forecaster import aforecast, aforecast_multi
         forecaster: Forecaster = aforecast
         async_multi_forecaster_fn = aforecast_multi
-    elif args.agent == "ensemble":
-        from ensemble import ensemble_forecast, ensemble_forecast_multi_horizon
-        forecaster = ensemble_forecast
-        async_multi_forecaster_fn = ensemble_forecast_multi_horizon
-    elif args.agent == "belief":
-        from belief_forecaster import belief_forecast, belief_forecast_multi_horizon
-        forecaster = belief_forecast  # type: ignore[assignment]
-        async_multi_forecaster_fn = belief_forecast_multi_horizon  # type: ignore[assignment]
-    elif args.agent == "hybrid":
-        from hybrid_forecaster import hybrid_forecast, hybrid_forecast_multi_horizon
-        forecaster = hybrid_forecast  # type: ignore[assignment]
-        async_multi_forecaster_fn = hybrid_forecast_multi_horizon  # type: ignore[assignment]
-    elif args.agent == "multi":
-        from multi_model_forecaster import multi_model_forecast, multi_model_forecast_multi_horizon
-        forecaster = multi_model_forecast  # type: ignore[assignment]
-        async_multi_forecaster_fn = multi_model_forecast_multi_horizon  # type: ignore[assignment]
-        os.environ["FORECAST_MODEL"] = "multi"
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
@@ -1011,88 +831,12 @@ def main() -> None:
     eval_result = asyncio.run(run_eval(
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
-        multi_horizon=args.multi_horizon and args.agent in ("baseline", "ensemble", "belief", "hybrid", "multi"),
+        multi_horizon=args.multi_horizon and args.agent == "lab",
         async_multi_forecaster=async_multi_forecaster_fn,
         submit_mode=args.submit,
-        calibrate_forecasts=args.calibrate,
         agent_name=args.agent,
         n_rounds=args.rounds,
     ))
-
-    if args.fit_calibration:
-        from calibrate import fit_calibration, save_calibration, calibration_path
-        all_forecasts = dict(eval_result.forecasts)
-        all_outcomes: dict[str, int] = {q.id: q.outcome for q in eval_result.resolved}
-        all_sources: dict[str, str] = {q.id: q.source.lower() for q in eval_result.resolved}
-
-        previous = load_previous_results()
-        for prev in previous:
-            for qid, prob in prev.get("forecasts", {}).items():
-                if qid not in all_forecasts:
-                    all_forecasts[str(qid)] = float(prob)  # type: ignore[arg-type]
-            for qid, outcome in prev.get("outcomes", {}).items():
-                if qid not in all_outcomes:
-                    all_outcomes[str(qid)] = int(outcome)  # type: ignore[arg-type]
-            for qid, src in prev.get("sources", {}).items():
-                if qid not in all_sources:
-                    all_sources[str(qid)] = str(src)
-
-        params = fit_calibration(all_forecasts, all_outcomes, all_sources)
-        cal_path = calibration_path(eval_result.model_slug)
-        save_calibration(params, cal_path)
-        logger.info("calibration_fitted", path=str(cal_path), n_sources=len(params) - 1,
-                     n_samples=len(all_forecasts))
-
-    if args.calibrate:
-        from calibrate import load_calibration, calibrate_forecasts, calibration_path
-        cal_path = calibration_path(eval_result.model_slug)
-        if cal_path.exists():
-            params = load_calibration(cal_path)
-            sources = {q.id: q.source.lower() for q in eval_result.resolved}
-
-            calibrated = calibrate_forecasts(eval_result.forecasts, sources, params)
-            cal_result = score_forecasts(
-                calibrated, eval_result.resolved,
-                difficulty_adjusted=not args.raw,
-            )
-            logger.info("calibrated_results",
-                        overall_index=round(cal_result.overall_index, 1),
-                        overall_brier=round(cal_result.overall_brier, 4))
-            _print_results(cal_result)
-        else:
-            logger.warning("calibration_not_found", path=str(cal_path),
-                           hint="Run with --fit-calibration first")
-
-    if args.calibrate_hybrid:
-        from calibrate import load_calibration, calibration_path, platt_calibrate
-        TIMESERIES_SOURCES = {"fred", "dbnomics", "yfinance"}
-        cal_path = calibration_path(eval_result.model_slug)
-        sources_map = {q.id: q.source.lower() for q in eval_result.resolved}
-        base_rates = compute_training_base_rates(eval_result.resolved)
-
-        hybrid_forecasts: dict[str, float] = {}
-        platt_params: dict[str, dict[str, float]] = {}
-        if cal_path.exists():
-            platt_params = load_calibration(cal_path)
-
-        for qid, prob in eval_result.forecasts.items():
-            src = sources_map.get(qid, "")
-            if src in TIMESERIES_SOURCES and src in base_rates:
-                hybrid_forecasts[qid] = base_rates[src]
-            elif platt_params:
-                src_p = platt_params.get(src, platt_params.get("_global", {"a": 1.0, "b": 0.0}))
-                hybrid_forecasts[qid] = platt_calibrate(prob, src_p["a"], src_p["b"])
-            else:
-                hybrid_forecasts[qid] = prob
-
-        hybrid_result = score_forecasts(
-            hybrid_forecasts, eval_result.resolved,
-            difficulty_adjusted=not args.raw,
-        )
-        logger.info("hybrid_calibrated_results",
-                     overall_index=round(hybrid_result.overall_index, 1),
-                     overall_brier=round(hybrid_result.overall_brier, 4))
-        _print_results(hybrid_result)
 
     if args.ci:
         from score import bootstrap_ci

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from baseline_agent import (
+from lab_forecaster import (
     FORECAST_EXTRACTION_PROMPT,
     _asterisk_extract,
     _decimal_extract,
@@ -285,12 +285,12 @@ class TestExtractionPrompt:
         assert "Extract only probabilities" in formatted
 
     def test_extraction_model_defaults_to_openai(self) -> None:
-        import baseline_agent
-        assert "openai" in baseline_agent.EXTRACTION_MODEL or "gpt" in baseline_agent.EXTRACTION_MODEL
+        import lab_forecaster
+        assert "openai" in lab_forecaster.EXTRACTION_MODEL or "gpt" in lab_forecaster.EXTRACTION_MODEL
 
 
 class TestExtractWithLlm:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_successful_extraction(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("[0.3, 0.5, 0.7]")
@@ -300,11 +300,11 @@ class TestExtractWithLlm:
         assert result == pytest.approx([0.3, 0.5, 0.7])
         mock_litellm.acompletion.assert_called_once()
         call_kwargs = mock_litellm.acompletion.call_args.kwargs
-        import baseline_agent
-        assert call_kwargs["model"] == baseline_agent.EXTRACTION_MODEL
+        import lab_forecaster
+        assert call_kwargs["model"] == lab_forecaster.EXTRACTION_MODEL
         assert call_kwargs["temperature"] == 0.0
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_wrong_count_returns_none(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("[0.3, 0.5]")
@@ -312,7 +312,7 @@ class TestExtractWithLlm:
         result = await _extract_with_llm("some model output", 3)
         assert result is None
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_invalid_values_returns_none(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("[0.3, 1.5, 0.7]")
@@ -320,13 +320,13 @@ class TestExtractWithLlm:
         result = await _extract_with_llm("some model output", 3)
         assert result is None
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_api_error_returns_none(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(side_effect=RuntimeError("API error"))
         result = await _extract_with_llm("some model output", 3)
         assert result is None
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_non_list_returns_none(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("0.5")
@@ -334,7 +334,7 @@ class TestExtractWithLlm:
         result = await _extract_with_llm("some model output", 3)
         assert result is None
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_no_clamping(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("[0.001, 0.5, 0.999]")
@@ -346,7 +346,7 @@ class TestExtractWithLlm:
 
 
 class TestAforecastMultiHorizon:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_single_llm_call(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("*0.3* *0.5* *0.7*")
@@ -360,7 +360,7 @@ class TestAforecastMultiHorizon:
         assert result == pytest.approx([0.3, 0.5, 0.7])
         mock_litellm.acompletion.assert_called_once()
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_extraction_fallback_called(self, mock_litellm: MagicMock) -> None:
         """When regex fails, the LLM extraction fallback is invoked."""
         main_response = _mock_response("I think the probabilities are roughly moderate across all dates.")
@@ -378,7 +378,7 @@ class TestAforecastMultiHorizon:
         assert result == pytest.approx([0.4, 0.5, 0.6])
         assert mock_litellm.acompletion.call_count == 2
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_fallback_to_default(self, mock_litellm: MagicMock) -> None:
         """When both regex and LLM extraction fail, returns None (caller uses 0.5)."""
         main_response = _mock_response("I cannot determine the probabilities.")
@@ -394,7 +394,7 @@ class TestAforecastMultiHorizon:
 
         assert result is None
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_api_error_returns_default(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(side_effect=RuntimeError("API down"))
 
@@ -405,7 +405,7 @@ class TestAforecastMultiHorizon:
 
         assert result is None
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_prompt_contains_all_dates(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("*0.3* *0.5* *0.7*")
@@ -420,7 +420,7 @@ class TestAforecastMultiHorizon:
         for d in dates:
             assert d in prompt
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_uses_dataset_prompt_variant_by_default(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("*0.3* *0.5*")

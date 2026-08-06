@@ -16,3 +16,4 @@ skills/
 submissions/
 response_logs/
 .coverage
+.claude/

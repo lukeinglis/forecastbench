@@ -22,14 +22,14 @@ SAMPLE_CSV = """Rank,Team,Model Organization,Model,Dataset,Market,Overall,N,95% 
 
 
 class TestFetchLeaderboard:
-    @patch("fetch_data.requests.get")
+    @patch("forecastbench_parity.questions.requests.get")
     def test_fetches_and_parses_csv(self, mock_get: MagicMock, tmp_path: Path) -> None:
         mock_resp = MagicMock()
         mock_resp.text = SAMPLE_CSV
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        with patch("fetch_data.CACHE_DIR", tmp_path):
+        with patch("forecastbench_parity.questions.CACHE_DIR", tmp_path):
             rows = fetch_leaderboard("baseline")
 
         assert len(rows) == 6
@@ -37,14 +37,14 @@ class TestFetchLeaderboard:
         assert rows[0]["Model"] == "Superforecaster median"
         assert rows[0]["Overall"] == "68.5"
 
-    @patch("fetch_data.requests.get")
+    @patch("forecastbench_parity.questions.requests.get")
     def test_caches_csv_on_disk(self, mock_get: MagicMock, tmp_path: Path) -> None:
         mock_resp = MagicMock()
         mock_resp.text = SAMPLE_CSV
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        with patch("fetch_data.CACHE_DIR", tmp_path):
+        with patch("forecastbench_parity.questions.CACHE_DIR", tmp_path):
             fetch_leaderboard("baseline")
             fetch_leaderboard("baseline")
 
@@ -60,14 +60,14 @@ class TestFetchLeaderboard:
         assert "dataset" in LEADERBOARD_NAMES
         assert "preliminary" in LEADERBOARD_NAMES
 
-    @patch("fetch_data.requests.get")
+    @patch("forecastbench_parity.questions.requests.get")
     def test_handles_empty_csv(self, mock_get: MagicMock, tmp_path: Path) -> None:
         mock_resp = MagicMock()
         mock_resp.text = "Rank,Model,Overall\n"
         mock_resp.raise_for_status = MagicMock()
         mock_get.return_value = mock_resp
 
-        with patch("fetch_data.CACHE_DIR", tmp_path):
+        with patch("forecastbench_parity.questions.CACHE_DIR", tmp_path):
             rows = fetch_leaderboard("baseline")
 
         assert rows == []

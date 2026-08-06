@@ -30,7 +30,7 @@ class TestHeldOutLeakage:
                 self.outcome = 1
                 self.resolution_date = "2024-06-01"
 
-        all_resolutions = {qid: [FakeRes(qid)] for qid in all_question_ids}  # type: ignore[dict-item]
+        all_resolutions = {qid: FakeRes(qid) for qid in all_question_ids}  # type: ignore[dict-item]
 
         resolved = join_resolved_questions(iteration, all_resolutions)  # type: ignore[arg-type]
         resolved_ids = {q.id for q in resolved}

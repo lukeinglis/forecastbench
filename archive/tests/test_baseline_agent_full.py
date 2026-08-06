@@ -9,18 +9,14 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 
 from fetch_data import Question
-from baseline_agent import (
-    _apply_horizon_dampening,
-    _apply_timeseries_dampening,
+from lab_forecaster import (
     _build_prompt,
     _build_dataset_prompt,
     _forecast_kwargs,
     _is_o_series_model,
     _parse_probability,
-    _parse_probabilities,
-    _sanitize_kwargs_for_model,
+    _extract_probabilities,
     MODEL,
-    TIMESERIES_SOURCES,
     TEMPERATURE,
     MAX_TOKENS,
 )
@@ -452,7 +448,7 @@ class TestParseProbabilities:
         result = _parse_probabilities(text, 3)
         assert result == [pytest.approx(0.65), pytest.approx(0.70), pytest.approx(0.80)]
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_plain_decimals_trigger_llm_fallback(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("[0.65, 0.70, 0.80]")
         text = "0.65 0.70 0.80"
@@ -474,7 +470,7 @@ class TestParseProbabilities:
         assert result[1] == pytest.approx(1.0)
         assert result[2] == pytest.approx(0.50)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_wrong_count_triggers_llm_fallback(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("[0.30, 0.45, 0.60]")
         text = "*0.65* *0.70*"
@@ -482,14 +478,14 @@ class TestParseProbabilities:
         mock_litellm.completion.assert_called_once()
         assert result == [pytest.approx(0.30), pytest.approx(0.45), pytest.approx(0.60)]
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_both_fail_raises_value_error(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("[]")
         text = "I cannot determine the probabilities"
         with pytest.raises(ValueError):
             _parse_probabilities(text, 3)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_llm_extraction_exception_raises_value_error(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.side_effect = Exception("API error")
         text = "some text without numbers"
@@ -503,7 +499,7 @@ class TestParseProbabilities:
         assert result[0] == pytest.approx(0.10)
         assert result[7] == pytest.approx(0.80)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_ignores_stray_numbers_in_reasoning(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("[0.40, 0.60]")
         text = "The base rate is 0.30 and after adjusting by 0.10 I get *0.40*"
@@ -563,13 +559,13 @@ class TestParseProbabilityPriority:
 
 
 class TestForecastSync:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_calls_litellm_completion(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("Probability: 0.73")
-        import baseline_agent
-        from baseline_agent import forecast
+        import lab_forecaster
+        from lab_forecaster import forecast
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", False):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", False):
             q = _make_question()
             result = forecast(q)
 
@@ -579,19 +575,19 @@ class TestForecastSync:
             assert call_kwargs.kwargs["timeout"] == 180
             assert result == pytest.approx(0.73)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_returns_float(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("Probability: 0.55")
-        from baseline_agent import forecast
+        from lab_forecaster import forecast
 
         q = _make_question()
         result = forecast(q)
         assert isinstance(result, float)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_passes_prompt_variant(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.55*")
-        from baseline_agent import forecast
+        from lab_forecaster import forecast
 
         q = _make_question(
             source="metaculus",
@@ -607,10 +603,10 @@ class TestForecastSync:
 
 
 class TestForecastMulti:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_returns_list_matching_dates(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.30* *0.45* *0.60*")
-        from baseline_agent import forecast_multi
+        from lab_forecaster import forecast_multi
 
         q = _make_dataset_question()
         dates = ["2024-07-01", "2024-08-01", "2024-09-01"]
@@ -620,10 +616,10 @@ class TestForecastMulti:
         assert all(isinstance(p, float) for p in result)
         assert result == [pytest.approx(0.30), pytest.approx(0.45), pytest.approx(0.60)]
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_uses_dataset_prompt_template(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
-        from baseline_agent import forecast_multi
+        from lab_forecaster import forecast_multi
 
         q = _make_dataset_question()
         forecast_multi(q, resolution_dates=["2024-07-01"])
@@ -635,10 +631,10 @@ class TestForecastMulti:
 
 
 class TestForecastAsync:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_calls_litellm_acompletion(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("Probability: 0.65"))
-        from baseline_agent import aforecast
+        from lab_forecaster import aforecast
 
         q = _make_question()
         result = await aforecast(q)
@@ -646,10 +642,10 @@ class TestForecastAsync:
         mock_litellm.acompletion.assert_called_once()
         assert result == pytest.approx(0.65)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_passes_prompt_variant_async(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.42*"))
-        from baseline_agent import aforecast
+        from lab_forecaster import aforecast
 
         q = _make_question(
             source="fred",
@@ -705,12 +701,12 @@ class TestMarketCloseAsResolutionDate:
 
 
 class TestAforecastMulti:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_returns_list_matching_dates(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("*0.25* *0.50* *0.75*")
         )
-        from baseline_agent import aforecast_multi
+        from lab_forecaster import aforecast_multi
 
         q = _make_dataset_question()
         dates = ["2024-07-01", "2024-08-01", "2024-09-01"]
@@ -727,11 +723,11 @@ class TestModelConfig:
     @patch.dict("os.environ", {"FORECAST_MODEL": "gpt-4o"})
     def test_model_configurable_via_env(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
 
-        importlib.reload(baseline_agent)
-        assert baseline_agent.MODEL == "gpt-4o"
-        importlib.reload(baseline_agent)
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.MODEL == "gpt-4o"
+        importlib.reload(lab_forecaster)
 
     def test_default_temperature_is_zero(self) -> None:
         assert TEMPERATURE == 0
@@ -742,56 +738,56 @@ class TestModelConfig:
     @patch.dict("os.environ", {"FORECAST_TEMPERATURE": "0.5"})
     def test_temperature_configurable_via_env(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
 
-        importlib.reload(baseline_agent)
-        assert baseline_agent.TEMPERATURE == 0.5
-        importlib.reload(baseline_agent)
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.TEMPERATURE == 0.5
+        importlib.reload(lab_forecaster)
 
     @patch.dict("os.environ", {"FORECAST_MAX_TOKENS": "4096"})
     def test_max_tokens_configurable_via_env(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
 
-        importlib.reload(baseline_agent)
-        assert baseline_agent.MAX_TOKENS == 4096
-        importlib.reload(baseline_agent)
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.MAX_TOKENS == 4096
+        importlib.reload(lab_forecaster)
 
 
 class TestSelectModel:
     def test_returns_default_model_when_timeseries_model_empty(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", ""):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", ""):
+            from lab_forecaster import _select_model
             assert _select_model("fred") == MODEL
 
     def test_returns_timeseries_model_for_fred(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from lab_forecaster import _select_model
             assert _select_model("fred") == "vertex_ai/claude-opus-4-8@20250915"
 
     def test_returns_timeseries_model_for_dbnomics(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from lab_forecaster import _select_model
             assert _select_model("dbnomics") == "vertex_ai/claude-opus-4-8@20250915"
 
     def test_returns_timeseries_model_for_yfinance(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from lab_forecaster import _select_model
             assert _select_model("yfinance") == "vertex_ai/claude-opus-4-8@20250915"
 
     def test_returns_default_model_for_metaculus(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from lab_forecaster import _select_model
             assert _select_model("metaculus") == MODEL
 
     def test_returns_default_model_for_none_source(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from lab_forecaster import _select_model
             assert _select_model(None) == MODEL
 
     def test_case_insensitive_source(self) -> None:
-        with patch.object(__import__("baseline_agent"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
-            from baseline_agent import _select_model
+        with patch.object(__import__("lab_forecaster"), "TIMESERIES_MODEL", "vertex_ai/claude-opus-4-8@20250915"):
+            from lab_forecaster import _select_model
             assert _select_model("FRED") == "vertex_ai/claude-opus-4-8@20250915"
 
     def test_timeseries_sources_contains_expected(self) -> None:
@@ -800,55 +796,55 @@ class TestSelectModel:
     @patch.dict("os.environ", {"FORECAST_TIMESERIES_MODEL": "openai/gpt-4o"})
     def test_env_var_is_read(self) -> None:
         import importlib
-        import baseline_agent
-        importlib.reload(baseline_agent)
-        assert baseline_agent.TIMESERIES_MODEL == "openai/gpt-4o"
-        importlib.reload(baseline_agent)
+        import lab_forecaster
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.TIMESERIES_MODEL == "openai/gpt-4o"
+        importlib.reload(lab_forecaster)
 
     @patch.dict("os.environ", {}, clear=False)
     def test_env_var_defaults_to_empty(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
         env = os.environ.copy()
         env.pop("FORECAST_TIMESERIES_MODEL", None)
         with patch.dict("os.environ", env, clear=True):
-            importlib.reload(baseline_agent)
-            assert baseline_agent.TIMESERIES_MODEL == ""
-            importlib.reload(baseline_agent)
+            importlib.reload(lab_forecaster)
+            assert lab_forecaster.TIMESERIES_MODEL == ""
+            importlib.reload(lab_forecaster)
 
 
 class TestVertexCredentialRefresh:
     def test_skips_refresh_when_token_valid(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
-        old_creds = baseline_agent._vertex_credentials
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
+        old_creds = lab_forecaster._vertex_credentials
         try:
-            baseline_agent._vertex_token_expiry = time.monotonic() + 9999
-            baseline_agent._vertex_credentials = MagicMock()
-            with patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"):
-                baseline_agent._ensure_vertex_credentials()
-            baseline_agent._vertex_credentials.refresh.assert_not_called()
+            lab_forecaster._vertex_token_expiry = time.monotonic() + 9999
+            lab_forecaster._vertex_credentials = MagicMock()
+            with patch.object(lab_forecaster, "MODEL", "vertex_ai/claude-sonnet-4@20250514"):
+                lab_forecaster._ensure_vertex_credentials()
+            lab_forecaster._vertex_credentials.refresh.assert_not_called()
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
-            baseline_agent._vertex_credentials = old_creds
+            lab_forecaster._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_credentials = old_creds
 
     def test_skips_for_non_vertex_model(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
         try:
-            baseline_agent._vertex_token_expiry = 0.0
-            with patch.object(baseline_agent, "MODEL", "openai/gpt-4o"):
-                baseline_agent._ensure_vertex_credentials()
+            lab_forecaster._vertex_token_expiry = 0.0
+            with patch.object(lab_forecaster, "MODEL", "openai/gpt-4o"):
+                lab_forecaster._ensure_vertex_credentials()
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_token_expiry = old_expiry
 
     def test_refreshes_expired_credentials(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
-        old_creds = baseline_agent._vertex_credentials
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
+        old_creds = lab_forecaster._vertex_credentials
         try:
-            baseline_agent._vertex_credentials = None
-            baseline_agent._vertex_token_expiry = 0.0
+            lab_forecaster._vertex_credentials = None
+            lab_forecaster._vertex_token_expiry = 0.0
 
             mock_creds = MagicMock()
             mock_creds.expiry = None
@@ -857,35 +853,35 @@ class TestVertexCredentialRefresh:
             mock_transport = MagicMock()
 
             with (
-                patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
-                patch.object(baseline_agent, "_get_google_auth", return_value=(mock_auth, mock_transport)),
+                patch.object(lab_forecaster, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+                patch.object(lab_forecaster, "_get_google_auth", return_value=(mock_auth, mock_transport)),
             ):
-                baseline_agent._ensure_vertex_credentials()
+                lab_forecaster._ensure_vertex_credentials()
 
             mock_creds.refresh.assert_called_once()
-            assert baseline_agent._vertex_token_expiry > 0
+            assert lab_forecaster._vertex_token_expiry > 0
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
-            baseline_agent._vertex_credentials = old_creds
+            lab_forecaster._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_credentials = old_creds
 
     def test_refresh_failure_does_not_crash(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
-        old_creds = baseline_agent._vertex_credentials
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
+        old_creds = lab_forecaster._vertex_credentials
         try:
-            baseline_agent._vertex_credentials = None
-            baseline_agent._vertex_token_expiry = 0.0
+            lab_forecaster._vertex_credentials = None
+            lab_forecaster._vertex_token_expiry = 0.0
 
             with (
-                patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
-                patch.object(baseline_agent, "_get_google_auth", side_effect=Exception("no creds")),
+                patch.object(lab_forecaster, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+                patch.object(lab_forecaster, "_get_google_auth", side_effect=Exception("no creds")),
             ):
-                baseline_agent._ensure_vertex_credentials()
+                lab_forecaster._ensure_vertex_credentials()
 
-            assert baseline_agent._vertex_token_expiry == 0.0
+            assert lab_forecaster._vertex_token_expiry == 0.0
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
-            baseline_agent._vertex_credentials = old_creds
+            lab_forecaster._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_credentials = old_creds
 
 
 class TestHorizonDampening:
@@ -939,32 +935,32 @@ class TestHorizonDampening:
 
 class TestTimeseriesDampening:
     def test_half_confidence_shrinks_toward_half(self) -> None:
-        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+        with patch("lab_forecaster.TIMESERIES_CONFIDENCE", 0.5):
             assert _apply_timeseries_dampening(0.8, "fred") == pytest.approx(0.65)
             assert _apply_timeseries_dampening(0.2, "fred") == pytest.approx(0.35)
 
     def test_zero_confidence_always_returns_half(self) -> None:
-        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.0):
+        with patch("lab_forecaster.TIMESERIES_CONFIDENCE", 0.0):
             assert _apply_timeseries_dampening(0.8, "fred") == pytest.approx(0.5)
             assert _apply_timeseries_dampening(0.1, "dbnomics") == pytest.approx(0.5)
 
     def test_full_confidence_no_change(self) -> None:
-        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 1.0):
+        with patch("lab_forecaster.TIMESERIES_CONFIDENCE", 1.0):
             assert _apply_timeseries_dampening(0.8, "yfinance") == pytest.approx(0.8)
             assert _apply_timeseries_dampening(0.2, "fred") == pytest.approx(0.2)
 
     def test_non_timeseries_source_unchanged(self) -> None:
-        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.0):
+        with patch("lab_forecaster.TIMESERIES_CONFIDENCE", 0.0):
             assert _apply_timeseries_dampening(0.8, "metaculus") == pytest.approx(0.8)
             assert _apply_timeseries_dampening(0.2, "polymarket") == pytest.approx(0.2)
 
     def test_case_insensitive(self) -> None:
-        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+        with patch("lab_forecaster.TIMESERIES_CONFIDENCE", 0.5):
             assert _apply_timeseries_dampening(0.8, "FRED") == pytest.approx(0.65)
             assert _apply_timeseries_dampening(0.8, "YFinance") == pytest.approx(0.65)
 
     def test_half_stays_at_half(self) -> None:
-        with patch("baseline_agent.TIMESERIES_CONFIDENCE", 0.5):
+        with patch("lab_forecaster.TIMESERIES_CONFIDENCE", 0.5):
             assert _apply_timeseries_dampening(0.5, "fred") == pytest.approx(0.5)
 
 
@@ -979,8 +975,8 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Current rate",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True), \
-             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
+        with patch("lab_forecaster.BASE_RATE_HINT", True), \
+             patch("lab_forecaster.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="fred")
         assert "46%" in prompt
         assert "Historical context" in prompt
@@ -993,8 +989,8 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Index value",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True), \
-             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
+        with patch("lab_forecaster.BASE_RATE_HINT", True), \
+             patch("lab_forecaster.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="dbnomics")
         assert "78%" in prompt
 
@@ -1006,15 +1002,15 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Stock price",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True), \
-             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
+        with patch("lab_forecaster.BASE_RATE_HINT", True), \
+             patch("lab_forecaster.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="yfinance")
         assert "43%" in prompt
 
     def test_market_source_has_no_base_rate(self) -> None:
         q = _make_question(source="metaculus")
-        with patch("baseline_agent.BASE_RATE_HINT", True), \
-             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
+        with patch("lab_forecaster.BASE_RATE_HINT", True), \
+             patch("lab_forecaster.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="metaculus")
         assert "Historical context" not in prompt
 
@@ -1037,7 +1033,7 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Current rate",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", False):
+        with patch("lab_forecaster.BASE_RATE_HINT", False):
             prompt = _build_prompt(q, source="fred")
         assert "Historical context" not in prompt
 
@@ -1049,8 +1045,8 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Count",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True), \
-             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
+        with patch("lab_forecaster.BASE_RATE_HINT", True), \
+             patch("lab_forecaster.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="acled")
         assert "Historical context" not in prompt
 
@@ -1062,15 +1058,15 @@ class TestBaseRateHint:
             freeze_datetime_value_explanation="Current rate",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.BASE_RATE_HINT", True), \
-             patch("baseline_agent.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
+        with patch("lab_forecaster.BASE_RATE_HINT", True), \
+             patch("lab_forecaster.TIMESERIES_BASE_RATES", self._TEST_BASE_RATES):
             prompt = _build_prompt(q, source="fred")
         hist_idx = prompt.index("Historical context")
         output_idx = prompt.index("Output your answer")
         assert hist_idx < output_idx
 
     def test_load_base_rates_returns_empty_by_default(self) -> None:
-        from baseline_agent import _load_base_rates
+        from lab_forecaster import _load_base_rates
         with patch.dict("os.environ", {}, clear=False):
             env = os.environ.copy()
             env.pop("FORECAST_BASE_RATES", None)
@@ -1078,7 +1074,7 @@ class TestBaseRateHint:
                 assert _load_base_rates() == {}
 
     def test_load_base_rates_uses_env_override(self) -> None:
-        from baseline_agent import _load_base_rates
+        from lab_forecaster import _load_base_rates
         with patch.dict("os.environ", {"FORECAST_BASE_RATES": '{"fred": 0.5}'}):
             assert _load_base_rates() == {"fred": 0.5}
 
@@ -1087,11 +1083,11 @@ class TestTimeseriesThinking:
     """FORECAST_TIMESERIES_THINKING env var controls thinking for timeseries sources."""
 
     def test_timeseries_thinking_disabled_by_default(self) -> None:
-        import baseline_agent
-        from baseline_agent import _forecast_kwargs
+        import lab_forecaster
+        from lab_forecaster import _forecast_kwargs
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", True), \
-             patch.object(baseline_agent, "TIMESERIES_THINKING", False):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", True), \
+             patch.object(lab_forecaster, "TIMESERIES_THINKING", False):
             kwargs = _forecast_kwargs(
                 [{"role": "user", "content": "test"}], source="fred",
             )
@@ -1099,11 +1095,11 @@ class TestTimeseriesThinking:
         assert kwargs["temperature"] == 0.3
 
     def test_timeseries_thinking_enabled(self) -> None:
-        import baseline_agent
-        from baseline_agent import _forecast_kwargs
+        import lab_forecaster
+        from lab_forecaster import _forecast_kwargs
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", True), \
-             patch.object(baseline_agent, "TIMESERIES_THINKING", True):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", True), \
+             patch.object(lab_forecaster, "TIMESERIES_THINKING", True):
             kwargs = _forecast_kwargs(
                 [{"role": "user", "content": "test"}], source="fred",
             )
@@ -1111,11 +1107,11 @@ class TestTimeseriesThinking:
         assert "temperature" not in kwargs
 
     def test_timeseries_thinking_requires_global(self) -> None:
-        import baseline_agent
-        from baseline_agent import _forecast_kwargs
+        import lab_forecaster
+        from lab_forecaster import _forecast_kwargs
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", False), \
-             patch.object(baseline_agent, "TIMESERIES_THINKING", True):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", False), \
+             patch.object(lab_forecaster, "TIMESERIES_THINKING", True):
             kwargs = _forecast_kwargs(
                 [{"role": "user", "content": "test"}], source="fred",
             )
@@ -1123,11 +1119,11 @@ class TestTimeseriesThinking:
         assert kwargs["temperature"] == 0.3
 
     def test_market_always_temperature(self) -> None:
-        import baseline_agent
-        from baseline_agent import _forecast_kwargs
+        import lab_forecaster
+        from lab_forecaster import _forecast_kwargs
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", True), \
-             patch.object(baseline_agent, "TIMESERIES_THINKING", True):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", True), \
+             patch.object(lab_forecaster, "TIMESERIES_THINKING", True):
             kwargs = _forecast_kwargs(
                 [{"role": "user", "content": "test"}], source="metaculus",
             )
@@ -1138,41 +1134,41 @@ class TestTimeseriesThinking:
 class TestForecastParityParams:
     """Verify forecast LLM calls use _forecast_kwargs (adaptive thinking / temperature=0.3 fallback)."""
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_enables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
-        import baseline_agent
-        from baseline_agent import forecast
+        import lab_forecaster
+        from lab_forecaster import forecast
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", True):
             forecast(_make_question(source="acled"))
             kwargs = mock_litellm.completion.call_args.kwargs
             assert "thinking" in kwargs
             assert "temperature" not in kwargs
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_disables_thinking_for_market_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
-        from baseline_agent import forecast
+        from lab_forecaster import forecast
 
         forecast(_make_question(source="metaculus"))
         kwargs = mock_litellm.completion.call_args.kwargs
         assert "thinking" not in kwargs
         assert kwargs["temperature"] == 0.3
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
-        from baseline_agent import forecast, MAX_TOKENS
+        from lab_forecaster import forecast, MAX_TOKENS
 
         forecast(_make_question())
         kwargs = mock_litellm.completion.call_args.kwargs
         assert kwargs["max_tokens"] == MAX_TOKENS
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_multi_disables_thinking_for_timeseries(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.30* *0.50* *0.70*")
-        from baseline_agent import forecast_multi
+        from lab_forecaster import forecast_multi
 
         q = Question(
             id="tsq1", source="fred", question="Will value exceed threshold?",
@@ -1185,53 +1181,53 @@ class TestForecastParityParams:
         assert "thinking" not in kwargs
         assert kwargs["temperature"] == 0.3
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.30* *0.50* *0.70*")
-        from baseline_agent import forecast_multi, MAX_TOKENS
+        from lab_forecaster import forecast_multi, MAX_TOKENS
 
         forecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.completion.call_args.kwargs
         assert kwargs["max_tokens"] == MAX_TOKENS
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_enables_thinking_for_event_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
-        import baseline_agent
-        from baseline_agent import aforecast
+        import lab_forecaster
+        from lab_forecaster import aforecast
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", True):
             await aforecast(_make_question(source="acled"))
             kwargs = mock_litellm.acompletion.call_args.kwargs
             assert "thinking" in kwargs
             assert "temperature" not in kwargs
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_disables_thinking_for_market_sources(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
-        from baseline_agent import aforecast
+        from lab_forecaster import aforecast
 
         await aforecast(_make_question(source="metaculus"))
         kwargs = mock_litellm.acompletion.call_args.kwargs
         assert "thinking" not in kwargs
         assert kwargs["temperature"] == 0.3
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.50*"))
-        from baseline_agent import aforecast, MAX_TOKENS
+        from lab_forecaster import aforecast, MAX_TOKENS
 
         await aforecast(_make_question())
         kwargs = mock_litellm.acompletion.call_args.kwargs
         assert kwargs["max_tokens"] == MAX_TOKENS
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_multi_horizon_enables_thinking_for_events(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
-        import baseline_agent
-        from baseline_agent import aforecast_multi_horizon
+        import lab_forecaster
+        from lab_forecaster import aforecast_multi_horizon
 
-        with patch.object(baseline_agent, "THINKING_ENABLED", True):
+        with patch.object(lab_forecaster, "THINKING_ENABLED", True):
             await aforecast_multi_horizon(
                 _make_dataset_question(),
                 ["2024-07-01", "2024-08-01", "2024-09-01"],
@@ -1241,10 +1237,10 @@ class TestForecastParityParams:
             assert "thinking" in kwargs
             assert "temperature" not in kwargs
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_multi_horizon_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
-        from baseline_agent import aforecast_multi_horizon, MAX_TOKENS
+        from lab_forecaster import aforecast_multi_horizon, MAX_TOKENS
 
         await aforecast_multi_horizon(
             _make_dataset_question(),
@@ -1254,10 +1250,10 @@ class TestForecastParityParams:
         kwargs = mock_litellm.acompletion.call_args.kwargs
         assert kwargs["max_tokens"] == MAX_TOKENS
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_multi_disables_thinking_for_timeseries(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
-        from baseline_agent import aforecast_multi
+        from lab_forecaster import aforecast_multi
 
         q = Question(
             id="tsq1", source="fred", question="Will value exceed threshold?",
@@ -1270,16 +1266,16 @@ class TestForecastParityParams:
         assert "thinking" not in kwargs
         assert kwargs["temperature"] == 0.3
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_aforecast_multi_uses_configured_max_tokens(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.30* *0.50* *0.70*"))
-        from baseline_agent import aforecast_multi, MAX_TOKENS
+        from lab_forecaster import aforecast_multi, MAX_TOKENS
 
         await aforecast_multi(_make_dataset_question(), ["2024-07-01", "2024-08-01", "2024-09-01"])
         kwargs = mock_litellm.acompletion.call_args.kwargs
         assert kwargs["max_tokens"] == MAX_TOKENS
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_extraction_calls_do_not_use_forecast_kwargs(self, mock_litellm: MagicMock) -> None:
         """Extraction/parsing calls should NOT use _forecast_kwargs."""
         mock_litellm.completion.return_value = _mock_response("[0.30, 0.50]")
@@ -1302,28 +1298,28 @@ class TestSourceSpecificPrompts:
         )
 
     def test_fred_gets_macro_prompt(self) -> None:
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(self._ts_question("fred"))
         assert "macroeconomic forecaster" in prompt
         assert "monetary policy" in prompt
         assert "mean-revert" in prompt
 
     def test_yfinance_gets_financial_prompt(self) -> None:
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(self._ts_question("yfinance"))
         assert "financial analyst" in prompt
         assert "random walk" in prompt
         assert "volatility" in prompt
 
     def test_dbnomics_gets_statistical_prompt(self) -> None:
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(self._ts_question("dbnomics"))
         assert "data analyst" in prompt
         assert "seasonal" in prompt
         assert "publication" in prompt
 
     def test_source_specific_disabled_uses_generic(self) -> None:
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", False):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", False):
             for source in ["fred", "yfinance", "dbnomics"]:
                 prompt = _build_prompt(self._ts_question(source))
                 assert "macroeconomic forecaster" not in prompt
@@ -1339,7 +1335,7 @@ class TestSourceSpecificPrompts:
             freeze_datetime_value_explanation="Count",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(q)
         assert "superforecaster" in prompt
         assert "macroeconomic forecaster" not in prompt
@@ -1347,7 +1343,7 @@ class TestSourceSpecificPrompts:
         assert "data analyst specializing in statistical" not in prompt
 
     def test_source_specific_preserves_placeholders(self) -> None:
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             for source in ["fred", "yfinance", "dbnomics"]:
                 prompt = _build_prompt(self._ts_question(source))
                 assert "3.5" in prompt
@@ -1357,7 +1353,7 @@ class TestSourceSpecificPrompts:
                 assert "asterisk" in prompt.lower()
 
     def test_source_specific_with_scratchpad_variant(self) -> None:
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(self._ts_question("fred"), prompt_variant="scratchpad")
         assert "macroeconomic forecaster" in prompt
 
@@ -1369,13 +1365,13 @@ class TestSourceSpecificPrompts:
             freeze_datetime_value_explanation="Page views",
             resolution_dates=["2024-07-01"],
         )
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(q)
         assert "superforecaster" in prompt
 
     def test_market_sources_unaffected(self) -> None:
         q = _make_question(source="metaculus")
-        with patch("baseline_agent.SOURCE_SPECIFIC_PROMPTS", True):
+        with patch("lab_forecaster.SOURCE_SPECIFIC_PROMPTS", True):
             prompt = _build_prompt(q)
         assert "macroeconomic forecaster" not in prompt
         assert "financial analyst" not in prompt

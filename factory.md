@@ -9,7 +9,7 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - `eval.py`
 - `dummy_forecaster.py`
 - `cutoff.py`
-- `baseline_agent.py`
+- `lab_forecaster.py`
 - `analyze.py`
 - `verify_parity.py`
 - `tests/**`
