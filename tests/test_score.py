@@ -120,6 +120,21 @@ class TestScoreForecasts:
         expected_overall = (result.dataset_brier + result.market_brier) / 2.0
         assert abs(result.overall_brier - expected_overall) < 1e-10
 
+    def test_overall_diverges_on_unbalanced_split(
+        self, unbalanced_resolved_questions: list,
+    ) -> None:
+        forecasts = {"d1": 0.9, "d2": 0.1, "d3": 0.8, "m1": 0.3}
+        result = score_forecasts(forecasts, unbalanced_resolved_questions)
+
+        expected_equal_weight = (result.dataset_brier + result.market_brier) / 2.0
+        assert abs(result.overall_brier - expected_equal_weight) < 1e-10
+
+        count_weighted = (
+            result.dataset_brier * result.n_dataset
+            + result.market_brier * result.n_market
+        ) / (result.n_dataset + result.n_market)
+        assert abs(result.overall_brier - count_weighted) > 1e-6
+
 
 class TestPropertyBased:
     @given(

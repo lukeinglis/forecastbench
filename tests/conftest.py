@@ -51,6 +51,20 @@ def mixed_resolved_questions() -> list[ResolvedQuestion]:
 
 
 @pytest.fixture
+def unbalanced_resolved_questions() -> list[ResolvedQuestion]:
+    """3 dataset + 1 market — unbalanced split where equal-weight != count-weighted."""
+    dataset_qs = [
+        ResolvedQuestion(id="d1", source="acled", question="Dataset Q1", outcome=1, forecast_due_date="2024-01-01"),
+        ResolvedQuestion(id="d2", source="acled", question="Dataset Q2", outcome=0, forecast_due_date="2024-01-01"),
+        ResolvedQuestion(id="d3", source="acled", question="Dataset Q3", outcome=1, forecast_due_date="2024-01-01"),
+    ]
+    market_qs = [
+        ResolvedQuestion(id="m1", source="metaculus", question="Market Q1", outcome=0, forecast_due_date="2024-01-01"),
+    ]
+    return dataset_qs + market_qs
+
+
+@pytest.fixture
 def mock_question_sets() -> list[QuestionSet]:
     """5 question sets with sequential dates for held-out split testing."""
     dates = ["2024-01-01", "2024-02-01", "2024-03-01", "2024-04-01", "2024-05-01"]

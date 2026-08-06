@@ -156,35 +156,52 @@ class TestQuestionCoerceCombinationOf:
 # ---------------------------------------------------------------------------
 
 
+def _mock_response(payload: object) -> MagicMock:
+    """Build a mock requests.Response returning *payload* from .json()."""
+    resp = MagicMock()
+    resp.json.return_value = payload
+    resp.raise_for_status = MagicMock()
+    return resp
+
+
 class TestFetchResolutionShapes:
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_list_shape(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = [
+    def test_list_shape(self, tmp_path: Path) -> None:
+        payload = [
             {"id": "r1", "outcome": 1},
             {"id": "r2", "outcome": 0},
         ]
-        result = fetch_resolution("test.json")
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=_mock_response(payload)),
+        ):
+            result = fetch_resolution("test.json")
         assert len(result) == 2
         assert result[0].id == "r1"
         assert result[1].outcome == 0
 
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_dict_with_resolutions_key(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = {
+    def test_dict_with_resolutions_key(self, tmp_path: Path) -> None:
+        payload = {
             "resolutions": [
                 {"id": "r1", "resolved_to": 0.8},
                 {"id": "r2", "resolved_to": 0.2},
             ]
         }
-        result = fetch_resolution("test.json")
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=_mock_response(payload)),
+        ):
+            result = fetch_resolution("test.json")
         assert len(result) == 2
         assert result[0].outcome == 1
         assert result[1].outcome == 0
 
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_single_object(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = {"id": "r1", "outcome": 1}
-        result = fetch_resolution("test.json")
+    def test_single_object(self, tmp_path: Path) -> None:
+        payload = {"id": "r1", "outcome": 1}
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=_mock_response(payload)),
+        ):
+            result = fetch_resolution("test.json")
         assert len(result) == 1
         assert result[0].id == "r1"
 
@@ -245,29 +262,49 @@ class TestFetchJsonCaching:
 
 
 class TestNetworkFailures:
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_connection_error_propagates(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.side_effect = requests.exceptions.ConnectionError("Connection refused")
-        with pytest.raises(requests.exceptions.ConnectionError):
-            fetch_question_set("test.json")
+    def test_connection_error_propagates(self, tmp_path: Path) -> None:
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch(
+                "forecastbench_parity.questions.requests.get",
+                side_effect=requests.exceptions.ConnectionError("Connection refused"),
+            ),
+        ):
+            with pytest.raises(requests.exceptions.ConnectionError):
+                fetch_question_set("test.json")
 
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_timeout_propagates(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.side_effect = requests.exceptions.Timeout("Read timed out")
-        with pytest.raises(requests.exceptions.Timeout):
-            fetch_question_set("test.json")
+    def test_timeout_propagates(self, tmp_path: Path) -> None:
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch(
+                "forecastbench_parity.questions.requests.get",
+                side_effect=requests.exceptions.Timeout("Read timed out"),
+            ),
+        ):
+            with pytest.raises(requests.exceptions.Timeout):
+                fetch_question_set("test.json")
 
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_http_404_propagates(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.side_effect = requests.exceptions.HTTPError("404 Not Found")
-        with pytest.raises(requests.exceptions.HTTPError):
-            fetch_resolution("missing.json")
+    def test_http_404_propagates(self, tmp_path: Path) -> None:
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch(
+                "forecastbench_parity.questions.requests.get",
+                side_effect=requests.exceptions.HTTPError("404 Not Found"),
+            ),
+        ):
+            with pytest.raises(requests.exceptions.HTTPError):
+                fetch_resolution("missing.json")
 
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_http_500_propagates(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.side_effect = requests.exceptions.HTTPError("500 Internal Server Error")
-        with pytest.raises(requests.exceptions.HTTPError):
-            fetch_resolution("broken.json")
+    def test_http_500_propagates(self, tmp_path: Path) -> None:
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch(
+                "forecastbench_parity.questions.requests.get",
+                side_effect=requests.exceptions.HTTPError("500 Internal Server Error"),
+            ),
+        ):
+            with pytest.raises(requests.exceptions.HTTPError):
+                fetch_resolution("broken.json")
 
     def test_fetch_json_connection_error(self, tmp_path: Path) -> None:
         with (
@@ -298,9 +335,8 @@ class TestNetworkFailures:
 
 
 class TestFetchQuestionSet:
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_parses_question_set(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = {
+    def test_parses_question_set(self, tmp_path: Path) -> None:
+        payload = {
             "forecast_due_date": "2024-06-01",
             "question_set": "round_1",
             "questions": [
@@ -318,7 +354,11 @@ class TestFetchQuestionSet:
                 },
             ],
         }
-        qs = fetch_question_set("round1.json")
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=_mock_response(payload)),
+        ):
+            qs = fetch_question_set("round1.json")
         assert qs.forecast_due_date == "2024-06-01"
         assert len(qs.questions) == 2
         assert qs.questions[1].id == "a|b"
@@ -516,16 +556,19 @@ class TestResolvedFieldFiltering:
 
 
 class TestListQuestionSetFilesFiltering:
-    @patch("forecastbench_parity.questions._fetch_json")
-    def test_excludes_latest_llm_json(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = [
+    def test_excludes_latest_llm_json(self, tmp_path: Path) -> None:
+        payload = [
             {"name": "2026-06-01-llm.json"},
             {"name": "latest-llm.json"},
             {"name": "2026-07-05-llm.json"},
         ]
-        from fetch_data import list_question_set_files
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=_mock_response(payload)),
+        ):
+            from fetch_data import list_question_set_files
 
-        result = list_question_set_files()
+            result = list_question_set_files()
         assert "latest-llm.json" not in result
         assert len(result) == 2
         assert "2026-06-01-llm.json" in result
@@ -538,18 +581,28 @@ class TestListQuestionSetFilesFiltering:
 
 
 class TestGetLatestRound:
-    @patch("forecastbench_parity.questions._fetch_text")
-    def test_returns_round_name(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = "2026-07-05-llm.json\n"
-        from fetch_data import get_latest_round
+    def test_returns_round_name(self, tmp_path: Path) -> None:
+        resp = MagicMock()
+        resp.text = "2026-07-05-llm.json\n"
+        resp.raise_for_status = MagicMock()
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=resp),
+        ):
+            from fetch_data import get_latest_round
 
-        result = get_latest_round()
+            result = get_latest_round()
         assert result == "2026-07-05-llm"
 
-    @patch("forecastbench_parity.questions._fetch_text")
-    def test_strips_whitespace(self, mock_fetch: MagicMock) -> None:
-        mock_fetch.return_value = "  2026-07-05-llm.json  \n"
-        from fetch_data import get_latest_round
+    def test_strips_whitespace(self, tmp_path: Path) -> None:
+        resp = MagicMock()
+        resp.text = "  2026-07-05-llm.json  \n"
+        resp.raise_for_status = MagicMock()
+        with (
+            patch("forecastbench_parity.questions.CACHE_DIR", tmp_path),
+            patch("forecastbench_parity.questions.requests.get", return_value=resp),
+        ):
+            from fetch_data import get_latest_round
 
-        result = get_latest_round()
+            result = get_latest_round()
         assert result == "2026-07-05-llm"
