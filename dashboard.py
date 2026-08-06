@@ -29,7 +29,7 @@ from analyze import (
     analyze_calibration,
     calibration_metrics,
 )
-from fetch_data import MARKET_SOURCES, ResolvedQuestion, load_data
+from fetch_data import MARKET_SOURCES, ResolvedQuestion, fetch_leaderboard, load_data
 from score import brier_index, brier_score
 
 
@@ -38,12 +38,12 @@ ResultData = dict[str, Any]
 RESULTS_DIR = Path("results")
 
 LEADERBOARD_REFERENCE: dict[str, dict[str, float]] = {
-    "human_superforecaster": {"overall_index": 70.0, "overall_brier": 0.081},
+    "human_superforecaster": {"overall_index": 68.2, "overall_brier": 0.101},
     "sonnet_4_official": {
-        "overall_index": 60.3,
-        "dataset_index": 59.1,
-        "market_index": 61.5,
-        "overall_brier": 0.141,
+        "overall_index": 60.0,
+        "dataset_index": 59.0,
+        "market_index": 61.0,
+        "overall_brier": 0.160,
     },
 }
 
@@ -76,6 +76,57 @@ def load_resolved_questions() -> list[dict[str, Any]]:
         }
         for q in resolved
     ]
+
+
+@st.cache_data  # type: ignore[untyped-decorator]
+def load_leaderboard(name: str) -> list[dict[str, str]]:
+    return fetch_leaderboard(name)
+
+
+def _leaderboard_reference_from_live() -> dict[str, dict[str, float]] | None:
+    """Pull top reference entries from the live baseline leaderboard."""
+    try:
+        rows = load_leaderboard("baseline")
+    except Exception:
+        return None
+    ref: dict[str, dict[str, float]] = {}
+    for row in rows:
+        model = row.get("Model", "")
+        if "superforecaster" in model.lower():
+            ref["human_superforecaster"] = {
+                "overall_index": float(row.get("Overall", 0)),
+                "overall_brier": float(row.get("Brier Overall", 0)),
+            }
+        if "claude-sonnet-4-20250514" == model:
+            ref["sonnet_4_official"] = {
+                "overall_index": float(row.get("Overall", 0)),
+                "dataset_index": float(row.get("Dataset", 0)),
+                "market_index": float(row.get("Market", 0)),
+                "overall_brier": float(row.get("Brier Overall", 0)),
+            }
+    return ref if ref else None
+
+
+def _model_matches_slug(leaderboard_model: str, model_slug: str) -> bool:
+    """Check if a leaderboard model name approximately matches our model slug."""
+    lb = leaderboard_model.lower().replace("-", "_").replace(" ", "_")
+    slug = model_slug.lower().replace("-", "_").replace(" ", "_")
+    lb_parts = lb.split("_")
+    slug_parts = slug.split("_")
+    # Strip provider prefix from slug (e.g. "vertex_ai_claude..." -> "claude...")
+    provider_prefixes = {"vertex_ai", "openai", "anthropic", "google", "litellm"}
+    clean_slug_parts = []
+    skipping = True
+    for part in slug_parts:
+        if skipping and part in provider_prefixes:
+            continue
+        skipping = False
+        clean_slug_parts.append(part)
+    if not clean_slug_parts:
+        clean_slug_parts = slug_parts
+    clean_slug = "_".join(clean_slug_parts)
+    clean_lb = "_".join(lb_parts)
+    return clean_slug in clean_lb or clean_lb in clean_slug
 
 
 def _resolved_to_objects(resolved_dicts: list[dict[str, Any]]) -> list[ResolvedQuestion]:
@@ -212,9 +263,14 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     st.dataframe(df, hide_index=True, use_container_width=True)
 
     st.subheader("Leaderboard Reference")
-    st.caption("Approximate reference points from the official ForecastBench leaderboard.")
+    live_ref = _leaderboard_reference_from_live()
+    ref_data = live_ref if live_ref else LEADERBOARD_REFERENCE
+    if live_ref:
+        st.caption("Live reference points from the official ForecastBench baseline leaderboard.")
+    else:
+        st.caption("Approximate reference points (live leaderboard unavailable, using cached values).")
     ref_rows: list[dict[str, Any]] = []
-    for name, ref in LEADERBOARD_REFERENCE.items():
+    for name, ref in ref_data.items():
         ref_rows.append({
             "Reference": name.replace("_", " ").title(),
             "Overall Index": ref.get("overall_index", 0),
@@ -224,6 +280,91 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
         })
     ref_df = pd.DataFrame(ref_rows)
     st.dataframe(ref_df, hide_index=True, use_container_width=True)
+
+
+def view_leaderboard(results: list[ResultData]) -> None:
+    st.header("Official ForecastBench Leaderboard")
+
+    lb_name = st.radio(
+        "Leaderboard",
+        ["baseline", "tournament", "dataset", "preliminary"],
+        horizontal=True,
+        key="lb_select",
+    )
+
+    try:
+        rows = load_leaderboard(lb_name)
+    except Exception as e:
+        st.error(f"Failed to fetch leaderboard: {e}")
+        return
+
+    if not rows:
+        st.warning("No leaderboard data returned.")
+        return
+
+    column_map = {
+        "Rank": "Rank",
+        "Model": "Model",
+        "Model Organization": "Organization",
+        "Overall": "Overall Index",
+        "Dataset": "Dataset Index",
+        "Market": "Market Index",
+        "Brier Overall": "Overall Brier",
+        "N": "N",
+        "Supers > Forecaster?": "vs Supers",
+    }
+    display_rows: list[dict[str, Any]] = []
+    for row in rows:
+        display: dict[str, Any] = {}
+        for src_col, dst_col in column_map.items():
+            val = row.get(src_col, "")
+            if src_col in ("Rank", "N"):
+                try:
+                    display[dst_col] = int(val)
+                except (ValueError, TypeError):
+                    display[dst_col] = val
+            elif src_col in ("Overall", "Dataset", "Market", "Brier Overall"):
+                try:
+                    display[dst_col] = float(val)
+                except (ValueError, TypeError):
+                    display[dst_col] = val
+            else:
+                display[dst_col] = val
+        display_rows.append(display)
+
+    our_slugs = [_run_label(r) for r in results]
+    matched_rows: list[dict[str, Any]] = []
+    for display in display_rows:
+        lb_model = str(display.get("Model", ""))
+        for slug in our_slugs:
+            if _model_matches_slug(lb_model, slug):
+                matched_row = dict(display)
+                matched_row["Our Run"] = slug
+                matched_rows.append(matched_row)
+                break
+
+    if matched_rows:
+        st.subheader("Our Models on the Leaderboard")
+        matched_df = pd.DataFrame(matched_rows)
+        st.dataframe(matched_df, hide_index=True, use_container_width=True)
+
+    st.subheader(f"Full {lb_name.title()} Leaderboard")
+    full_df = pd.DataFrame(display_rows)
+    st.dataframe(full_df, hide_index=True, use_container_width=True, height=600)
+
+    st.caption(
+        "Live data from the official ForecastBench leaderboard "
+        "(github.com/forecastingresearch/forecastbench-datasets). "
+        "Scores are Brier Index (higher = better)."
+    )
+
+    with st.expander("Interpretation"):
+        st.markdown(
+            "The **baseline** leaderboard ranks all models using zero-shot prompts. "
+            "The **tournament** leaderboard includes models with custom scaffolding. "
+            "Rank 1 is the superforecaster median (human benchmark). "
+            "Models significantly worse than random (always predicting 0.5) are at the bottom."
+        )
 
 
 def view_heatmap(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
@@ -1015,9 +1156,10 @@ def main() -> None:
         "tournament rounds. See the **About** tab for methodology."
     )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
         [
             "Overview",
+            "Leaderboard",
             "Heatmap",
             "Failures",
             "Pairwise",
@@ -1034,18 +1176,20 @@ def main() -> None:
     with tab1:
         view_overview(results, resolved_dicts)
     with tab2:
-        view_heatmap(results, resolved_dicts)
+        view_leaderboard(results)
     with tab3:
-        view_failures(results, resolved_dicts)
+        view_heatmap(results, resolved_dicts)
     with tab4:
-        view_pairwise(results, resolved_dicts)
+        view_failures(results, resolved_dicts)
     with tab5:
-        view_calibration(results, resolved_dicts)
+        view_pairwise(results, resolved_dicts)
     with tab6:
-        view_question_browser(results, resolved_dicts)
+        view_calibration(results, resolved_dicts)
     with tab7:
-        view_head_to_head(results, resolved_dicts)
+        view_question_browser(results, resolved_dicts)
     with tab8:
+        view_head_to_head(results, resolved_dicts)
+    with tab9:
         view_about()
 
 
