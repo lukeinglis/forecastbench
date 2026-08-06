@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, cast
 
 try:
+    import pandas as pd
     import streamlit as st
     import plotly.graph_objects as go
 except ImportError:
@@ -28,13 +29,23 @@ from analyze import (
     analyze_calibration,
     calibration_metrics,
 )
-from fetch_data import ResolvedQuestion, load_data
-from score import brier_score
+from fetch_data import MARKET_SOURCES, ResolvedQuestion, load_data
+from score import brier_index, brier_score
 
 
 ResultData = dict[str, Any]
 
 RESULTS_DIR = Path("results")
+
+LEADERBOARD_REFERENCE: dict[str, dict[str, float]] = {
+    "human_superforecaster": {"overall_index": 70.0, "overall_brier": 0.081},
+    "sonnet_4_official": {
+        "overall_index": 60.3,
+        "dataset_index": 59.1,
+        "market_index": 61.5,
+        "overall_brier": 0.141,
+    },
+}
 
 
 @st.cache_data  # type: ignore[untyped-decorator]
@@ -83,6 +94,23 @@ def _run_label(result: ResultData) -> str:
     return str(result["model_slug"])
 
 
+def _classify_error(forecast: float, outcome: int) -> str:
+    if forecast >= 0.7 and outcome == 1:
+        return "Correct confident"
+    if forecast <= 0.3 and outcome == 0:
+        return "Correct confident"
+    if forecast >= 0.7 and outcome == 0:
+        return "Confident wrong (high)"
+    if forecast <= 0.3 and outcome == 1:
+        return "Confident wrong (low)"
+    if 0.3 < forecast < 0.7:
+        correct = (forecast >= 0.5 and outcome == 1) or (forecast < 0.5 and outcome == 0)
+        if correct:
+            return "Correct uncertain"
+        return "Uncertain"
+    return "Correct uncertain"
+
+
 def _build_source_brier_matrix(
     results: list[ResultData],
     resolved_dicts: list[dict[str, Any]],
@@ -126,52 +154,178 @@ def _build_source_brier_matrix(
     return run_labels, sources, matrix, counts
 
 
-def view_heatmap(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
-    st.header("Run × Source Heatmap")
-    st.caption("Brier score by run and source. Darker = better (lower score).")
+def _sort_sources_by_track(sources: list[str]) -> list[str]:
+    dataset_sources = [s for s in sources if s not in MARKET_SOURCES]
+    market_sources = [s for s in sources if s in MARKET_SOURCES]
+    return sorted(dataset_sources) + sorted(market_sources)
+
+
+def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+    st.header("Overview")
 
     if not results:
         st.warning("No result files found in results/ directory.")
         return
 
+    best_result = min(results, key=lambda r: r.get("scoring_result", {}).get("overall_brier", 1.0))
+    best_sr = best_result.get("scoring_result", {})
+    best_label = _run_label(best_result)
+    best_index = best_sr.get("overall_index", 0.0)
+
+    total_questions = best_sr.get("n_dataset", 0) + best_sr.get("n_market", 0)
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Best Run", f"{best_label}", f"Index: {best_index:.1f}")
+    m2.metric("Total Runs", len(results))
+    m3.metric("Total Questions", f"{total_questions:,}")
+    m4.metric("Dataset Index", f"{best_sr.get('dataset_index', 0):.1f}")
+    m5.metric("Market Index", f"{best_sr.get('market_index', 0):.1f}")
+
+    st.subheader("All Runs")
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        sr = result.get("scoring_result", {})
+        n_total = sr.get("n_dataset", 0) + sr.get("n_market", 0)
+        rows.append({
+            "Run": _run_label(result),
+            "Overall Index": round(sr.get("overall_index", 0), 1),
+            "Overall Brier": round(sr.get("overall_brier", 0), 4),
+            "Dataset Index": round(sr.get("dataset_index", 0), 1),
+            "Dataset Brier": round(sr.get("dataset_brier", 0), 4),
+            "Market Index": round(sr.get("market_index", 0), 1),
+            "Market Brier": round(sr.get("market_brier", 0), 4),
+            "N Questions": n_total,
+        })
+    df = pd.DataFrame(rows).sort_values("Overall Index", ascending=False)
+    st.dataframe(df, hide_index=True, use_container_width=True)
+
+    st.subheader("Leaderboard Reference")
+    st.caption("Approximate reference points from the official ForecastBench leaderboard.")
+    ref_rows: list[dict[str, Any]] = []
+    for name, ref in LEADERBOARD_REFERENCE.items():
+        ref_rows.append({
+            "Reference": name.replace("_", " ").title(),
+            "Overall Index": ref.get("overall_index", 0),
+            "Overall Brier": ref.get("overall_brier", 0),
+            "Dataset Index": ref.get("dataset_index"),
+            "Market Index": ref.get("market_index"),
+        })
+    ref_df = pd.DataFrame(ref_rows)
+    st.dataframe(ref_df, hide_index=True, use_container_width=True)
+
+
+def view_heatmap(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+    st.header("Run × Source Heatmap")
+
+    if not results:
+        st.warning("No result files found in results/ directory.")
+        return
+
+    col_metric, col_group = st.columns(2)
+    with col_metric:
+        metric_mode = st.radio(
+            "Display metric",
+            ["Brier Score", "Brier Index"],
+            horizontal=True,
+            key="heatmap_metric",
+        )
+    with col_group:
+        group_mode = st.radio(
+            "Group sources",
+            ["By Source", "By Track"],
+            horizontal=True,
+            key="heatmap_group",
+        )
+
+    show_index = metric_mode == "Brier Index"
+
+    if group_mode == "By Track":
+        _view_heatmap_by_track(results, resolved_dicts, show_index)
+    else:
+        _view_heatmap_by_source(results, resolved_dicts, show_index)
+
+
+def _view_heatmap_by_source(
+    results: list[ResultData],
+    resolved_dicts: list[dict[str, Any]],
+    show_index: bool,
+) -> None:
     run_labels, sources, matrix, counts = _build_source_brier_matrix(results, resolved_dicts)
+
+    sources_sorted = _sort_sources_by_track(sources)
+    source_idx_map = {s: i for i, s in enumerate(sources)}
+    col_order = [source_idx_map[s] for s in sources_sorted]
+
+    display_matrix: list[list[float | None]] = []
+    for row in matrix:
+        reordered = [row[j] for j in col_order]
+        if show_index:
+            reordered = [brier_index(v) if v is not None else None for v in reordered]
+        display_matrix.append(reordered)
+
+    display_counts: list[list[int]] = []
+    for row in counts:
+        display_counts.append([row[j] for j in col_order])
+
+    display_sources = sources_sorted
+    label_sources = []
+    for s in display_sources:
+        track = "market" if s in MARKET_SOURCES else "dataset"
+        label_sources.append(f"{s} ({track})")
+
+    metric_label = "Index" if show_index else "Brier"
+    caption = (
+        "Brier Index by run and source. Higher = better."
+        if show_index
+        else "Brier score by run and source. Darker = better (lower score)."
+    )
+    st.caption(caption)
 
     hover_text: list[list[str]] = []
     for i, run in enumerate(run_labels):
         row: list[str] = []
-        for j, source in enumerate(sources):
-            val = matrix[i][j]
-            n = counts[i][j]
+        for j, source in enumerate(label_sources):
+            val = display_matrix[i][j]
+            n = display_counts[i][j]
             if val is not None:
-                row.append(f"Run: {run}<br>Source: {source}<br>Brier: {val:.3f}<br>N: {n}")
+                row.append(
+                    f"Run: {run}<br>Source: {source}<br>{metric_label}: {val:.3f}<br>N: {n}"
+                )
             else:
                 row.append(f"Run: {run}<br>Source: {source}<br>No data")
         hover_text.append(row)
 
     annotations: list[dict[str, Any]] = []
     for i, run in enumerate(run_labels):
-        for j, _ in enumerate(sources):
-            val = matrix[i][j]
+        for j in range(len(label_sources)):
+            val = display_matrix[i][j]
             if val is not None:
+                fmt = f"{val:.1f}" if show_index else f"{val:.3f}"
+                threshold = 50 if show_index else 0.15
                 annotations.append(
                     dict(
                         x=j,
                         y=i,
-                        text=f"{val:.3f}",
+                        text=fmt,
                         showarrow=False,
-                        font=dict(size=10, color="white" if val > 0.15 else "black"),
+                        font=dict(
+                            size=10,
+                            color="white" if (show_index and val < threshold) or (not show_index and val > threshold) else "black",
+                        ),
                     )
                 )
 
+    colorscale = "Viridis" if show_index else "Viridis_r"
+
     fig = go.Figure(
         data=go.Heatmap(
-            z=matrix,
-            x=sources,
+            z=display_matrix,
+            x=label_sources,
             y=run_labels,
-            colorscale="Viridis_r",
+            colorscale=colorscale,
             hovertext=hover_text,
             hoverinfo="text",
-            colorbar=dict(title="Brier"),
+            colorbar=dict(title=metric_label),
         )
     )
     fig.update_layout(
@@ -185,22 +339,118 @@ def view_heatmap(results: list[ResultData], resolved_dicts: list[dict[str, Any]]
     st.subheader("Marginal Averages")
     col1, col2 = st.columns(2)
     with col1:
-        st.markdown("**By Run (overall Brier)**")
-        for result in sorted(results, key=lambda r: r.get("scoring_result", {}).get("overall_brier", 1.0)):
+        st.markdown("**By Run**")
+        for result in sorted(
+            results, key=lambda r: r.get("scoring_result", {}).get("overall_brier", 1.0)
+        ):
             sr = result.get("scoring_result", {})
-            st.text(f"{_run_label(result)}: {sr.get('overall_brier', 0):.4f}")
+            bs = sr.get("overall_brier", 0)
+            idx = sr.get("overall_index", 0)
+            st.text(f"{_run_label(result)}: Brier {bs:.4f} | Index {idx:.1f}")
     with col2:
         st.markdown("**By Source (avg across runs)**")
         source_avgs: dict[str, list[float]] = {}
-        for i, run in enumerate(run_labels):
-            for j, source in enumerate(sources):
-                val = matrix[i][j]
+        for i, _run in enumerate(run_labels):
+            for j, source in enumerate(label_sources):
+                orig_j = col_order[j]
+                val = matrix[i][orig_j]
                 if val is not None:
                     source_avgs.setdefault(source, []).append(val)
-        for source in sources:
+        for source in label_sources:
             vals = source_avgs.get(source, [])
-            avg = sum(vals) / len(vals) if vals else 0
-            st.text(f"{source}: {avg:.4f} (n={len(vals)} runs)")
+            if vals:
+                avg_bs = sum(vals) / len(vals)
+                avg_idx = brier_index(avg_bs)
+                st.text(f"{source}: Brier {avg_bs:.4f} | Index {avg_idx:.1f} (n={len(vals)} runs)")
+
+
+def _view_heatmap_by_track(
+    results: list[ResultData],
+    resolved_dicts: list[dict[str, Any]],
+    show_index: bool,
+) -> None:
+    overall_brier_map: dict[str, float] = {}
+    for result in results:
+        sr = result.get("scoring_result", {})
+        overall_brier_map[_run_label(result)] = sr.get("overall_brier", 1.0)
+    run_labels = sorted(overall_brier_map.keys(), key=lambda r: overall_brier_map.get(r, 1.0))
+
+    tracks = ["dataset", "market"]
+    track_matrix: list[list[float | None]] = []
+    track_counts: list[list[int]] = []
+
+    for run_label in run_labels:
+        result = next(r for r in results if _run_label(r) == run_label)
+        sr = result.get("scoring_result", {})
+        ds_bs = sr.get("dataset_brier")
+        mk_bs = sr.get("market_brier")
+        ds_n = sr.get("n_dataset", 0)
+        mk_n = sr.get("n_market", 0)
+
+        row: list[float | None] = []
+        count_row: list[int] = []
+        for track in tracks:
+            if track == "dataset":
+                val = ds_bs
+                n = ds_n
+            else:
+                val = mk_bs
+                n = mk_n
+            if show_index and val is not None:
+                val = brier_index(val)
+            row.append(val)
+            count_row.append(n)
+        track_matrix.append(row)
+        track_counts.append(count_row)
+
+    metric_label = "Index" if show_index else "Brier"
+    colorscale = "Viridis" if show_index else "Viridis_r"
+
+    hover_text: list[list[str]] = []
+    annotations: list[dict[str, Any]] = []
+    for i, run in enumerate(run_labels):
+        row_hover: list[str] = []
+        for j, track in enumerate(tracks):
+            val = track_matrix[i][j]
+            n = track_counts[i][j]
+            if val is not None:
+                row_hover.append(f"Run: {run}<br>Track: {track}<br>{metric_label}: {val:.3f}<br>N: {n}")
+                fmt = f"{val:.1f}" if show_index else f"{val:.3f}"
+                threshold = 50 if show_index else 0.15
+                annotations.append(
+                    dict(
+                        x=j,
+                        y=i,
+                        text=fmt,
+                        showarrow=False,
+                        font=dict(
+                            size=12,
+                            color="white" if (show_index and val < threshold) or (not show_index and val > threshold) else "black",
+                        ),
+                    )
+                )
+            else:
+                row_hover.append(f"Run: {run}<br>Track: {track}<br>No data")
+        hover_text.append(row_hover)
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=track_matrix,
+            x=tracks,
+            y=run_labels,
+            colorscale=colorscale,
+            hovertext=hover_text,
+            hoverinfo="text",
+            colorbar=dict(title=metric_label),
+        )
+    )
+    fig.update_layout(
+        annotations=annotations,
+        xaxis_title="Track",
+        yaxis_title="Run",
+        height=max(300, 60 * len(run_labels) + 100),
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def view_pairwise(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
@@ -258,10 +508,15 @@ def view_pairwise(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     sr_a = result_a.get("scoring_result", {})
     sr_b = result_b.get("scoring_result", {})
 
+    brier_a = sr_a.get("overall_brier", 0)
+    brier_b = sr_b.get("overall_brier", 0)
+    index_a = sr_a.get("overall_index", 0)
+    index_b = sr_b.get("overall_index", 0)
+
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Shared Questions", f"{n:,}")
-    m2.metric("Mean Brier A", f"{sr_a.get('overall_brier', 0):.4f}")
-    m3.metric("Mean Brier B", f"{sr_b.get('overall_brier', 0):.4f}")
+    m2.metric("Mean Brier A", f"{brier_a:.4f}", f"Index: {index_a:.1f}")
+    m3.metric("Mean Brier B", f"{brier_b:.4f}", f"Index: {index_b:.1f}")
     m4.metric("t-statistic", f"{t_stat:+.3f}")
 
     w1, w2, w3 = st.columns(3)
@@ -302,6 +557,119 @@ def view_pairwise(results: list[ResultData], resolved_dicts: list[dict[str, Any]
         yaxis_zeroline=True,
     )
     st.plotly_chart(fig, use_container_width=True)
+
+
+def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+    st.header("Failure Explorer")
+
+    if not results:
+        st.warning("No result files found.")
+        return
+
+    run_names = [_run_label(r) for r in results]
+    selected_run = st.selectbox("Select run", run_names, index=0, key="failures_run")
+    result = next(r for r in results if _run_label(r) == selected_run)
+    forecasts: dict[str, float] = result["forecasts"]
+
+    question_data: list[dict[str, Any]] = []
+    for d in resolved_dicts:
+        qid = d["id"]
+        f = _lookup_forecast(forecasts, qid)
+        outcome = d["outcome"]
+        bs = brier_score(f, outcome)
+        error_type = _classify_error(f, outcome)
+        question_data.append({
+            "Question": d["question"][:120],
+            "Source": d["source"],
+            "Forecast": round(f, 3),
+            "Outcome": outcome,
+            "Brier Score": round(bs, 4),
+            "Error Type": error_type,
+            "_brier_raw": bs,
+        })
+
+    st.subheader("Error Type Summary")
+    error_counts: dict[str, int] = {}
+    for q in question_data:
+        et = q["Error Type"]
+        error_counts[et] = error_counts.get(et, 0) + 1
+
+    total = len(question_data)
+    summary_cols = st.columns(min(len(error_counts), 5))
+    for i, (et, count) in enumerate(sorted(error_counts.items(), key=lambda x: -x[1])):
+        col = summary_cols[i % len(summary_cols)]
+        pct = (count / total * 100) if total > 0 else 0
+        col.metric(et, f"{count}", f"{pct:.1f}%")
+
+    st.subheader("Error Type by Source")
+    source_error: dict[str, dict[str, int]] = {}
+    for q in question_data:
+        src = q["Source"]
+        et = q["Error Type"]
+        source_error.setdefault(src, {})
+        source_error[src][et] = source_error[src].get(et, 0) + 1
+
+    all_error_types = sorted(error_counts.keys())
+    error_colors = {
+        "Confident wrong (high)": "#d62728",
+        "Confident wrong (low)": "#ff7f0e",
+        "Uncertain": "#bcbd22",
+        "Correct confident": "#2ca02c",
+        "Correct uncertain": "#17becf",
+    }
+
+    fig = go.Figure()
+    source_list = sorted(source_error.keys())
+    for et in all_error_types:
+        values = [source_error[src].get(et, 0) for src in source_list]
+        fig.add_trace(go.Bar(
+            name=et,
+            x=source_list,
+            y=values,
+            marker_color=error_colors.get(et, "#999999"),
+        ))
+    fig.update_layout(
+        barmode="stack",
+        xaxis_title="Source",
+        yaxis_title="Count",
+        title="Error Type Breakdown by Source",
+        height=400,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Source-Level Failure Summary")
+    source_summary_rows: list[dict[str, Any]] = []
+    for src in source_list:
+        src_questions = [q for q in question_data if q["Source"] == src]
+        n_src = len(src_questions)
+        mean_bs = sum(q["_brier_raw"] for q in src_questions) / n_src if n_src else 0
+        confident_wrong = sum(
+            1 for q in src_questions if q["Error Type"] in ("Confident wrong (high)", "Confident wrong (low)")
+        )
+        pct_cw = (confident_wrong / n_src * 100) if n_src else 0
+        worst_q = max(src_questions, key=lambda q: q["_brier_raw"]) if src_questions else None
+        track = "market" if src in MARKET_SOURCES else "dataset"
+        source_summary_rows.append({
+            "Source": src,
+            "Track": track,
+            "N Questions": n_src,
+            "Mean Brier": round(mean_bs, 4),
+            "Index": round(brier_index(mean_bs), 1),
+            "% Confident Wrong": round(pct_cw, 1),
+            "Worst Question": worst_q["Question"] if worst_q else "",
+        })
+    summary_df = pd.DataFrame(source_summary_rows).sort_values("Mean Brier", ascending=False)
+    st.dataframe(summary_df, hide_index=True, use_container_width=True)
+
+    st.subheader("Worst Questions")
+    top_n = st.slider("Show top N worst", 10, 200, 50, key="worst_n")
+    question_data.sort(key=lambda q: -q["_brier_raw"])
+    worst_rows = [
+        {k: v for k, v in q.items() if k != "_brier_raw"}
+        for q in question_data[:top_n]
+    ]
+    worst_df = pd.DataFrame(worst_rows)
+    st.dataframe(worst_df, hide_index=True, use_container_width=True, height=600)
 
 
 def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
@@ -379,8 +747,6 @@ def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, A
 
     if metrics_rows:
         st.subheader("Calibration Metrics")
-        import pandas as pd
-
         df = pd.DataFrame(metrics_rows)
         df["ECE"] = df["ECE"].map("{:.4f}".format)
         df["MCE"] = df["MCE"].map("{:.4f}".format)
@@ -397,8 +763,6 @@ def view_question_browser(
         st.warning("No data available.")
         return
 
-    import pandas as pd
-
     sources = sorted({d["source"] for d in resolved_dicts})
     run_names = [_run_label(r) for r in results]
 
@@ -406,9 +770,12 @@ def view_question_browser(
     with col1:
         selected_sources = st.multiselect("Filter by source", sources, default=sources)
     with col2:
-        outcome_filter = st.selectbox("Outcome", ["All", "0", "1"])
+        outcome_filter = st.selectbox("Outcome (1=yes, 0=no)", ["All", "0", "1"])
     with col3:
         selected_runs = st.multiselect("Runs to show", run_names, default=run_names)
+
+    sort_options = ["Question ID", "Worst Brier (any run)", "Most disagreement across runs", "Source"]
+    sort_by = st.selectbox("Sort by", sort_options, index=0, key="qb_sort")
 
     filtered = [
         d
@@ -425,18 +792,32 @@ def view_question_browser(
             "ID": d["id"],
             "Question": d["question"][:100],
             "Source": d["source"],
-            "Outcome": d["outcome"],
+            "Outcome (1=yes, 0=no)": d["outcome"],
         }
+        briers: list[float] = []
+        forecasts_list: list[float] = []
         for run_name in selected_runs:
             result = next(r for r in results if _run_label(r) == run_name)
             f = _lookup_forecast(result["forecasts"], d["id"])
             bs = brier_score(f, d["outcome"])
             row[f"{run_name} (f)"] = round(f, 3)
             row[f"{run_name} (bs)"] = round(bs, 4)
+            briers.append(bs)
+            forecasts_list.append(f)
+        row["Max Brier"] = round(max(briers), 4) if briers else 0
+        row["Disagreement"] = round(max(forecasts_list) - min(forecasts_list), 3) if len(forecasts_list) > 1 else 0
         rows.append(row)
 
     if rows:
         df = pd.DataFrame(rows)
+        if sort_by == "Question ID":
+            df = df.sort_values("ID")
+        elif sort_by == "Worst Brier (any run)":
+            df = df.sort_values("Max Brier", ascending=False)
+        elif sort_by == "Most disagreement across runs":
+            df = df.sort_values("Disagreement", ascending=False)
+        elif sort_by == "Source":
+            df = df.sort_values("Source")
         st.dataframe(df, use_container_width=True, height=600)
     else:
         st.info("No questions match the current filters.")
@@ -448,8 +829,6 @@ def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, 
     if len(results) < 2:
         st.warning("Need at least 2 result files.")
         return
-
-    import pandas as pd
 
     run_names = [_run_label(r) for r in results]
     col1, col2 = st.columns(2)
@@ -531,16 +910,20 @@ def main() -> None:
     st.sidebar.markdown(f"**{len(results)} runs loaded**")
     for r in sorted(results, key=lambda x: x.get("scoring_result", {}).get("overall_brier", 1)):
         sr = r.get("scoring_result", {})
-        st.sidebar.text(f"{_run_label(r)}: {sr.get('overall_brier', 0):.4f}")
+        bs = sr.get("overall_brier", 0)
+        idx = sr.get("overall_index", 0)
+        st.sidebar.text(f"{_run_label(r)}: Index {idx:.1f} (Brier {bs:.4f})")
     st.sidebar.markdown(
         "---\n"
         "Backtest of [ForecastBench](https://www.forecastbench.org/) "
         "tournament rounds. See the **About** tab for methodology."
     )
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
         [
+            "Overview",
             "Heatmap",
+            "Failures",
             "Pairwise",
             "Calibration",
             "Questions",
@@ -553,16 +936,20 @@ def main() -> None:
         resolved_dicts = load_resolved_questions()
 
     with tab1:
-        view_heatmap(results, resolved_dicts)
+        view_overview(results, resolved_dicts)
     with tab2:
-        view_pairwise(results, resolved_dicts)
+        view_heatmap(results, resolved_dicts)
     with tab3:
-        view_calibration(results, resolved_dicts)
+        view_failures(results, resolved_dicts)
     with tab4:
-        view_question_browser(results, resolved_dicts)
+        view_pairwise(results, resolved_dicts)
     with tab5:
-        view_head_to_head(results, resolved_dicts)
+        view_calibration(results, resolved_dicts)
     with tab6:
+        view_question_browser(results, resolved_dicts)
+    with tab7:
+        view_head_to_head(results, resolved_dicts)
+    with tab8:
         view_about()
 
 
