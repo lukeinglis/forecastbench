@@ -473,7 +473,7 @@ class TestResolvedFieldFiltering:
 
     def test_resolved_false_excluded(self) -> None:
         qs = self._make_qs()
-        resolutions = {
+        resolutions: dict[str, Resolution] = {
             "q1": Resolution(id="q1", outcome=1, resolved=False),
         }
         result = join_resolved_questions([qs], resolutions)
@@ -481,7 +481,7 @@ class TestResolvedFieldFiltering:
 
     def test_resolved_true_included(self) -> None:
         qs = self._make_qs()
-        resolutions = {
+        resolutions: dict[str, Resolution] = {
             "q1": Resolution(id="q1", outcome=1, resolved=True),
         }
         result = join_resolved_questions([qs], resolutions)
@@ -490,7 +490,7 @@ class TestResolvedFieldFiltering:
 
     def test_resolved_none_included(self) -> None:
         qs = self._make_qs()
-        resolutions = {
+        resolutions: dict[str, Resolution] = {
             "q1": Resolution(id="q1", outcome=0, resolved=None),
         }
         result = join_resolved_questions([qs], resolutions)
@@ -498,7 +498,7 @@ class TestResolvedFieldFiltering:
 
     def test_resolved_missing_included(self) -> None:
         qs = self._make_qs()
-        resolutions = {
+        resolutions: dict[str, Resolution] = {
             "q1": Resolution(id="q1", outcome=1),
         }
         result = join_resolved_questions([qs], resolutions)

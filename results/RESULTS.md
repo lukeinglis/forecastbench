@@ -1,65 +1,51 @@
 # ForecastBench Backtest Results
 
-## All-Rounds Baseline (July 22, 2026)
+> **Pipeline fix applied:** PR #102 (August 2, 2026) fixed multi-horizon resolution
+> matching. All results below were generated with the corrected pipeline. Results from
+> the broken pipeline are in `pre-fix-archived/`.
 
-**Model:** claude-sonnet-4-20250514 (via Vertex AI)
-**Parameters:** temperature=0, max_tokens=2000
-**Rounds:** 33 (2024-07-21 through 2026-07-19)
-**Total questions scored:** 99,768 (95,768 dataset + 4,000 market)
+## Parity Verification (August 2, 2026)
 
-### Scores
+Three models tested against official ForecastBench leaderboard baselines.
 
-| Metric | Our Backtest | Leaderboard (sonnet-4) | Gap |
-|--------|-------------|------------------------|-----|
-| Overall Index | 52.6% | 60.3% | -7.7 pts |
-| Dataset Index | 52.6% | 59.1% | -6.5 pts |
-| Market Index | 52.8% | 61.5% | -8.7 pts |
-| Brier Overall | 0.225 | 0.141 | +0.084 |
-| Brier Dataset | 0.225 | 0.168 | +0.057 |
-| Brier Market | 0.222 | 0.148 | +0.074 |
+| Model | Leaderboard (adjusted) | Our Raw | Delta | Rounds | N |
+|-------|----------------------|---------|-------|--------|---|
+| Always 0.5 (dummy) | 50.0% | 50.0% | 0.0 | All | 152,073 |
+| gpt-4o | 57.2% | 54.4% | -2.8pts | 4 | 6,663 |
+| claude-sonnet-4-6 | 59.7% | 61.7% | +2.0pts | 2 | 2,279 |
 
-### Per-Source Breakdown
+The gpt-4o gap is explained by difficulty adjustment (leaderboard uses large peer pool;
+our raw scoring doesn't adjust). Claude Sonnet 4.6 exceeds its leaderboard baseline
+even with raw scoring.
 
-| Source | Type | Brier | Index | N |
-|--------|------|-------|-------|---|
-| acled | dataset | 0.155 | 60.7% | 20,216 |
-| wikipedia | dataset | 0.185 | 57.0% | 18,000 |
-| infer | market | 0.185 | 57.0% | 303 |
-| metaculus | market | 0.199 | 55.4% | 435 |
-| manifold | market | 0.223 | 52.8% | 816 |
-| polymarket | market | 0.231 | 51.9% | 2,446 |
-| yfinance | dataset | 0.253 | 49.7% | 19,896 |
-| dbnomics | dataset | 0.261 | 49.0% | 17,704 |
-| fred | dataset | 0.274 | 47.7% | 19,952 |
+### Per-Round Detail
 
-### Single-Round Comparison (2026-07-19-llm)
+**gpt-4o (FORECAST_MODEL=openai/gpt-4o)**
 
-| Metric | Single Round | All Rounds | Delta |
-|--------|-------------|------------|-------|
-| Overall Index | 49.7% | 52.6% | +2.9 pts |
-| Dataset Index | 49.6% | 52.6% | +3.0 pts |
-| Market Index | 85.7% (N=4) | 52.8% (N=4,000) | -32.9 pts |
-| N | 1,721 | 99,768 | +98,047 |
+| Round | Overall BI | Dataset BI | Market BI | N |
+|-------|-----------|------------|-----------|---|
+| 2026-03-01 | 55.7% | 51.5% | 63.9% | 1,145 |
+| 2025-08-31 | 53.1% | 51.1% | 59.6% | 2,975 |
+| 2026-04-12 | 55.7% | 52.2% | 61.7% | 1,134 |
+| 2025-11-09 | 55.2% | 48.3% | 77.0% | 1,409 |
 
-Single-round market score (85.7%) was noise on 4 questions. All-rounds market (52.8%, N=4,000) is the real number.
+**claude-sonnet-4-6 (default Vertex AI model)**
 
-### Parity Audit Status
+| Round | Overall BI | Dataset BI | Market BI | N |
+|-------|-----------|------------|-----------|---|
+| 2026-03-01 | 61.2% | 59.3% | 64.7% | 1,145 |
+| 2026-04-12 | 62.2% | 61.9% | 62.8% | 1,134 |
 
-Pipeline verified against official ForecastBench source (July 21, 2026):
-- Prompt templates: exact match (SHA-256 verified)
-- Temperature: 0 (matches official)
-- Max tokens: 2000 (matches official)
-- Question text substitution: matches official
-- Resolution date format: matches official
-- Scoring formula: matches official
-- Source classification: matches official
+## Result Files
 
-Remaining gap (7.7 pts) likely due to:
-1. Model-specific options in official private infrastructure (e.g., extended thinking)
-2. Extraction model difference (gpt-5-mini vs gpt-4o-mini)
-3. Potential differences in how Vertex AI serves Sonnet 4 vs direct Anthropic API
+### Valid (post-fix)
+- `20260802T172918Z_dummy.json` — Always-0.5 baseline, all rounds
+- `20260802T184753Z_openai_gpt-4o_2026-03-01-llm.json`
+- `20260802T185310Z_openai_gpt-4o_2025-08-31-llm.json`
+- `20260802T185341Z_openai_gpt-4o_2026-04-12-llm.json`
+- `20260802T185410Z_openai_gpt-4o_2025-11-09-llm.json`
+- `20260802T190655Z_unknown_2026-03-01-llm.json` — claude-sonnet-4-6
+- `20260802T192429Z_unknown_2026-04-12-llm.json` — claude-sonnet-4-6
 
-### Result Files
-
-- All-rounds: results/20260722T134347Z_vertex_ai_claude-sonnet-4_20250514.json
-- Single-round (2026-07-19): results/20260721T144555Z_unknown_2026-07-19-llm.json
+### Archived (pre-fix, invalid)
+- `pre-fix-archived/` — Results from broken pipeline, see README there

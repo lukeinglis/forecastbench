@@ -12,6 +12,8 @@ from fetch_data import Question
 from lab_forecaster import (
     _build_prompt,
     _build_dataset_prompt,
+    _forecast_kwargs,
+    _is_o_series_model,
     _parse_probability,
     _extract_probabilities,
     MODEL,
@@ -1374,3 +1376,115 @@ class TestSourceSpecificPrompts:
         assert "macroeconomic forecaster" not in prompt
         assert "financial analyst" not in prompt
         assert "data analyst specializing in statistical" not in prompt
+
+
+class TestOSeriesModelDetection:
+    def test_openai_o3(self) -> None:
+        assert _is_o_series_model("openai/o3") is True
+
+    def test_openai_o3_mini(self) -> None:
+        assert _is_o_series_model("openai/o3-mini") is True
+
+    def test_openai_o1(self) -> None:
+        assert _is_o_series_model("openai/o1") is True
+
+    def test_bare_o3(self) -> None:
+        assert _is_o_series_model("o3") is True
+
+    def test_bare_o1(self) -> None:
+        assert _is_o_series_model("o1") is True
+
+    def test_o3_with_version(self) -> None:
+        assert _is_o_series_model("openai/o3-2025-04-16") is True
+
+    def test_gpt4o_is_not_o_series(self) -> None:
+        assert _is_o_series_model("openai/gpt-4o") is False
+
+    def test_claude_is_not_o_series(self) -> None:
+        assert _is_o_series_model("vertex_ai/claude-sonnet-4@20250514") is False
+
+    def test_gpt4o_mini_is_not_o_series(self) -> None:
+        assert _is_o_series_model("openai/gpt-4o-mini") is False
+
+
+class TestSanitizeKwargsForModel:
+    def test_removes_temperature_for_o3(self) -> None:
+        kwargs = {"model": "openai/o3", "temperature": 0.3, "messages": []}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert "temperature" not in result
+        assert "messages" in result
+
+    def test_removes_top_p_for_o3(self) -> None:
+        kwargs = {"model": "openai/o3", "top_p": 0.9, "messages": []}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert "top_p" not in result
+
+    def test_preserves_temperature_for_gpt4(self) -> None:
+        kwargs = {"model": "openai/gpt-4o", "temperature": 0.3}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert result["temperature"] == 0.3
+
+    def test_preserves_temperature_for_claude(self) -> None:
+        kwargs = {"model": "vertex_ai/claude-sonnet-4@20250514", "temperature": 0.3}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert result["temperature"] == 0.3
+
+    def test_explicit_model_param_overrides_kwargs(self) -> None:
+        kwargs = {"model": "openai/gpt-4o", "temperature": 0.3}
+        result = _sanitize_kwargs_for_model(kwargs, model="openai/o3")
+        assert "temperature" not in result
+
+    def test_no_error_when_temperature_absent(self) -> None:
+        kwargs = {"model": "openai/o3", "messages": []}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert "temperature" not in result
+
+    def test_removes_thinking_for_o3(self) -> None:
+        kwargs = {"model": "openai/o3", "thinking": {"type": "enabled", "budget_tokens": 8192}, "messages": []}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert "thinking" not in result
+        assert "messages" in result
+
+    def test_preserves_thinking_for_claude(self) -> None:
+        kwargs = {"model": "vertex_ai/claude-sonnet-4@20250514", "thinking": {"type": "enabled", "budget_tokens": 8192}}
+        result = _sanitize_kwargs_for_model(kwargs)
+        assert result["thinking"] == {"type": "enabled", "budget_tokens": 8192}
+
+
+class TestOSeriesForecastKwargs:
+    def test_forecast_kwargs_drops_temp_for_o3_market(self) -> None:
+        import baseline_agent
+        with patch.object(baseline_agent, "MODEL", "openai/o3"), \
+             patch.object(baseline_agent, "THINKING_ENABLED", False):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="metaculus",
+            )
+        assert "temperature" not in kwargs
+
+    def test_forecast_kwargs_drops_temp_for_o3_timeseries(self) -> None:
+        import baseline_agent
+        with patch.object(baseline_agent, "MODEL", "openai/o3"), \
+             patch.object(baseline_agent, "THINKING_ENABLED", False), \
+             patch.object(baseline_agent, "TIMESERIES_THINKING", False):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="fred",
+            )
+        assert "temperature" not in kwargs
+
+    def test_forecast_kwargs_drops_thinking_for_o3_event(self) -> None:
+        import baseline_agent
+        with patch.object(baseline_agent, "MODEL", "openai/o3"), \
+             patch.object(baseline_agent, "THINKING_ENABLED", True):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="acled",
+            )
+        assert "thinking" not in kwargs
+        assert "temperature" not in kwargs
+
+    def test_forecast_kwargs_keeps_temp_for_claude_market(self) -> None:
+        import baseline_agent
+        with patch.object(baseline_agent, "THINKING_ENABLED", False):
+            kwargs = _forecast_kwargs(
+                [{"role": "user", "content": "test"}], source="metaculus",
+            )
+        assert kwargs["temperature"] == 0.3

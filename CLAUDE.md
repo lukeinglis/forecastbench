@@ -22,6 +22,10 @@
 - `uv run python analyze.py --compare` to compare all saved results
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage
+- `uv run python verify_parity.py` to run structural and behavioral parity checks against upstream ForecastBench
+- `uv run python verify_parity.py --score` to also compare scores against leaderboard
+- `uv run python verify_parity.py --refresh` to clear cached upstream data first
+- `uv run python check_staleness.py` to check if local main is behind remote
 
 ## Architecture
 - **forecastbench-parity** (external package) - Frozen competition contract: scoring, submission, question handling
@@ -33,6 +37,9 @@
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
 - **lab_forecaster.py** - LLM lab forecaster using litellm (zero-shot superforecaster prompt)
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
+- **verify_parity.py** - Pipeline parity verifier (fetches live from upstream ForecastBench repo/leaderboard)
+- **check_staleness.py** - Git staleness check to warn when local main is behind remote
+- **tournament.py** - Tournament analysis with cost tracking, bootstrap comparisons, and round filtering
 - **tests/** - pytest test suite
 - **archive/** - Archived experiment files (calibrate, ensemble, hybrid, multi-model, belief, statistical, timeseries RAG)
 
@@ -60,3 +67,14 @@
 - MARKET_SOURCES defined in forecastbench-parity, re-exported via fetch_data.py
 - Submissions staged in submissions/ directory with ForecastBench file naming
 - Prompts, temperature, and methodology are all customizable per competition rules - only scoring/submission/questions are fixed
+
+## Competition Rules
+- Two tracks: baseline (no tools/search/ensemble/RAG/calibration) and tournament (all features allowed)
+- Baseline track: zero-shot prompt only, no web access, no ensemble, no calibration, no RAG
+- Tournament track: tools, search, ensemble, RAG, calibration, fine-tuning all permitted
+- Scoring methodology is fixed — never modify score.py formulas
+- Overall score = equal-weight average of dataset and market Brier scores: (dataset + market) / 2
+- Missing forecasts default to 0.5 — never change this default
+- Resolution pipeline must match upstream — changes to fetch_data.py resolution logic require running verify_parity.py and tests/test_compliance.py
+- No data leakage — prompts cannot contain information from after forecast_due_date
+- Submission format must pass submit.py validate

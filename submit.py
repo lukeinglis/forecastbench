@@ -35,6 +35,12 @@ def main() -> None:
     assemble_p.add_argument("--model-org", required=True, help="Model organization")
     assemble_p.add_argument("--result", required=True, help="Path to result JSON from eval pipeline")
     assemble_p.add_argument("--output-dir", default="submissions", help="Output directory")
+    assemble_p.add_argument(
+        "--track",
+        choices=["baseline", "tournament"],
+        default="baseline",
+        help="Competition track: baseline or tournament",
+    )
 
     validate_p = sub.add_parser("validate", help="Validate coverage of a submission")
     validate_p.add_argument("submission", help="Path to submission JSON")
@@ -51,10 +57,11 @@ def main() -> None:
 
         all_qs, resolved = load_data()
         used_qs = [qs for qs in all_qs if qs.forecast_due_date in question_sets_used]
-        resolutions = {
-            q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
-            for q in resolved
-        }
+        resolutions: dict[str, list[Resolution]] = {}
+        for q in resolved:
+            resolutions.setdefault(q.id, []).append(
+                Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+            )
         iteration_resolved = join_resolved_questions(used_qs, resolutions)
 
         meta = SubmissionMetadata(
@@ -62,6 +69,7 @@ def main() -> None:
             model=args.model,
             model_organization=args.model_org,
             question_set=question_sets_used[-1] if question_sets_used else "unknown",
+            track=args.track,
         )
         submission = assemble_submission(forecasts, iteration_resolved, meta)
 

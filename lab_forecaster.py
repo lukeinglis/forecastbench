@@ -30,6 +30,25 @@ _vertex_creds_lock = threading.Lock()
 _vertex_credentials: Any = None
 _vertex_token_expiry: float = 0.0
 
+_cost_tracker: dict[str, float] = {}
+
+
+def get_tracked_costs() -> dict[str, float]:
+    return dict(_cost_tracker)
+
+
+def clear_tracked_costs() -> None:
+    _cost_tracker.clear()
+
+
+def _track_cost(question_id: str, response: Any) -> None:
+    try:
+        cost = response._hidden_params.get("response_cost")
+        if cost is not None:
+            _cost_tracker[question_id] = float(cost)
+    except (AttributeError, TypeError, ValueError):
+        pass
+
 
 def _get_google_auth() -> tuple[Any, Any]:
     import google.auth
@@ -403,6 +422,7 @@ def forecast(
     messages = [{"role": "user", "content": prompt}]
     kwargs = _forecast_kwargs(messages)
     response = litellm.completion(**kwargs)
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
     logger.info("forecast_complete", question_id=question.id, forecast_value=prob)
@@ -425,6 +445,7 @@ async def aforecast(
     kwargs = _forecast_kwargs(messages)
     kwargs["model"] = model
     response = await litellm.acompletion(**kwargs)
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
     prob = _parse_probability(text)
     logger.info("forecast_complete", question_id=question.id, probability=prob)
@@ -469,6 +490,7 @@ async def aforecast_multi_horizon(
     except Exception:
         logger.error("multi_horizon_api_error", question_id=question.id, exc_info=True)
         return None
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
 
     probs = _extract_probabilities(text, n_horizons)
