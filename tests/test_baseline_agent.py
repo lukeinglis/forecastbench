@@ -10,7 +10,6 @@ import pytest
 from fetch_data import Question
 from baseline_agent import (
     _build_prompt,
-    _build_dataset_prompt,
     _parse_probability,
     _extract_probabilities,
     MODEL,
@@ -118,41 +117,43 @@ class TestBuildPrompt:
 class TestBuildDatasetPrompt:
     def test_includes_all_resolution_dates(self) -> None:
         q = _make_dataset_question()
-        prompt = _build_dataset_prompt(q, ["2024-07-01", "2024-08-01", "2024-09-01"])
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"])
         assert "2024-07-01" in prompt
         assert "2024-08-01" in prompt
         assert "2024-09-01" in prompt
 
     def test_includes_asterisk_format_instruction(self) -> None:
         q = _make_dataset_question()
-        prompt = _build_dataset_prompt(q, ["2024-07-01"])
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01"])
         assert "asterisk" in prompt.lower()
         assert "*p*" in prompt
 
     def test_uses_forecast_due_date_for_today(self) -> None:
         q = _make_dataset_question(freeze="2024-06-05", forecast_due_date="2024-06-15")
-        prompt = _build_dataset_prompt(q, ["2024-07-01"])
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01"])
         assert "Today's Date: 2024-06-15" in prompt
 
     def test_includes_freeze_value(self) -> None:
         q = _make_dataset_question(freeze_value=42.5)
-        prompt = _build_dataset_prompt(q, ["2024-07-01"])
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01"])
         assert "42.5" in prompt
 
     def test_includes_freeze_value_explanation(self) -> None:
         q = _make_dataset_question(freeze_value_explanation="Current GDP index")
-        prompt = _build_dataset_prompt(q, ["2024-07-01"])
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01"])
         assert "Current GDP index" in prompt
 
-    def test_omits_freeze_value_when_none(self) -> None:
+    def test_freeze_value_none_renders_empty(self) -> None:
         q = _make_dataset_question(freeze_value=None, freeze_value_explanation=None)
-        prompt = _build_dataset_prompt(q, ["2024-07-01"])
-        assert "Current value on" not in prompt
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01"])
+        assert "Current value on" in prompt
+        assert "Value Explanation:\n" in prompt or "Value Explanation:" in prompt
 
-    def test_includes_data_availability_context(self) -> None:
+    def test_uses_zero_shot_dataset_template(self) -> None:
         q = _make_dataset_question(freeze="2024-06-05")
-        prompt = _build_dataset_prompt(q, ["2024-07-01"])
-        assert "information available as of 2024-06-05" in prompt
+        prompt = _build_prompt(q, resolution_dates=["2024-07-01"])
+        assert "superforecaster" in prompt.lower()
+        assert "resolution dates" in prompt.lower()
 
 
 class TestForecastDueDateInPrompt:

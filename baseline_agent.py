@@ -172,16 +172,6 @@ MODEL RESPONSE:
 {model_response}
 ```"""
 
-DATASET_PROMPT_TEMPLATE = """You are an expert superforecaster, familiar with the research on forecasting. Your goal is to predict the probability of the resolution of the question at each of the resolution dates.
-
-Today's Date: {today_date}
-{data_availability_context}
-Question: {question}
-
-{background_section}{criteria_section}{freeze_value_section}Question resolution dates: {list_of_resolution_dates}
-
-Output your answer (a number between 0 and 1) with an asterisk at the beginning and end of the decimal. (For example, if there are n resolution dates, you would output different *p* for each resolution date) Do not output anything else."""
-
 
 def _format_question_text(text: str, forecast_due_date: str, is_dataset: bool) -> str:
     if not is_dataset:
@@ -198,7 +188,6 @@ def _format_question_text(text: str, forecast_due_date: str, is_dataset: bool) -
 def _forecast_kwargs(
     messages: list[dict[str, str]],
     timeout: int = 180,
-    source: str | None = None,
 ) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "model": MODEL,
@@ -276,43 +265,6 @@ def _build_prompt(
         list_of_resolution_dates=dates_list,
     )
 
-
-def _build_dataset_prompt(
-    question: Question,
-    resolution_dates: list[str],
-) -> str:
-    today_date = getattr(question, "forecast_due_date", None) or question.freeze_datetime or ""
-
-    data_availability_context = (
-        f"You should forecast based on information available as of {question.freeze_datetime}."
-        if question.freeze_datetime
-        else ""
-    )
-
-    background_section = f"Question Background: {question.background}\n" if question.background else ""
-    criteria_section = (
-        f"Resolution Criteria: {question.resolution_criteria}\n"
-        if question.resolution_criteria
-        else ""
-    )
-
-    freeze_value_section = ""
-    if question.freeze_datetime_value is not None:
-        freeze_value_section = f"Current value on {question.freeze_datetime}: {question.freeze_datetime_value}\n"
-        if question.freeze_datetime_value_explanation:
-            freeze_value_section += f"Value Explanation: {question.freeze_datetime_value_explanation}\n"
-
-    list_of_resolution_dates = ", ".join(resolution_dates)
-    formatted_q = _format_question_text(question.question, today_date, is_dataset=True)
-    return DATASET_PROMPT_TEMPLATE.format(
-        today_date=today_date,
-        data_availability_context=data_availability_context,
-        question=formatted_q,
-        background_section=background_section,
-        criteria_section=criteria_section,
-        freeze_value_section=freeze_value_section,
-        list_of_resolution_dates=list_of_resolution_dates,
-    )
 
 
 _FULLMATCH_RE = re.compile(r"\*?\s*(0?\.\d+|1\.0{0,}|0(?:\.0{0,})?)\s*\*?")
@@ -485,7 +437,7 @@ def forecast_multi(
 ) -> list[float]:
     logger.info("forecast_multi_start", question_id=question.id, model=MODEL)
     _ensure_vertex_credentials()
-    prompt = _build_dataset_prompt(question, resolution_dates)
+    prompt = _build_prompt(question, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
     kwargs = _forecast_kwargs(messages)
     response = litellm.completion(**kwargs)
@@ -537,7 +489,7 @@ async def aforecast_multi(
 ) -> list[float]:
     logger.info("aforecast_multi_start", question_id=question.id, model=MODEL)
     _ensure_vertex_credentials()
-    prompt = _build_dataset_prompt(question, resolution_dates)
+    prompt = _build_prompt(question, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
     kwargs = _forecast_kwargs(messages)
     response = await litellm.acompletion(**kwargs)
