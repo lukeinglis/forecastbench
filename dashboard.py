@@ -181,6 +181,18 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     m4.metric("Dataset Index", f"{best_sr.get('dataset_index', 0):.1f}")
     m5.metric("Market Index", f"{best_sr.get('market_index', 0):.1f}")
 
+    with st.expander("How to read these numbers"):
+        st.markdown(
+            "- **Brier Index**: 0 = no skill (always guessing 0.5), 100 = perfect. "
+            "Higher is better. Human superforecasters score 60–70. "
+            "Compare against the leaderboard reference below.\n"
+            "- **Dataset vs Market**: Dataset questions are time-series numeric predictions. "
+            "Market questions come from prediction platforms. "
+            "Performance often differs significantly between tracks.\n"
+            "- **Overall Brier**: Raw error metric — 0 = perfect, 0.25 = no skill, "
+            "1 = worst. Lower is better. The Brier Index is derived from this."
+        )
+
     st.subheader("All Runs")
     rows: list[dict[str, Any]] = []
     for result in results:
@@ -335,6 +347,18 @@ def _view_heatmap_by_source(
         height=max(300, 60 * len(run_labels) + 100),
     )
     st.plotly_chart(fig, use_container_width=True)
+
+    with st.expander("Understanding the scale"):
+        if show_index:
+            st.markdown(
+                "100 = perfect, 0 = no skill. "
+                "Typical AI model range: 45–65. Human superforecasters: 60–70."
+            )
+        else:
+            st.markdown(
+                "0.00 = perfect, 0.25 = no skill (predicting 0.5 every time), "
+                "0.50+ = worse than guessing. Most models score between 0.10 and 0.30."
+            )
 
     st.subheader("Marginal Averages")
     col1, col2 = st.columns(2)
@@ -518,11 +542,20 @@ def view_pairwise(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     m2.metric("Mean Brier A", f"{brier_a:.4f}", f"Index: {index_a:.1f}")
     m3.metric("Mean Brier B", f"{brier_b:.4f}", f"Index: {index_b:.1f}")
     m4.metric("t-statistic", f"{t_stat:+.3f}")
+    st.caption(
+        "t-statistic: measures statistical significance of the Brier score difference. "
+        "|t| > 2.0 suggests a meaningful difference (not just noise). "
+        "Positive = A is worse, negative = A is better."
+    )
 
     w1, w2, w3 = st.columns(3)
     w1.metric(f"{run_a_name} wins", a_wins)
     w2.metric(f"{run_b_name} wins", b_wins)
     w3.metric("Ties", n - a_wins - b_wins)
+    st.caption(
+        'A "win" means that run had a lower Brier score '
+        "(more accurate forecast) on that specific question."
+    )
 
     resolved = _resolved_to_objects(resolved_dicts)
     by_source_a = analyze_by_source(forecasts_a, resolved)
@@ -589,6 +622,21 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
         })
 
     st.subheader("Error Type Summary")
+    with st.expander("Error type definitions"):
+        st.markdown(
+            "- **Confident wrong (high)**: Model predicted ≥ 70% likely, "
+            "but the event did NOT happen (outcome=0). "
+            "The model was confidently wrong in the 'yes' direction.\n"
+            "- **Confident wrong (low)**: Model predicted ≤ 30% likely, "
+            "but the event DID happen (outcome=1). "
+            "The model was confidently wrong in the 'no' direction.\n"
+            "- **Uncertain**: Model hedged (30–70%) and got the direction wrong. "
+            "Less costly per question but indicates lack of signal.\n"
+            "- **Correct confident**: Model was confident (>70% or <30%) and got it right.\n"
+            "- **Correct uncertain**: Model hedged (30–70%) and happened to get the "
+            "direction right."
+        )
+
     error_counts: dict[str, int] = {}
     for q in question_data:
         et = q["Error Type"]
@@ -660,6 +708,11 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
         })
     summary_df = pd.DataFrame(source_summary_rows).sort_values("Mean Brier", ascending=False)
     st.dataframe(summary_df, hide_index=True, use_container_width=True)
+    st.caption(
+        'A high "% Confident Wrong" rate on a source means the model is '
+        "systematically overconfident on that question type — "
+        "this is the most actionable signal for improvement."
+    )
 
     st.subheader("Worst Questions")
     top_n = st.slider("Show top N worst", 10, 200, 50, key="worst_n")
@@ -745,8 +798,30 @@ def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, A
     )
     st.plotly_chart(fig, use_container_width=True)
 
+    with st.expander("How to read calibration curves"):
+        st.markdown(
+            "- Points on the **diagonal** = perfectly calibrated "
+            "(when the model says 70%, events happen 70% of the time)\n"
+            "- Points **above** the diagonal = underconfident "
+            "(events happen more often than predicted — model should be bolder)\n"
+            "- Points **below** the diagonal = overconfident "
+            "(events happen less often than predicted — model is too confident)\n"
+            "- **Point size** = number of questions in that probability bin "
+            "(larger = more data = more reliable)"
+        )
+
     if metrics_rows:
         st.subheader("Calibration Metrics")
+        st.markdown(
+            "- **ECE** (Expected Calibration Error): Average miscalibration across all bins. "
+            "Lower is better. 0 = perfect calibration. Typical range: 0.02–0.10.\n"
+            "- **MCE** (Max Calibration Error): Worst single-bin miscalibration. "
+            "Lower is better. Identifies the probability range where the model is "
+            "most miscalibrated.\n"
+            "- **Sharpness**: How far from 0.5 the forecasts are on average. "
+            "Higher = more decisive. A model that always predicts 0.5 has sharpness of 0. "
+            "Good models are both sharp AND well-calibrated."
+        )
         df = pd.DataFrame(metrics_rows)
         df["ECE"] = df["ECE"].map("{:.4f}".format)
         df["MCE"] = df["MCE"].map("{:.4f}".format)
@@ -776,6 +851,22 @@ def view_question_browser(
 
     sort_options = ["Question ID", "Worst Brier (any run)", "Most disagreement across runs", "Source"]
     sort_by = st.selectbox("Sort by", sort_options, index=0, key="qb_sort")
+
+    with st.expander("Column guide"):
+        st.markdown(
+            "- **(f)** columns: The model's forecast probability "
+            "(0.0 = confident 'no', 0.5 = uncertain, 1.0 = confident 'yes')\n"
+            "- **(bs)** columns: Brier Score for that forecast "
+            "(0.0 = perfect, 1.0 = worst possible). "
+            "High values mean the model was wrong AND confident.\n"
+            "- **Max Brier**: The worst Brier Score across all shown runs for that question. "
+            "Sort by this to find questions ALL models struggle with.\n"
+            "- **Disagreement**: Difference between the highest and lowest forecast across runs. "
+            "High disagreement = models see this question very differently — "
+            "interesting for analysis.\n"
+            "- **Outcome (1=yes, 0=no)**: What actually happened. "
+            "1 = the event occurred, 0 = it did not."
+        )
 
     filtered = [
         d
@@ -843,6 +934,11 @@ def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, 
         return
 
     threshold = st.slider("Minimum disagreement (|diff|)", 0.0, 1.0, 0.2, 0.05)
+    st.caption(
+        "Shows questions where the two runs disagreed by more than the threshold. "
+        "|Diff| is the absolute difference in forecast probabilities. "
+        '"Closer" indicates which run had the lower Brier score (more accurate).'
+    )
 
     result_a = next(r for r in results if _run_label(r) == run_a_name)
     result_b = next(r for r in results if _run_label(r) == run_b_name)
