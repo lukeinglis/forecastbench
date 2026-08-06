@@ -145,6 +145,23 @@ def _run_label(result: ResultData) -> str:
     return str(result["model_slug"])
 
 
+def _run_round_info(result: ResultData) -> str:
+    meta = result.get("metadata", {})
+    rnd = meta.get("round")
+    if rnd:
+        return str(rnd)
+    qsets = meta.get("question_sets_used", [])
+    return f"All rounds ({len(qsets)} sets)" if qsets else "Unknown"
+
+
+def _run_type(result: ResultData) -> str:
+    """Classify a result as 'single-round' or 'all-rounds'."""
+    meta = result.get("metadata", {})
+    if meta.get("round"):
+        return "single-round"
+    return "all-rounds"
+
+
 def _classify_error(forecast: float, outcome: int) -> str:
     if forecast >= 0.7 and outcome == 1:
         return "Correct confident"
@@ -261,6 +278,14 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
         })
     df = pd.DataFrame(rows).sort_values("Overall Index", ascending=False)
     st.dataframe(df, hide_index=True, use_container_width=True)
+
+    all_qsets: set[str] = set()
+    for result in results:
+        qsets = result.get("metadata", {}).get("question_sets_used", [])
+        all_qsets.update(qsets)
+    if all_qsets:
+        st.subheader("Rounds Covered")
+        st.markdown(", ".join(sorted(all_qsets)))
 
     st.subheader("Leaderboard Reference")
     live_ref = _leaderboard_reference_from_live()
@@ -640,6 +665,11 @@ def view_pairwise(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     result_a = next(r for r in results if _run_label(r) == run_a_name)
     result_b = next(r for r in results if _run_label(r) == run_b_name)
 
+    qsets_a = set(result_a.get("metadata", {}).get("question_sets_used", []))
+    qsets_b = set(result_b.get("metadata", {}).get("question_sets_used", []))
+    if qsets_a and qsets_b and qsets_a != qsets_b:
+        st.warning("These runs cover different question sets — comparison may not be apples-to-apples.")
+
     forecasts_a: dict[str, float] = result_a["forecasts"]
     forecasts_b: dict[str, float] = result_b["forecasts"]
     outcomes_a: dict[str, int] = result_a.get("outcomes", {})
@@ -761,6 +791,57 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
             "Error Type": error_type,
             "_brier_raw": bs,
         })
+
+    # Key findings summary
+    source_stats: dict[str, dict[str, float | int]] = {}
+    for q in question_data:
+        src = q["Source"]
+        if src not in source_stats:
+            source_stats[src] = {"brier_sum": 0.0, "count": 0, "cw_count": 0}
+        source_stats[src]["brier_sum"] += q["_brier_raw"]
+        source_stats[src]["count"] += 1
+        if q["Error Type"] in ("Confident wrong (high)", "Confident wrong (low)"):
+            source_stats[src]["cw_count"] += 1
+
+    if source_stats:
+        worst_cw_source = max(
+            source_stats,
+            key=lambda s: source_stats[s]["cw_count"] / source_stats[s]["count"]
+            if source_stats[s]["count"]
+            else 0,
+        )
+        worst_cw_pct = (
+            source_stats[worst_cw_source]["cw_count"]
+            / source_stats[worst_cw_source]["count"]
+            * 100
+            if source_stats[worst_cw_source]["count"]
+            else 0
+        )
+        worst_brier_source = max(
+            source_stats,
+            key=lambda s: source_stats[s]["brier_sum"] / source_stats[s]["count"]
+            if source_stats[s]["count"]
+            else 0,
+        )
+        worst_brier = (
+            source_stats[worst_brier_source]["brier_sum"]
+            / source_stats[worst_brier_source]["count"]
+            if source_stats[worst_brier_source]["count"]
+            else 0
+        )
+        total_cw = sum(int(s["cw_count"]) for s in source_stats.values())
+        total_q = len(question_data)
+        total_cw_pct = (total_cw / total_q * 100) if total_q else 0
+
+        summary = (
+            f"Highest failure rate on **{worst_cw_source}** "
+            f"({worst_cw_pct:.1f}% confident wrong). "
+            f"**{worst_brier_source}** has the worst Brier score "
+            f"({worst_brier:.4f}). "
+            f"Overall {total_cw_pct:.1f}% of questions are confidently wrong. "
+            f"Focus calibration improvements here."
+        )
+        st.info(summary)
 
     st.subheader("Error Type Summary")
     with st.expander("Error type definitions"):
@@ -1084,6 +1165,11 @@ def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, 
     result_a = next(r for r in results if _run_label(r) == run_a_name)
     result_b = next(r for r in results if _run_label(r) == run_b_name)
 
+    qsets_a = set(result_a.get("metadata", {}).get("question_sets_used", []))
+    qsets_b = set(result_b.get("metadata", {}).get("question_sets_used", []))
+    if qsets_a and qsets_b and qsets_a != qsets_b:
+        st.warning("These runs cover different question sets — comparison may not be apples-to-apples.")
+
     rows: list[dict[str, Any]] = []
 
     for d in resolved_dicts:
@@ -1144,12 +1230,25 @@ def main() -> None:
         )
         return
 
+    type_filter = st.sidebar.selectbox(
+        "Filter by type",
+        ["All", "Single-round only", "All-rounds only"],
+        index=0,
+        key="type_filter",
+    )
+    if type_filter == "Single-round only":
+        results = [r for r in results if _run_type(r) == "single-round"]
+    elif type_filter == "All-rounds only":
+        results = [r for r in results if _run_type(r) == "all-rounds"]
+
     st.sidebar.markdown(f"**{len(results)} runs loaded**")
     for r in sorted(results, key=lambda x: x.get("scoring_result", {}).get("overall_brier", 1)):
         sr = r.get("scoring_result", {})
         bs = sr.get("overall_brier", 0)
         idx = sr.get("overall_index", 0)
+        round_info = _run_round_info(r)
         st.sidebar.text(f"{_run_label(r)}: Index {idx:.1f} (Brier {bs:.4f})")
+        st.sidebar.caption(f"  {round_info}")
     st.sidebar.markdown(
         "---\n"
         "Backtest of [ForecastBench](https://www.forecastbench.org/) "
