@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import pytest
 
 from fetch_data import Question
-from baseline_agent import (
+from lab_forecaster import (
     _build_prompt,
     _parse_probability,
     _extract_probabilities,
@@ -480,10 +480,10 @@ class TestParseProbabilityPriority:
 
 
 class TestForecastSync:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_calls_litellm_completion(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("Probability: 0.73")
-        from baseline_agent import forecast
+        from lab_forecaster import forecast
 
         q = _make_question()
         result = forecast(q)
@@ -493,19 +493,19 @@ class TestForecastSync:
         assert call_kwargs.kwargs["timeout"] == 180
         assert result == pytest.approx(0.73)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_forecast_returns_float(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("Probability: 0.55")
-        from baseline_agent import forecast
+        from lab_forecaster import forecast
 
         q = _make_question()
         result = forecast(q)
         assert isinstance(result, float)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_passes_prompt_variant(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.55*")
-        from baseline_agent import forecast
+        from lab_forecaster import forecast
 
         q = _make_question(
             source="metaculus",
@@ -521,10 +521,10 @@ class TestForecastSync:
 
 
 class TestForecastMulti:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_returns_list_matching_dates(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.30* *0.45* *0.60*")
-        from baseline_agent import forecast_multi
+        from lab_forecaster import forecast_multi
 
         q = _make_dataset_question()
         dates = ["2024-07-01", "2024-08-01", "2024-09-01"]
@@ -534,10 +534,10 @@ class TestForecastMulti:
         assert all(isinstance(p, float) for p in result)
         assert result == [pytest.approx(0.30), pytest.approx(0.45), pytest.approx(0.60)]
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     def test_uses_dataset_prompt_template(self, mock_litellm: MagicMock) -> None:
         mock_litellm.completion.return_value = _mock_response("*0.50*")
-        from baseline_agent import forecast_multi
+        from lab_forecaster import forecast_multi
 
         q = _make_dataset_question()
         forecast_multi(q, resolution_dates=["2024-07-01"])
@@ -549,10 +549,10 @@ class TestForecastMulti:
 
 
 class TestForecastAsync:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_calls_litellm_acompletion(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("Probability: 0.65"))
-        from baseline_agent import aforecast
+        from lab_forecaster import aforecast
 
         q = _make_question()
         result = await aforecast(q)
@@ -560,10 +560,10 @@ class TestForecastAsync:
         mock_litellm.acompletion.assert_called_once()
         assert result == pytest.approx(0.65)
 
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_passes_prompt_variant_async(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(return_value=_mock_response("*0.42*"))
-        from baseline_agent import aforecast
+        from lab_forecaster import aforecast
 
         q = _make_question(
             source="fred",
@@ -619,12 +619,12 @@ class TestMarketCloseAsResolutionDate:
 
 
 class TestAforecastMulti:
-    @patch("baseline_agent.litellm")
+    @patch("lab_forecaster.litellm")
     async def test_returns_list_matching_dates(self, mock_litellm: MagicMock) -> None:
         mock_litellm.acompletion = AsyncMock(
             return_value=_mock_response("*0.25* *0.50* *0.75*")
         )
-        from baseline_agent import aforecast_multi
+        from lab_forecaster import aforecast_multi
 
         q = _make_dataset_question()
         dates = ["2024-07-01", "2024-08-01", "2024-09-01"]
@@ -641,11 +641,11 @@ class TestModelConfig:
     @patch.dict("os.environ", {"FORECAST_MODEL": "gpt-4o"})
     def test_model_configurable_via_env(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
 
-        importlib.reload(baseline_agent)
-        assert baseline_agent.MODEL == "gpt-4o"
-        importlib.reload(baseline_agent)
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.MODEL == "gpt-4o"
+        importlib.reload(lab_forecaster)
 
     def test_default_temperature_is_zero(self) -> None:
         assert TEMPERATURE == 0
@@ -656,56 +656,56 @@ class TestModelConfig:
     @patch.dict("os.environ", {"FORECAST_TEMPERATURE": "0.5"})
     def test_temperature_configurable_via_env(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
 
-        importlib.reload(baseline_agent)
-        assert baseline_agent.TEMPERATURE == 0.5
-        importlib.reload(baseline_agent)
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.TEMPERATURE == 0.5
+        importlib.reload(lab_forecaster)
 
     @patch.dict("os.environ", {"FORECAST_MAX_TOKENS": "4096"})
     def test_max_tokens_configurable_via_env(self) -> None:
         import importlib
-        import baseline_agent
+        import lab_forecaster
 
-        importlib.reload(baseline_agent)
-        assert baseline_agent.MAX_TOKENS == 4096
-        importlib.reload(baseline_agent)
+        importlib.reload(lab_forecaster)
+        assert lab_forecaster.MAX_TOKENS == 4096
+        importlib.reload(lab_forecaster)
 
 
 
 
 class TestVertexCredentialRefresh:
     def test_skips_refresh_when_token_valid(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
-        old_creds = baseline_agent._vertex_credentials
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
+        old_creds = lab_forecaster._vertex_credentials
         try:
-            baseline_agent._vertex_token_expiry = time.monotonic() + 9999
-            baseline_agent._vertex_credentials = MagicMock()
-            with patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"):
-                baseline_agent._ensure_vertex_credentials()
-            baseline_agent._vertex_credentials.refresh.assert_not_called()
+            lab_forecaster._vertex_token_expiry = time.monotonic() + 9999
+            lab_forecaster._vertex_credentials = MagicMock()
+            with patch.object(lab_forecaster, "MODEL", "vertex_ai/claude-sonnet-4@20250514"):
+                lab_forecaster._ensure_vertex_credentials()
+            lab_forecaster._vertex_credentials.refresh.assert_not_called()
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
-            baseline_agent._vertex_credentials = old_creds
+            lab_forecaster._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_credentials = old_creds
 
     def test_skips_for_non_vertex_model(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
         try:
-            baseline_agent._vertex_token_expiry = 0.0
-            with patch.object(baseline_agent, "MODEL", "openai/gpt-4o"):
-                baseline_agent._ensure_vertex_credentials()
+            lab_forecaster._vertex_token_expiry = 0.0
+            with patch.object(lab_forecaster, "MODEL", "openai/gpt-4o"):
+                lab_forecaster._ensure_vertex_credentials()
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_token_expiry = old_expiry
 
     def test_refreshes_expired_credentials(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
-        old_creds = baseline_agent._vertex_credentials
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
+        old_creds = lab_forecaster._vertex_credentials
         try:
-            baseline_agent._vertex_credentials = None
-            baseline_agent._vertex_token_expiry = 0.0
+            lab_forecaster._vertex_credentials = None
+            lab_forecaster._vertex_token_expiry = 0.0
 
             mock_creds = MagicMock()
             mock_creds.expiry = None
@@ -714,34 +714,34 @@ class TestVertexCredentialRefresh:
             mock_transport = MagicMock()
 
             with (
-                patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
-                patch.object(baseline_agent, "_get_google_auth", return_value=(mock_auth, mock_transport)),
+                patch.object(lab_forecaster, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+                patch.object(lab_forecaster, "_get_google_auth", return_value=(mock_auth, mock_transport)),
             ):
-                baseline_agent._ensure_vertex_credentials()
+                lab_forecaster._ensure_vertex_credentials()
 
             mock_creds.refresh.assert_called_once()
-            assert baseline_agent._vertex_token_expiry > 0
+            assert lab_forecaster._vertex_token_expiry > 0
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
-            baseline_agent._vertex_credentials = old_creds
+            lab_forecaster._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_credentials = old_creds
 
     def test_refresh_failure_does_not_crash(self) -> None:
-        import baseline_agent
-        old_expiry = baseline_agent._vertex_token_expiry
-        old_creds = baseline_agent._vertex_credentials
+        import lab_forecaster
+        old_expiry = lab_forecaster._vertex_token_expiry
+        old_creds = lab_forecaster._vertex_credentials
         try:
-            baseline_agent._vertex_credentials = None
-            baseline_agent._vertex_token_expiry = 0.0
+            lab_forecaster._vertex_credentials = None
+            lab_forecaster._vertex_token_expiry = 0.0
 
             with (
-                patch.object(baseline_agent, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
-                patch.object(baseline_agent, "_get_google_auth", side_effect=Exception("no creds")),
+                patch.object(lab_forecaster, "MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+                patch.object(lab_forecaster, "_get_google_auth", side_effect=Exception("no creds")),
             ):
-                baseline_agent._ensure_vertex_credentials()
+                lab_forecaster._ensure_vertex_credentials()
 
-            assert baseline_agent._vertex_token_expiry == 0.0
+            assert lab_forecaster._vertex_token_expiry == 0.0
         finally:
-            baseline_agent._vertex_token_expiry = old_expiry
-            baseline_agent._vertex_credentials = old_creds
+            lab_forecaster._vertex_token_expiry = old_expiry
+            lab_forecaster._vertex_credentials = old_creds
 
 

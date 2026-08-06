@@ -16,7 +16,7 @@
 - `uv run python eval.py --agent baseline --raw` to run without difficulty adjustment
 - `uv run python eval.py --agent baseline --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
-- `uv run python baseline_agent.py` to run baseline LLM agent (shortcut)
+- `uv run python lab_forecaster.py` to run baseline LLM agent (shortcut)
 - `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent baseline` to run with Vertex AI
 - `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent baseline` to run with alternate model
 - `uv run python analyze.py --compare` to compare all saved results
@@ -31,7 +31,7 @@
 - **eval.py** - CLI entrypoint with structural held-out split
 - **dummy_forecaster.py** - Baseline forecaster (always predicts 0.5)
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
-- **baseline_agent.py** - LLM baseline forecaster using litellm (zero-shot superforecaster prompt)
+- **lab_forecaster.py** - LLM baseline forecaster using litellm (zero-shot superforecaster prompt)
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
 - **tests/** - pytest test suite
 - **archive/** - Archived experiment files (calibrate, ensemble, hybrid, multi-model, belief, statistical, timeseries RAG)

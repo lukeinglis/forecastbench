@@ -25,7 +25,7 @@ FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent baseline
 | `fetch_data.py` | Fetches question sets and resolutions from forecastbench-datasets repo, caches locally |
 | `score.py` | Brier score/index calculation, difficulty adjustment (two-way fixed-effects OLS), Murphy decomposition |
 | `analyze.py` | Error analysis, calibration (ECE/MCE), bias detection, worst-question analysis, horizon breakdown, paired comparison |
-| `baseline_agent.py` | LLM forecaster using litellm (zero-shot superforecaster prompt, sync + async) |
+| `lab_forecaster.py` | LLM forecaster using litellm (zero-shot superforecaster prompt, sync + async) |
 | `dummy_forecaster.py` | Always predicts 0.5 |
 | `cutoff.py` | Chronological data cutoff enforcement for honest backtesting |
 | `submit.py` | Assembles and validates ForecastBench submissions, optional GCS upload |

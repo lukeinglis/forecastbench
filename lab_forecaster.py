@@ -14,7 +14,7 @@ import litellm
 from fetch_data import MARKET_SOURCES, Question
 from logging_config import get_logger
 
-logger = get_logger("baseline_agent")
+logger = get_logger("lab_forecaster")
 
 litellm.vertex_project = os.getenv("VERTEX_PROJECT", "itpc-gcp-product-all-claude")
 litellm.vertex_location = os.getenv("VERTEX_LOCATION", "europe-west1")

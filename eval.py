@@ -472,7 +472,7 @@ async def _run_async(
                 if async_multi_forecaster is not None:
                     probs_result = await async_multi_forecaster(q, resolution_dates=uncached_dates)
                 else:
-                    from baseline_agent import aforecast_multi_horizon
+                    from lab_forecaster import aforecast_multi_horizon
                     probs_result = await aforecast_multi_horizon(
                         q,
                         resolution_dates=uncached_dates,
@@ -710,7 +710,7 @@ def main() -> None:
 
     async_multi_forecaster_fn: MultiForecaster | None = None
     if args.agent == "baseline":
-        from baseline_agent import aforecast, aforecast_multi
+        from lab_forecaster import aforecast, aforecast_multi
         forecaster: Forecaster = aforecast
         async_multi_forecaster_fn = aforecast_multi
     else:

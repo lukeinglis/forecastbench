@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from baseline_agent import (
+from lab_forecaster import (
     _build_prompt,
     _format_question_text,
     _parse_probability,

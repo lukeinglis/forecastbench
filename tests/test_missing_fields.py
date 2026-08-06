@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from fetch_data import Question, QuestionSet, ResolvedQuestion, join_resolved_questions, Resolution
-from baseline_agent import _build_prompt
+from lab_forecaster import _build_prompt
 from eval import (
     _build_question,
     _has_multi_horizon,
