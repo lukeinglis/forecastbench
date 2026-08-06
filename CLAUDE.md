@@ -12,13 +12,13 @@
 - `uv run ruff check .` to lint
 - `uv run mypy --ignore-missing-imports --disable-error-code=attr-defined *.py` to type check
 - `uv run python eval.py --agent dummy` to run dummy forecaster (default)
-- `uv run python eval.py --agent baseline` to run LLM baseline agent
-- `uv run python eval.py --agent baseline --raw` to run without difficulty adjustment
-- `uv run python eval.py --agent baseline --per-date` to disable multi-horizon batching (multi-horizon is default)
+- `uv run python eval.py --agent lab` to run LLM lab forecaster
+- `uv run python eval.py --agent lab --raw` to run without difficulty adjustment
+- `uv run python eval.py --agent lab --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
-- `uv run python lab_forecaster.py` to run baseline LLM agent (shortcut)
-- `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent baseline` to run with Vertex AI
-- `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent baseline` to run with alternate model
+- `uv run python lab_forecaster.py` to run lab forecaster (shortcut)
+- `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent lab` to run with Vertex AI
+- `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent lab` to run with alternate model
 - `uv run python analyze.py --compare` to compare all saved results
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage
@@ -31,7 +31,7 @@
 - **eval.py** - CLI entrypoint with structural held-out split
 - **dummy_forecaster.py** - Baseline forecaster (always predicts 0.5)
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
-- **lab_forecaster.py** - LLM baseline forecaster using litellm (zero-shot superforecaster prompt)
+- **lab_forecaster.py** - LLM lab forecaster using litellm (zero-shot superforecaster prompt)
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
 - **tests/** - pytest test suite
 - **archive/** - Archived experiment files (calibrate, ensemble, hybrid, multi-model, belief, statistical, timeseries RAG)
@@ -53,7 +53,7 @@
 - FORECAST_TEMPERATURE env var sets temperature (default: 0). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
 - Multi-horizon forecasting is enabled by default for all dataset sources. Use --per-date to force per-date calling for all sources.
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
-- Baseline agent always returns valid [0, 1] float, never raises
+- Lab forecaster always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON (auto-persisted after each eval run)
 - Difficulty adjustment activates automatically when 2+ results exist in results/
 - Use --raw flag to disable difficulty adjustment

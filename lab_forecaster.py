@@ -1,4 +1,4 @@
-"""Baseline LLM forecaster using litellm for probability estimation."""
+"""Lab forecaster using litellm for probability estimation."""
 
 from __future__ import annotations
 
