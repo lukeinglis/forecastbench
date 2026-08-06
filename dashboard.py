@@ -532,14 +532,20 @@ def main() -> None:
     for r in sorted(results, key=lambda x: x.get("scoring_result", {}).get("overall_brier", 1)):
         sr = r.get("scoring_result", {})
         st.sidebar.text(f"{_run_label(r)}: {sr.get('overall_brier', 0):.4f}")
+    st.sidebar.markdown(
+        "---\n"
+        "Backtest of [ForecastBench](https://www.forecastbench.org/) "
+        "tournament rounds. See the **About** tab for methodology."
+    )
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         [
             "Heatmap",
             "Pairwise",
             "Calibration",
             "Questions",
             "Head-to-Head",
+            "About",
         ]
     )
 
@@ -556,6 +562,109 @@ def main() -> None:
         view_question_browser(results, resolved_dicts)
     with tab5:
         view_head_to_head(results, resolved_dicts)
+    with tab6:
+        view_about()
+
+
+def view_about() -> None:
+    st.header("About ForecastBench")
+
+    st.markdown("""
+### What is ForecastBench?
+
+[**ForecastBench**](https://www.forecastbench.org/) is a dynamic benchmark for evaluating
+AI forecasting models, published at **ICLR 2025** and maintained by the
+[Forecasting Research Institute](https://forecastingresearch.org/). Unlike static
+benchmarks, ForecastBench uses questions about *future events* — eliminating data
+contamination by design.
+
+---
+
+### How It Works
+
+- **~1,000 binary forecasting questions** are drawn from 9 sources and updated on a
+  **biweekly schedule** (new "rounds").
+- Models receive a question and must output a **probability ∈ [0, 1]** that the event
+  will occur.
+- Because questions concern events that haven't happened yet, no model can have seen the
+  answer during training.
+
+---
+
+### Question Sources
+
+Questions fall into two tracks:
+
+**Dataset sources** (time series) — numeric data questions
+(*"Will GDP exceed X?" / "Will the stock price be above Y?"*)
+
+| Source | Domain |
+|--------|--------|
+| `acled` | Armed conflict & protest events |
+| `wikipedia` | Wikipedia page view counts |
+| `yfinance` | Stock prices & financial data |
+| `dbnomics` | Macroeconomic indicators |
+| `fred` | Federal Reserve economic data |
+
+**Market sources** (prediction markets / forecasting platforms) — event-based questions
+from human forecasting communities
+
+| Source | Platform |
+|--------|----------|
+| `metaculus` | Metaculus |
+| `polymarket` | Polymarket |
+| `manifold` | Manifold Markets |
+| `infer` | INFER (formerly Good Judgment Open) |
+
+---
+
+### Scoring
+
+**Brier Score** (per question):
+
+$$BS = (forecast - outcome)^2$$
+
+- Range **[0, 1]** — *lower is better*
+- Measures both **calibration** (are your 70% forecasts right 70% of the time?)
+  and **accuracy** (are you confident on the right questions?)
+
+**Brier Index** (aggregate):
+
+$$BI = (1 - \\sqrt{\\overline{BS}}) \\times 100$$
+
+- Range **(-∞, 100]** — *higher is better*, percentage scale
+- The square-root transform is applied **after** averaging across questions, not
+  per-question
+
+A Brier Index of **0** corresponds to always predicting 0.5 (no skill). Human
+superforecasters typically score in the **60–70** range.
+
+---
+
+### Our Setup
+
+This dashboard visualizes results from a **backtest harness** that replays historical
+ForecastBench rounds. Key details:
+
+- We use the **same prompts, scoring, and question sets** as the official tournament
+- Each "run" in this dashboard represents a **model + configuration**
+  (e.g., different prompts, temperature settings, thinking mode, ensemble size)
+- Results files store **per-question forecasts** so we can compare models at any
+  granularity — by source, by question, by round
+- Missing forecasts **default to 0.5** per ForecastBench rules
+- **Binary outcomes only**: each question resolves to 0 or 1
+
+---
+
+### Key Conventions
+
+| Convention | Detail |
+|------------|--------|
+| Missing forecasts | Default to **0.5** (no-skill baseline) |
+| Outcomes | Binary only: **{0, 1}** |
+| Difficulty adjustment | Available but dashboard shows **raw scores** by default |
+| Brier Index transform | Applied **after** averaging, not per-question |
+""")
 
 
 if __name__ == "__main__":
