@@ -643,125 +643,6 @@ def _view_heatmap_by_track(
     st.plotly_chart(fig, use_container_width=True)
 
 
-def view_pairwise(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
-    st.header("Pairwise Run Comparison")
-
-    if len(results) < 2:
-        st.warning("Need at least 2 result files for pairwise comparison.")
-        return
-
-    run_names = [_run_label(r) for r in results]
-    col1, col2 = st.columns(2)
-    with col1:
-        run_a_name = st.selectbox("Run A", run_names, index=0)
-    with col2:
-        default_b = 1 if len(run_names) > 1 else 0
-        run_b_name = st.selectbox("Run B", run_names, index=default_b)
-
-    if run_a_name == run_b_name:
-        st.info("Select two different runs to compare.")
-        return
-
-    result_a = next(r for r in results if _run_label(r) == run_a_name)
-    result_b = next(r for r in results if _run_label(r) == run_b_name)
-
-    qsets_a = set(result_a.get("metadata", {}).get("question_sets_used", []))
-    qsets_b = set(result_b.get("metadata", {}).get("question_sets_used", []))
-    if qsets_a and qsets_b and qsets_a != qsets_b:
-        st.warning("These runs cover different question sets — comparison may not be apples-to-apples.")
-
-    forecasts_a: dict[str, float] = result_a["forecasts"]
-    forecasts_b: dict[str, float] = result_b["forecasts"]
-    outcomes_a: dict[str, int] = result_a.get("outcomes", {})
-    outcomes_b: dict[str, int] = result_b.get("outcomes", {})
-    outcomes = outcomes_a or outcomes_b
-
-    shared_ids = set(forecasts_a.keys()) & set(forecasts_b.keys()) & set(outcomes.keys())
-    if not shared_ids:
-        st.warning("No shared questions between these runs.")
-        return
-
-    diffs: list[float] = []
-    a_wins = 0
-    b_wins = 0
-    for qid in shared_ids:
-        outcome = outcomes[qid]
-        bs_a = (forecasts_a[qid] - outcome) ** 2
-        bs_b = (forecasts_b[qid] - outcome) ** 2
-        diffs.append(bs_a - bs_b)
-        if bs_a < bs_b:
-            a_wins += 1
-        elif bs_b < bs_a:
-            b_wins += 1
-
-    n = len(diffs)
-    mean_diff = sum(diffs) / n
-    var_diff = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1) if n > 1 else 0.0
-    se = math.sqrt(var_diff / n) if n > 1 else 0.0
-    t_stat = mean_diff / se if se > 0 else 0.0
-
-    sr_a = result_a.get("scoring_result", {})
-    sr_b = result_b.get("scoring_result", {})
-
-    brier_a = sr_a.get("overall_brier", 0)
-    brier_b = sr_b.get("overall_brier", 0)
-    index_a = sr_a.get("overall_index", 0)
-    index_b = sr_b.get("overall_index", 0)
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Shared Questions", f"{n:,}")
-    m2.metric("Mean Brier A", f"{brier_a:.4f}", f"Index: {index_a:.1f}")
-    m3.metric("Mean Brier B", f"{brier_b:.4f}", f"Index: {index_b:.1f}")
-    m4.metric("t-statistic", f"{t_stat:+.3f}")
-    st.caption(
-        "t-statistic: measures statistical significance of the Brier score difference. "
-        "|t| > 2.0 suggests a meaningful difference (not just noise). "
-        "Positive = A is worse, negative = A is better."
-    )
-
-    w1, w2, w3 = st.columns(3)
-    w1.metric(f"{run_a_name} wins", a_wins)
-    w2.metric(f"{run_b_name} wins", b_wins)
-    w3.metric("Ties", n - a_wins - b_wins)
-    st.caption(
-        'A "win" means that run had a lower Brier score '
-        "(more accurate forecast) on that specific question."
-    )
-
-    resolved = _resolved_to_objects(resolved_dicts)
-    by_source_a = analyze_by_source(forecasts_a, resolved)
-    by_source_b = analyze_by_source(forecasts_b, resolved)
-    all_sources = sorted(set(by_source_a.keys()) | set(by_source_b.keys()))
-
-    source_labels: list[str] = []
-    brier_diffs: list[float] = []
-    colors: list[str] = []
-    for source in all_sources:
-        ba_val: Any = by_source_a.get(source, {}).get("brier", 0)
-        bb_val: Any = by_source_b.get(source, {}).get("brier", 0)
-        ba = float(ba_val)
-        bb = float(bb_val)
-        diff = ba - bb
-        source_labels.append(source)
-        brier_diffs.append(diff)
-        colors.append("#2ca02c" if diff < 0 else "#d62728")
-
-    fig = go.Figure(
-        go.Bar(
-            x=source_labels,
-            y=brier_diffs,
-            marker_color=colors,
-            hovertemplate="Source: %{x}<br>Diff (A-B): %{y:.4f}<extra></extra>",
-        )
-    )
-    fig.update_layout(
-        title=f"Brier Difference by Source ({run_a_name} - {run_b_name})",
-        xaxis_title="Source",
-        yaxis_title="Brier Diff (negative = A better)",
-        yaxis_zeroline=True,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
 
 def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
     st.header("Failure Explorer")
@@ -945,6 +826,96 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     ]
     worst_df = pd.DataFrame(worst_rows)
     st.dataframe(worst_df, hide_index=True, use_container_width=True, height=600)
+
+    # --- Side-by-side failure comparison ---
+    st.divider()
+    st.subheader("Compare Failures Across Runs")
+
+    other_runs = [r for r in run_names if r != selected_run]
+    compare_run = st.selectbox(
+        "Compare against run",
+        ["(none)"] + other_runs,
+        index=0,
+        key="failures_compare",
+    )
+
+    if compare_run != "(none)":
+        result_b = next(r for r in results if _run_label(r) == compare_run)
+        forecasts_b: dict[str, float] = result_b["forecasts"]
+
+        source_compare_rows: list[dict[str, Any]] = []
+        for src in source_list:
+            src_questions = [q for q in question_data if q["Source"] == src]
+            n_src = len(src_questions)
+            if not n_src:
+                continue
+
+            mean_a = sum(q["_brier_raw"] for q in src_questions) / n_src
+            cw_a = sum(
+                1 for q in src_questions
+                if q["Error Type"] in ("Confident wrong (high)", "Confident wrong (low)")
+            )
+            pct_cw_a = cw_a / n_src * 100
+
+            brier_b_vals: list[float] = []
+            cw_b = 0
+            for q_dict in resolved_dicts:
+                if q_dict["source"] != src:
+                    continue
+                fb = _lookup_forecast(forecasts_b, q_dict["id"])
+                bs_b = brier_score(fb, q_dict["outcome"])
+                brier_b_vals.append(bs_b)
+                err_b = _classify_error(fb, q_dict["outcome"])
+                if err_b in ("Confident wrong (high)", "Confident wrong (low)"):
+                    cw_b += 1
+
+            if not brier_b_vals:
+                continue
+
+            n_b = len(brier_b_vals)
+            mean_b = sum(brier_b_vals) / n_b
+            pct_cw_b = cw_b / n_b * 100
+
+            track = "market" if src in MARKET_SOURCES else "dataset"
+            source_compare_rows.append({
+                "Source": src,
+                "Track": track,
+                f"{selected_run} Brier": round(mean_a, 4),
+                f"{compare_run} Brier": round(mean_b, 4),
+                "Delta Brier": round(mean_b - mean_a, 4),
+                f"{selected_run} % CW": round(pct_cw_a, 1),
+                f"{compare_run} % CW": round(pct_cw_b, 1),
+                "Delta % CW": round(pct_cw_b - pct_cw_a, 1),
+            })
+
+        if source_compare_rows:
+            compare_df = pd.DataFrame(source_compare_rows)
+            st.dataframe(compare_df, hide_index=True, use_container_width=True)
+
+            n_sources = len(source_compare_rows)
+            improved = sum(1 for r in source_compare_rows if r["Delta Brier"] < 0)
+            worsened = sum(1 for r in source_compare_rows if r["Delta Brier"] > 0)
+            best_row = min(source_compare_rows, key=lambda r: r["Delta Brier"])
+            worst_row = max(source_compare_rows, key=lambda r: r["Delta Brier"])
+            summary_parts = [
+                f"**{compare_run}** improved on **{improved}/{n_sources}** sources, "
+                f"worsened on **{worsened}/{n_sources}**.",
+            ]
+            if best_row["Delta Brier"] < 0:
+                summary_parts.append(
+                    f"Biggest improvement: **{best_row['Source']}** "
+                    f"({best_row['Delta Brier']:+.4f} Brier)."
+                )
+            if worst_row["Delta Brier"] > 0:
+                summary_parts.append(
+                    f"Biggest regression: **{worst_row['Source']}** "
+                    f"({worst_row['Delta Brier']:+.4f} Brier)."
+                )
+            st.info(" ".join(summary_parts))
+            st.caption(
+                "Delta columns show (Compare run - Selected run). "
+                "Negative delta = the comparison run is better on that source."
+            )
 
 
 def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
@@ -1136,31 +1107,24 @@ def view_question_browser(
         st.info("No questions match the current filters.")
 
 
-def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
-    st.header("Head-to-Head Comparison")
+def view_compare(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+    st.header("Compare Runs")
 
     if len(results) < 2:
-        st.warning("Need at least 2 result files.")
+        st.warning("Need at least 2 result files for comparison.")
         return
 
     run_names = [_run_label(r) for r in results]
     col1, col2 = st.columns(2)
     with col1:
-        run_a_name = st.selectbox("Run A", run_names, index=0, key="h2h_a")
+        run_a_name = st.selectbox("Run A", run_names, index=0, key="compare_a")
     with col2:
         default_b = 1 if len(run_names) > 1 else 0
-        run_b_name = st.selectbox("Run B", run_names, index=default_b, key="h2h_b")
+        run_b_name = st.selectbox("Run B", run_names, index=default_b, key="compare_b")
 
     if run_a_name == run_b_name:
-        st.info("Select two different runs.")
+        st.info("Select two different runs to compare.")
         return
-
-    threshold = st.slider("Minimum disagreement (|diff|)", 0.0, 1.0, 0.2, 0.05)
-    st.caption(
-        "Shows questions where the two runs disagreed by more than the threshold. "
-        "|Diff| is the absolute difference in forecast probabilities. "
-        '"Closer" indicates which run had the lower Brier score (more accurate).'
-    )
 
     result_a = next(r for r in results if _run_label(r) == run_a_name)
     result_b = next(r for r in results if _run_label(r) == run_b_name)
@@ -1170,7 +1134,113 @@ def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, 
     if qsets_a and qsets_b and qsets_a != qsets_b:
         st.warning("These runs cover different question sets — comparison may not be apples-to-apples.")
 
-    rows: list[dict[str, Any]] = []
+    # --- Pairwise aggregate metrics ---
+    st.subheader("Aggregate Comparison")
+
+    forecasts_a: dict[str, float] = result_a["forecasts"]
+    forecasts_b: dict[str, float] = result_b["forecasts"]
+    outcomes_a: dict[str, int] = result_a.get("outcomes", {})
+    outcomes_b: dict[str, int] = result_b.get("outcomes", {})
+    outcomes = outcomes_a or outcomes_b
+
+    shared_ids = set(forecasts_a.keys()) & set(forecasts_b.keys()) & set(outcomes.keys())
+    if not shared_ids:
+        st.warning("No shared questions between these runs.")
+        return
+
+    diffs: list[float] = []
+    a_wins = 0
+    b_wins = 0
+    for qid in shared_ids:
+        outcome = outcomes[qid]
+        bs_a = (forecasts_a[qid] - outcome) ** 2
+        bs_b = (forecasts_b[qid] - outcome) ** 2
+        diffs.append(bs_a - bs_b)
+        if bs_a < bs_b:
+            a_wins += 1
+        elif bs_b < bs_a:
+            b_wins += 1
+
+    n = len(diffs)
+    mean_diff = sum(diffs) / n
+    var_diff = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1) if n > 1 else 0.0
+    se = math.sqrt(var_diff / n) if n > 1 else 0.0
+    t_stat = mean_diff / se if se > 0 else 0.0
+
+    sr_a = result_a.get("scoring_result", {})
+    sr_b = result_b.get("scoring_result", {})
+
+    brier_a = sr_a.get("overall_brier", 0)
+    brier_b = sr_b.get("overall_brier", 0)
+    index_a = sr_a.get("overall_index", 0)
+    index_b = sr_b.get("overall_index", 0)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Shared Questions", f"{n:,}")
+    m2.metric("Mean Brier A", f"{brier_a:.4f}", f"Index: {index_a:.1f}")
+    m3.metric("Mean Brier B", f"{brier_b:.4f}", f"Index: {index_b:.1f}")
+    m4.metric("t-statistic", f"{t_stat:+.3f}")
+    st.caption(
+        "t-statistic: measures statistical significance of the Brier score difference. "
+        "|t| > 2.0 suggests a meaningful difference (not just noise). "
+        "Positive = A is worse, negative = A is better."
+    )
+
+    w1, w2, w3 = st.columns(3)
+    w1.metric(f"{run_a_name} wins", a_wins)
+    w2.metric(f"{run_b_name} wins", b_wins)
+    w3.metric("Ties", n - a_wins - b_wins)
+    st.caption(
+        'A "win" means that run had a lower Brier score '
+        "(more accurate forecast) on that specific question."
+    )
+
+    resolved = _resolved_to_objects(resolved_dicts)
+    by_source_a = analyze_by_source(forecasts_a, resolved)
+    by_source_b = analyze_by_source(forecasts_b, resolved)
+    all_sources = sorted(set(by_source_a.keys()) | set(by_source_b.keys()))
+
+    source_labels: list[str] = []
+    brier_diffs: list[float] = []
+    colors: list[str] = []
+    for source in all_sources:
+        ba_val: Any = by_source_a.get(source, {}).get("brier", 0)
+        bb_val: Any = by_source_b.get(source, {}).get("brier", 0)
+        ba = float(ba_val)
+        bb = float(bb_val)
+        diff = ba - bb
+        source_labels.append(source)
+        brier_diffs.append(diff)
+        colors.append("#2ca02c" if diff < 0 else "#d62728")
+
+    fig = go.Figure(
+        go.Bar(
+            x=source_labels,
+            y=brier_diffs,
+            marker_color=colors,
+            hovertemplate="Source: %{x}<br>Diff (A-B): %{y:.4f}<extra></extra>",
+        )
+    )
+    fig.update_layout(
+        title=f"Brier Difference by Source ({run_a_name} - {run_b_name})",
+        xaxis_title="Source",
+        yaxis_title="Brier Diff (negative = A better)",
+        yaxis_zeroline=True,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Head-to-Head disagreements ---
+    st.divider()
+    st.subheader("Head-to-Head Disagreements")
+
+    threshold = st.slider("Minimum disagreement (|diff|)", 0.0, 1.0, 0.2, 0.05)
+    st.caption(
+        "Shows questions where the two runs disagreed by more than the threshold. "
+        "|Diff| is the absolute difference in forecast probabilities. "
+        '"Closer" indicates which run had the lower Brier score (more accurate).'
+    )
+
+    h2h_rows: list[dict[str, Any]] = []
 
     for d in resolved_dicts:
         qid = d["id"]
@@ -1185,7 +1255,7 @@ def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, 
         bs_b = brier_score(fb, outcome)
         closer = run_a_name if bs_a < bs_b else (run_b_name if bs_b < bs_a else "Tie")
 
-        rows.append(
+        h2h_rows.append(
             {
                 "Question": d["question"][:100],
                 "Source": d["source"],
@@ -1199,20 +1269,20 @@ def view_head_to_head(results: list[ResultData], resolved_dicts: list[dict[str, 
             }
         )
 
-    rows.sort(key=lambda r: r["|Diff|"], reverse=True)
+    h2h_rows.sort(key=lambda r: r["|Diff|"], reverse=True)
 
-    st.caption(f"{len(rows):,} questions with |diff| >= {threshold:.2f}")
+    st.caption(f"{len(h2h_rows):,} questions with |diff| >= {threshold:.2f}")
 
-    if rows:
-        a_closer = sum(1 for r in rows if r["Closer"] == run_a_name)
-        b_closer = sum(1 for r in rows if r["Closer"] == run_b_name)
-        ties = sum(1 for r in rows if r["Closer"] == "Tie")
+    if h2h_rows:
+        a_closer = sum(1 for r in h2h_rows if r["Closer"] == run_a_name)
+        b_closer = sum(1 for r in h2h_rows if r["Closer"] == run_b_name)
+        ties = sum(1 for r in h2h_rows if r["Closer"] == "Tie")
         m1, m2, m3 = st.columns(3)
         m1.metric(f"{run_a_name} closer", a_closer)
         m2.metric(f"{run_b_name} closer", b_closer)
         m3.metric("Ties", ties)
 
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(h2h_rows)
         st.dataframe(df, use_container_width=True, height=600)
     else:
         st.info("No questions exceed the disagreement threshold.")
@@ -1255,16 +1325,15 @@ def main() -> None:
         "tournament rounds. See the **About** tab for methodology."
     )
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs(
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(
         [
             "Overview",
             "Leaderboard",
-            "Heatmap",
             "Failures",
-            "Pairwise",
+            "Heatmap",
+            "Compare",
             "Calibration",
             "Questions",
-            "Head-to-Head",
             "About",
         ]
     )
@@ -1277,18 +1346,16 @@ def main() -> None:
     with tab2:
         view_leaderboard(results)
     with tab3:
-        view_heatmap(results, resolved_dicts)
-    with tab4:
         view_failures(results, resolved_dicts)
+    with tab4:
+        view_heatmap(results, resolved_dicts)
     with tab5:
-        view_pairwise(results, resolved_dicts)
+        view_compare(results, resolved_dicts)
     with tab6:
         view_calibration(results, resolved_dicts)
     with tab7:
         view_question_browser(results, resolved_dicts)
     with tab8:
-        view_head_to_head(results, resolved_dicts)
-    with tab9:
         view_about()
 
 
