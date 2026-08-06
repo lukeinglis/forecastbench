@@ -66,7 +66,7 @@ The backtester depends on [forecastbench-parity](https://github.com/lukeinglis/f
 ## Tests
 
 ```bash
-uv run pytest                  # 618 tests
+uv run pytest                  # 619 tests
 uv run ruff check .            # lint
 uv run mypy --ignore-missing-imports --disable-error-code=attr-defined *.py  # type check
 ```
