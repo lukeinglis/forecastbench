@@ -132,7 +132,7 @@ class TestSubmitFlag:
 
         with _patch("sys.argv", ["eval.py", "--agent", "dummy"]):
             parser = argparse.ArgumentParser()
-            parser.add_argument("--agent", choices=["dummy", "baseline"], default="dummy")
+            parser.add_argument("--agent", choices=["dummy", "lab"], default="dummy")
             parser.add_argument("--submit", action="store_true", default=False)
             args = parser.parse_args(["--agent", "dummy"])
             assert args.submit is False
