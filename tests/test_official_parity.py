@@ -22,7 +22,7 @@ from baseline_agent import (
     _build_prompt,
     _format_question_text,
     _parse_probability,
-    _parse_probabilities,
+    _extract_probabilities,
 )
 from fetch_data import Question
 from score import brier_score, brier_index
@@ -433,7 +433,7 @@ class TestParsingParity:
     def test_multi_extract_matches_official(self, text: str, n: int, expected: list[float]) -> None:
         official = _official_extract_probabilities(text)
         try:
-            ours = _parse_probabilities(text, n)
+            ours = _extract_probabilities(text, n)
         except ValueError:
             ours = []
         if len(official) == n:
