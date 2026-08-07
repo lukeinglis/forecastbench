@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -48,6 +49,22 @@ LEADERBOARD_REFERENCE: dict[str, dict[str, float]] = {
 }
 
 
+@dataclass
+class AggregateRun:
+    slug: str
+    n_rounds: int
+    rounds: list[str]
+    combined_forecasts: dict[str, float]
+    combined_outcomes: dict[str, int]
+    scoring_result: dict[str, Any]
+    per_round_results: list[ResultData]
+    combined_sources: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        return self.slug
+
+
 @st.cache_data  # type: ignore[untyped-decorator]
 def load_all_results() -> list[ResultData]:
     if not RESULTS_DIR.exists():
@@ -83,6 +100,140 @@ def load_leaderboard(name: str) -> list[dict[str, str]]:
     return fetch_leaderboard(name)
 
 
+def _round_name_from_result(result: ResultData) -> str:
+    meta = result.get("metadata", {})
+    rnd = meta.get("round")
+    if rnd:
+        return str(rnd)
+    qsets = meta.get("question_sets_used", [])
+    if qsets:
+        return ", ".join(sorted(qsets))
+    return result.get("_filename", "unknown")
+
+
+def _compute_aggregate_scoring(
+    forecasts: dict[str, float],
+    outcomes: dict[str, int],
+    sources: dict[str, str],
+) -> dict[str, Any]:
+    """Compute scoring result from combined forecasts and outcomes."""
+    shared_ids = set(forecasts.keys()) & set(outcomes.keys())
+    if not shared_ids:
+        return {
+            "overall_brier": 1.0, "overall_index": 0.0,
+            "dataset_brier": 1.0, "dataset_index": 0.0,
+            "market_brier": 1.0, "market_index": 0.0,
+            "n_dataset": 0, "n_market": 0, "n_missing": 0,
+        }
+
+    dataset_pairs: list[tuple[float, int]] = []
+    market_pairs: list[tuple[float, int]] = []
+    n_missing = 0
+
+    for qid in shared_ids:
+        f = forecasts.get(qid, 0.5)
+        o = outcomes[qid]
+        source = sources.get(qid, "")
+        if source in MARKET_SOURCES:
+            market_pairs.append((f, o))
+        else:
+            dataset_pairs.append((f, o))
+        if qid not in forecasts:
+            n_missing += 1
+
+    def _mean_brier(pairs: list[tuple[float, int]]) -> float:
+        if not pairs:
+            return 0.25
+        return sum(brier_score(f, o) for f, o in pairs) / len(pairs)
+
+    ds_brier = _mean_brier(dataset_pairs)
+    mk_brier = _mean_brier(market_pairs)
+    overall_brier = (ds_brier + mk_brier) / 2
+
+    return {
+        "overall_brier": overall_brier,
+        "overall_index": brier_index(overall_brier),
+        "dataset_brier": ds_brier,
+        "dataset_index": brier_index(ds_brier),
+        "market_brier": mk_brier,
+        "market_index": brier_index(mk_brier),
+        "n_dataset": len(dataset_pairs),
+        "n_market": len(market_pairs),
+        "n_missing": n_missing,
+    }
+
+
+def _group_results_into_runs(results: list[ResultData]) -> list[AggregateRun]:
+    """Group result files by model_slug into aggregate runs."""
+    grouped: dict[str, list[ResultData]] = {}
+    for r in results:
+        slug = str(r["model_slug"])
+        grouped.setdefault(slug, []).append(r)
+
+    runs: list[AggregateRun] = []
+    for slug, result_files in sorted(grouped.items()):
+        rounds: list[str] = []
+        combined_forecasts: dict[str, float] = {}
+        combined_outcomes: dict[str, int] = {}
+        combined_sources: dict[str, str] = {}
+
+        for rf in sorted(result_files, key=lambda r: _round_name_from_result(r)):
+            rnd = _round_name_from_result(rf)
+            rounds.append(rnd)
+            combined_forecasts.update(rf.get("forecasts", {}))
+            combined_outcomes.update(rf.get("outcomes", {}))
+            combined_sources.update(rf.get("sources", {}))
+
+        scoring = _compute_aggregate_scoring(
+            combined_forecasts, combined_outcomes, combined_sources,
+        )
+
+        runs.append(AggregateRun(
+            slug=slug,
+            n_rounds=len(result_files),
+            rounds=rounds,
+            combined_forecasts=combined_forecasts,
+            combined_outcomes=combined_outcomes,
+            scoring_result=scoring,
+            per_round_results=result_files,
+            combined_sources=combined_sources,
+        ))
+
+    return runs
+
+
+@st.cache_data  # type: ignore[untyped-decorator]
+def group_results(results: list[ResultData]) -> list[dict[str, Any]]:
+    """Cached wrapper that returns serializable dicts (Streamlit requirement)."""
+    runs = _group_results_into_runs(results)
+    return [
+        {
+            "slug": run.slug,
+            "n_rounds": run.n_rounds,
+            "rounds": run.rounds,
+            "combined_forecasts": run.combined_forecasts,
+            "combined_outcomes": run.combined_outcomes,
+            "scoring_result": run.scoring_result,
+            "per_round_results": run.per_round_results,
+            "combined_sources": run.combined_sources,
+        }
+        for run in runs
+    ]
+
+
+def _dict_to_aggregate(d: dict[str, Any]) -> AggregateRun:
+    return AggregateRun(
+        slug=d["slug"],
+        n_rounds=d["n_rounds"],
+        rounds=d["rounds"],
+        combined_forecasts=d["combined_forecasts"],
+        combined_outcomes=d["combined_outcomes"],
+        scoring_result=d["scoring_result"],
+        per_round_results=d["per_round_results"],
+        combined_sources=d["combined_sources"],
+    )
+
+
 def _leaderboard_reference_from_live() -> dict[str, dict[str, float]] | None:
     """Pull top reference entries from the live baseline leaderboard."""
     try:
@@ -113,7 +264,6 @@ def _model_matches_slug(leaderboard_model: str, model_slug: str) -> bool:
     slug = model_slug.lower().replace("-", "_").replace(" ", "_")
     lb_parts = lb.split("_")
     slug_parts = slug.split("_")
-    # Strip provider prefix from slug (e.g. "vertex_ai_claude..." -> "claude...")
     provider_prefixes = {"vertex_ai", "openai", "anthropic", "google", "litellm"}
     clean_slug_parts = []
     skipping = True
@@ -141,27 +291,6 @@ def _resolved_to_objects(resolved_dicts: list[dict[str, Any]]) -> list[ResolvedQ
     ]
 
 
-def _run_label(result: ResultData) -> str:
-    return str(result["model_slug"])
-
-
-def _run_round_info(result: ResultData) -> str:
-    meta = result.get("metadata", {})
-    rnd = meta.get("round")
-    if rnd:
-        return str(rnd)
-    qsets = meta.get("question_sets_used", [])
-    return f"All rounds ({len(qsets)} sets)" if qsets else "Unknown"
-
-
-def _run_type(result: ResultData) -> str:
-    """Classify a result as 'single-round' or 'all-rounds'."""
-    meta = result.get("metadata", {})
-    if meta.get("round"):
-        return "single-round"
-    return "all-rounds"
-
-
 def _classify_error(forecast: float, outcome: int) -> str:
     if forecast >= 0.7 and outcome == 1:
         return "Correct confident"
@@ -180,7 +309,7 @@ def _classify_error(forecast: float, outcome: int) -> str:
 
 
 def _build_source_brier_matrix(
-    results: list[ResultData],
+    runs: list[AggregateRun],
     resolved_dicts: list[dict[str, Any]],
 ) -> tuple[list[str], list[str], list[list[float | None]], list[list[int]]]:
     resolved = _resolved_to_objects(resolved_dicts)
@@ -188,10 +317,9 @@ def _build_source_brier_matrix(
     run_source_scores: dict[str, dict[str, float]] = {}
     run_source_counts: dict[str, dict[str, int]] = {}
 
-    for result in results:
-        label = _run_label(result)
-        forecasts = result["forecasts"]
-        by_source = analyze_by_source(forecasts, resolved)
+    for run in runs:
+        label = run.label
+        by_source = analyze_by_source(run.combined_forecasts, resolved)
         run_source_scores[label] = {}
         run_source_counts[label] = {}
         for source, stats in by_source.items():
@@ -203,19 +331,18 @@ def _build_source_brier_matrix(
 
     sources = sorted(all_sources)
     overall_brier: dict[str, float] = {}
-    for result in results:
-        sr = result.get("scoring_result", {})
-        overall_brier[_run_label(result)] = sr.get("overall_brier", 1.0)
+    for run in runs:
+        overall_brier[run.label] = run.scoring_result.get("overall_brier", 1.0)
     run_labels = sorted(run_source_scores.keys(), key=lambda r: overall_brier.get(r, 1.0))
 
     matrix: list[list[float | None]] = []
     counts: list[list[int]] = []
-    for run in run_labels:
+    for run_label in run_labels:
         row: list[float | None] = []
         count_row: list[int] = []
         for source in sources:
-            row.append(run_source_scores[run].get(source))
-            count_row.append(run_source_counts[run].get(source, 0))
+            row.append(run_source_scores[run_label].get(source))
+            count_row.append(run_source_counts[run_label].get(source, 0))
         matrix.append(row)
         counts.append(count_row)
 
@@ -228,23 +355,22 @@ def _sort_sources_by_track(sources: list[str]) -> list[str]:
     return sorted(dataset_sources) + sorted(market_sources)
 
 
-def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+def view_overview(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
     st.header("Overview")
 
-    if not results:
+    if not runs:
         st.warning("No result files found in results/ directory.")
         return
 
-    best_result = min(results, key=lambda r: r.get("scoring_result", {}).get("overall_brier", 1.0))
-    best_sr = best_result.get("scoring_result", {})
-    best_label = _run_label(best_result)
+    best_run = min(runs, key=lambda r: r.scoring_result.get("overall_brier", 1.0))
+    best_sr = best_run.scoring_result
     best_index = best_sr.get("overall_index", 0.0)
 
     total_questions = best_sr.get("n_dataset", 0) + best_sr.get("n_market", 0)
 
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Best Run", f"{best_label}", f"Index: {best_index:.1f}")
-    m2.metric("Total Runs", len(results))
+    m1.metric("Best Run", f"{best_run.label}", f"Index: {best_index:.1f}")
+    m2.metric("Total Runs", len(runs))
     m3.metric("Total Questions", f"{total_questions:,}")
     m4.metric("Dataset Index", f"{best_sr.get('dataset_index', 0):.1f}")
     m5.metric("Market Index", f"{best_sr.get('market_index', 0):.1f}")
@@ -263,11 +389,12 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
 
     st.subheader("All Runs")
     rows: list[dict[str, Any]] = []
-    for result in results:
-        sr = result.get("scoring_result", {})
+    for run in runs:
+        sr = run.scoring_result
         n_total = sr.get("n_dataset", 0) + sr.get("n_market", 0)
         rows.append({
-            "Run": _run_label(result),
+            "Run": run.label,
+            "Rounds": run.n_rounds,
             "Overall Index": round(sr.get("overall_index", 0), 1),
             "Overall Brier": round(sr.get("overall_brier", 0), 4),
             "Dataset Index": round(sr.get("dataset_index", 0), 1),
@@ -279,10 +406,40 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     df = pd.DataFrame(rows).sort_values("Overall Index", ascending=False)
     st.dataframe(df, hide_index=True, use_container_width=True)
 
+    # Round drill-down
+    st.subheader("Round Drill-Down")
+    run_labels = [r.label for r in runs]
+    selected_drill = st.selectbox(
+        "Select run to view rounds", run_labels, index=0, key="drill_run"
+    )
+    drill_run = next(r for r in runs if r.label == selected_drill)
+
+    if drill_run.n_rounds <= 1:
+        st.info("This run has only 1 round — no drill-down available.")
+    else:
+        round_rows: list[dict[str, Any]] = []
+        for rf in sorted(
+            drill_run.per_round_results,
+            key=lambda r: _round_name_from_result(r),
+        ):
+            rsr = rf.get("scoring_result", {})
+            rn = rsr.get("n_dataset", 0) + rsr.get("n_market", 0)
+            round_rows.append({
+                "Round": _round_name_from_result(rf),
+                "Overall Index": round(rsr.get("overall_index", 0), 1),
+                "Overall Brier": round(rsr.get("overall_brier", 0), 4),
+                "Dataset Index": round(rsr.get("dataset_index", 0), 1),
+                "Market Index": round(rsr.get("market_index", 0), 1),
+                "N Questions": rn,
+            })
+        round_df = pd.DataFrame(round_rows)
+        st.dataframe(round_df, hide_index=True, use_container_width=True)
+
     all_qsets: set[str] = set()
-    for result in results:
-        qsets = result.get("metadata", {}).get("question_sets_used", [])
-        all_qsets.update(qsets)
+    for run in runs:
+        for rf in run.per_round_results:
+            qsets = rf.get("metadata", {}).get("question_sets_used", [])
+            all_qsets.update(qsets)
     if all_qsets:
         st.subheader("Rounds Covered")
         st.markdown(", ".join(sorted(all_qsets)))
@@ -307,7 +464,7 @@ def view_overview(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     st.dataframe(ref_df, hide_index=True, use_container_width=True)
 
 
-def view_leaderboard(results: list[ResultData]) -> None:
+def view_leaderboard(runs: list[AggregateRun]) -> None:
     st.header("Official ForecastBench Leaderboard")
 
     lb_name = st.radio(
@@ -357,7 +514,7 @@ def view_leaderboard(results: list[ResultData]) -> None:
                 display[dst_col] = val
         display_rows.append(display)
 
-    our_slugs = [_run_label(r) for r in results]
+    our_slugs = [r.slug for r in runs]
     matched_rows: list[dict[str, Any]] = []
     for display in display_rows:
         lb_model = str(display.get("Model", ""))
@@ -392,10 +549,10 @@ def view_leaderboard(results: list[ResultData]) -> None:
         )
 
 
-def view_heatmap(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+def view_heatmap(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
     st.header("Run × Source Heatmap")
 
-    if not results:
+    if not runs:
         st.warning("No result files found in results/ directory.")
         return
 
@@ -418,17 +575,17 @@ def view_heatmap(results: list[ResultData], resolved_dicts: list[dict[str, Any]]
     show_index = metric_mode == "Brier Index"
 
     if group_mode == "By Track":
-        _view_heatmap_by_track(results, resolved_dicts, show_index)
+        _view_heatmap_by_track(runs, resolved_dicts, show_index)
     else:
-        _view_heatmap_by_source(results, resolved_dicts, show_index)
+        _view_heatmap_by_source(runs, resolved_dicts, show_index)
 
 
 def _view_heatmap_by_source(
-    results: list[ResultData],
+    runs: list[AggregateRun],
     resolved_dicts: list[dict[str, Any]],
     show_index: bool,
 ) -> None:
-    run_labels, sources, matrix, counts = _build_source_brier_matrix(results, resolved_dicts)
+    run_labels, sources, matrix, counts = _build_source_brier_matrix(runs, resolved_dicts)
 
     sources_sorted = _sort_sources_by_track(sources)
     source_idx_map = {s: i for i, s in enumerate(sources)}
@@ -530,13 +687,11 @@ def _view_heatmap_by_source(
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**By Run**")
-        for result in sorted(
-            results, key=lambda r: r.get("scoring_result", {}).get("overall_brier", 1.0)
-        ):
-            sr = result.get("scoring_result", {})
+        for run in sorted(runs, key=lambda r: r.scoring_result.get("overall_brier", 1.0)):
+            sr = run.scoring_result
             bs = sr.get("overall_brier", 0)
             idx = sr.get("overall_index", 0)
-            st.text(f"{_run_label(result)}: Brier {bs:.4f} | Index {idx:.1f}")
+            st.text(f"{run.label}: Brier {bs:.4f} | Index {idx:.1f}")
     with col2:
         st.markdown("**By Source (avg across runs)**")
         source_avgs: dict[str, list[float]] = {}
@@ -555,14 +710,13 @@ def _view_heatmap_by_source(
 
 
 def _view_heatmap_by_track(
-    results: list[ResultData],
+    runs: list[AggregateRun],
     resolved_dicts: list[dict[str, Any]],
     show_index: bool,
 ) -> None:
     overall_brier_map: dict[str, float] = {}
-    for result in results:
-        sr = result.get("scoring_result", {})
-        overall_brier_map[_run_label(result)] = sr.get("overall_brier", 1.0)
+    for run in runs:
+        overall_brier_map[run.label] = run.scoring_result.get("overall_brier", 1.0)
     run_labels = sorted(overall_brier_map.keys(), key=lambda r: overall_brier_map.get(r, 1.0))
 
     tracks = ["dataset", "market"]
@@ -570,8 +724,8 @@ def _view_heatmap_by_track(
     track_counts: list[list[int]] = []
 
     for run_label in run_labels:
-        result = next(r for r in results if _run_label(r) == run_label)
-        sr = result.get("scoring_result", {})
+        run = next(r for r in runs if r.label == run_label)
+        sr = run.scoring_result
         ds_bs = sr.get("dataset_brier")
         mk_bs = sr.get("market_brier")
         ds_n = sr.get("n_dataset", 0)
@@ -644,17 +798,17 @@ def _view_heatmap_by_track(
 
 
 
-def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+def view_failures(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
     st.header("Failure Explorer")
 
-    if not results:
+    if not runs:
         st.warning("No result files found.")
         return
 
-    run_names = [_run_label(r) for r in results]
+    run_names = [r.label for r in runs]
     selected_run = st.selectbox("Select run", run_names, index=0, key="failures_run")
-    result = next(r for r in results if _run_label(r) == selected_run)
-    forecasts: dict[str, float] = result["forecasts"]
+    run = next(r for r in runs if r.label == selected_run)
+    forecasts: dict[str, float] = run.combined_forecasts
 
     question_data: list[dict[str, Any]] = []
     for d in resolved_dicts:
@@ -673,7 +827,6 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
             "_brier_raw": bs,
         })
 
-    # Key findings summary
     source_stats: dict[str, dict[str, float | int]] = {}
     for q in question_data:
         src = q["Source"]
@@ -827,21 +980,20 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
     worst_df = pd.DataFrame(worst_rows)
     st.dataframe(worst_df, hide_index=True, use_container_width=True, height=600)
 
-    # --- Side-by-side failure comparison ---
     st.divider()
     st.subheader("Compare Failures Across Runs")
 
     other_runs = [r for r in run_names if r != selected_run]
-    compare_run = st.selectbox(
+    compare_run_name = st.selectbox(
         "Compare against run",
         ["(none)"] + other_runs,
         index=0,
         key="failures_compare",
     )
 
-    if compare_run != "(none)":
-        result_b = next(r for r in results if _run_label(r) == compare_run)
-        forecasts_b: dict[str, float] = result_b["forecasts"]
+    if compare_run_name != "(none)":
+        run_b = next(r for r in runs if r.label == compare_run_name)
+        forecasts_b: dict[str, float] = run_b.combined_forecasts
 
         source_compare_rows: list[dict[str, Any]] = []
         for src in source_list:
@@ -881,10 +1033,10 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
                 "Source": src,
                 "Track": track,
                 f"{selected_run} Brier": round(mean_a, 4),
-                f"{compare_run} Brier": round(mean_b, 4),
+                f"{compare_run_name} Brier": round(mean_b, 4),
                 "Delta Brier": round(mean_b - mean_a, 4),
                 f"{selected_run} % CW": round(pct_cw_a, 1),
-                f"{compare_run} % CW": round(pct_cw_b, 1),
+                f"{compare_run_name} % CW": round(pct_cw_b, 1),
                 "Delta % CW": round(pct_cw_b - pct_cw_a, 1),
             })
 
@@ -898,7 +1050,7 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
             best_row = min(source_compare_rows, key=lambda r: r["Delta Brier"])
             worst_row = max(source_compare_rows, key=lambda r: r["Delta Brier"])
             summary_parts = [
-                f"**{compare_run}** improved on **{improved}/{n_sources}** sources, "
+                f"**{compare_run_name}** improved on **{improved}/{n_sources}** sources, "
                 f"worsened on **{worsened}/{n_sources}**.",
             ]
             if best_row["Delta Brier"] < 0:
@@ -918,14 +1070,14 @@ def view_failures(results: list[ResultData], resolved_dicts: list[dict[str, Any]
             )
 
 
-def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+def view_calibration(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
     st.header("Calibration Curves")
 
-    if not results:
+    if not runs:
         st.warning("No result files found.")
         return
 
-    run_names = [_run_label(r) for r in results]
+    run_names = [r.label for r in runs]
     selected_runs = st.multiselect("Select runs to compare", run_names, default=run_names[:3])
 
     if not selected_runs:
@@ -950,9 +1102,8 @@ def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, A
     metrics_rows: list[dict[str, Any]] = []
 
     for run_name in selected_runs:
-        result = next(r for r in results if _run_label(r) == run_name)
-        forecasts = result["forecasts"]
-        cal_bins = analyze_calibration(forecasts, resolved, n_bins=n_bins)
+        run = next(r for r in runs if r.label == run_name)
+        cal_bins = analyze_calibration(run.combined_forecasts, resolved, n_bins=n_bins)
         if not cal_bins:
             continue
 
@@ -976,7 +1127,7 @@ def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, A
             )
         )
 
-        pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
+        pairs = [(_lookup_forecast(run.combined_forecasts, q.id), q.outcome) for q in resolved]
         cal = calibration_metrics(pairs, n_bins=n_bins)
         metrics_rows.append(
             {"Run": run_name, "ECE": cal["ece"], "MCE": cal["mce"], "Sharpness": cal["sharpness"]}
@@ -1023,16 +1174,16 @@ def view_calibration(results: list[ResultData], resolved_dicts: list[dict[str, A
 
 
 def view_question_browser(
-    results: list[ResultData], resolved_dicts: list[dict[str, Any]]
+    runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]
 ) -> None:
     st.header("Question Browser")
 
-    if not results or not resolved_dicts:
+    if not runs or not resolved_dicts:
         st.warning("No data available.")
         return
 
     sources = sorted({d["source"] for d in resolved_dicts})
-    run_names = [_run_label(r) for r in results]
+    run_names = [r.label for r in runs]
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -1081,8 +1232,8 @@ def view_question_browser(
         briers: list[float] = []
         forecasts_list: list[float] = []
         for run_name in selected_runs:
-            result = next(r for r in results if _run_label(r) == run_name)
-            f = _lookup_forecast(result["forecasts"], d["id"])
+            run = next(r for r in runs if r.label == run_name)
+            f = _lookup_forecast(run.combined_forecasts, d["id"])
             bs = brier_score(f, d["outcome"])
             row[f"{run_name} (f)"] = round(f, 3)
             row[f"{run_name} (bs)"] = round(bs, 4)
@@ -1107,14 +1258,14 @@ def view_question_browser(
         st.info("No questions match the current filters.")
 
 
-def view_compare(results: list[ResultData], resolved_dicts: list[dict[str, Any]]) -> None:
+def view_compare(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
     st.header("Compare Runs")
 
-    if len(results) < 2:
-        st.warning("Need at least 2 result files for comparison.")
+    if len(runs) < 2:
+        st.warning("Need at least 2 runs for comparison.")
         return
 
-    run_names = [_run_label(r) for r in results]
+    run_names = [r.label for r in runs]
     col1, col2 = st.columns(2)
     with col1:
         run_a_name = st.selectbox("Run A", run_names, index=0, key="compare_a")
@@ -1126,27 +1277,19 @@ def view_compare(results: list[ResultData], resolved_dicts: list[dict[str, Any]]
         st.info("Select two different runs to compare.")
         return
 
-    result_a = next(r for r in results if _run_label(r) == run_a_name)
-    result_b = next(r for r in results if _run_label(r) == run_b_name)
+    run_a = next(r for r in runs if r.label == run_a_name)
+    run_b = next(r for r in runs if r.label == run_b_name)
 
-    qsets_a = set(result_a.get("metadata", {}).get("question_sets_used", []))
-    qsets_b = set(result_b.get("metadata", {}).get("question_sets_used", []))
-    if qsets_a and qsets_b and qsets_a != qsets_b:
-        st.warning("These runs cover different question sets — comparison may not be apples-to-apples.")
-
-    # --- Pairwise aggregate metrics ---
-    st.subheader("Aggregate Comparison")
-
-    forecasts_a: dict[str, float] = result_a["forecasts"]
-    forecasts_b: dict[str, float] = result_b["forecasts"]
-    outcomes_a: dict[str, int] = result_a.get("outcomes", {})
-    outcomes_b: dict[str, int] = result_b.get("outcomes", {})
-    outcomes = outcomes_a or outcomes_b
+    forecasts_a = run_a.combined_forecasts
+    forecasts_b = run_b.combined_forecasts
+    outcomes = run_a.combined_outcomes or run_b.combined_outcomes
 
     shared_ids = set(forecasts_a.keys()) & set(forecasts_b.keys()) & set(outcomes.keys())
     if not shared_ids:
         st.warning("No shared questions between these runs.")
         return
+
+    st.subheader("Aggregate Comparison")
 
     diffs: list[float] = []
     a_wins = 0
@@ -1167,8 +1310,8 @@ def view_compare(results: list[ResultData], resolved_dicts: list[dict[str, Any]]
     se = math.sqrt(var_diff / n) if n > 1 else 0.0
     t_stat = mean_diff / se if se > 0 else 0.0
 
-    sr_a = result_a.get("scoring_result", {})
-    sr_b = result_b.get("scoring_result", {})
+    sr_a = run_a.scoring_result
+    sr_b = run_b.scoring_result
 
     brier_a = sr_a.get("overall_brier", 0)
     brier_b = sr_b.get("overall_brier", 0)
@@ -1229,7 +1372,6 @@ def view_compare(results: list[ResultData], resolved_dicts: list[dict[str, Any]]
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- Head-to-Head disagreements ---
     st.divider()
     st.subheader("Head-to-Head Disagreements")
 
@@ -1244,8 +1386,8 @@ def view_compare(results: list[ResultData], resolved_dicts: list[dict[str, Any]]
 
     for d in resolved_dicts:
         qid = d["id"]
-        fa = _lookup_forecast(result_a["forecasts"], qid)
-        fb = _lookup_forecast(result_b["forecasts"], qid)
+        fa = _lookup_forecast(run_a.combined_forecasts, qid)
+        fb = _lookup_forecast(run_b.combined_forecasts, qid)
         diff = abs(fa - fb)
         if diff < threshold:
             continue
@@ -1292,40 +1434,60 @@ def main() -> None:
     st.set_page_config(page_title="ForecastBench Dashboard", layout="wide")
     st.title("ForecastBench Experiment Dashboard")
 
-    results = load_all_results()
-    if not results:
+    all_results = load_all_results()
+    if not all_results:
         st.error(
             "No result files found in results/ directory. "
             "Run `uv run python eval.py` first to generate results."
         )
         return
 
-    type_filter = st.sidebar.selectbox(
-        "Filter by type",
-        ["All", "Single-round only", "All-rounds only"],
+    view_mode = st.sidebar.radio(
+        "View mode",
+        ["Aggregate", "Individual rounds"],
         index=0,
-        key="type_filter",
+        key="view_mode",
     )
-    if type_filter == "Single-round only":
-        results = [r for r in results if _run_type(r) == "single-round"]
-    elif type_filter == "All-rounds only":
-        results = [r for r in results if _run_type(r) == "all-rounds"]
 
-    run_names = [_run_label(r) for r in results]
+    if view_mode == "Individual rounds":
+        runs = _group_results_into_runs(all_results)
+        individual_runs: list[AggregateRun] = []
+        for r in all_results:
+            slug = str(r["model_slug"])
+            rnd = _round_name_from_result(r)
+            individual_label = f"{slug}/{rnd}"
+            sr = r.get("scoring_result", {})
+            individual_runs.append(AggregateRun(
+                slug=individual_label,
+                n_rounds=1,
+                rounds=[rnd],
+                combined_forecasts=r.get("forecasts", {}),
+                combined_outcomes=r.get("outcomes", {}),
+                scoring_result=sr,
+                per_round_results=[r],
+                combined_sources=r.get("sources", {}),
+            ))
+        runs = individual_runs
+    else:
+        run_dicts = group_results(all_results)
+        runs = [_dict_to_aggregate(d) for d in run_dicts]
+
+    run_names = [r.label for r in runs]
     selected_runs = st.sidebar.multiselect(
         "Select runs", run_names, default=run_names, key="global_runs"
     )
-    results = [r for r in results if _run_label(r) in selected_runs]
-    st.sidebar.caption(f"{len(results)} of {len(run_names)} runs selected")
+    runs = [r for r in runs if r.label in selected_runs]
+    st.sidebar.caption(f"{len(runs)} of {len(run_names)} runs selected")
 
-    st.sidebar.markdown(f"**{len(results)} runs loaded**")
-    for r in sorted(results, key=lambda x: x.get("scoring_result", {}).get("overall_brier", 1)):
-        sr = r.get("scoring_result", {})
+    st.sidebar.markdown(f"**{len(runs)} runs loaded**")
+    for run in sorted(runs, key=lambda x: x.scoring_result.get("overall_brier", 1)):
+        sr = run.scoring_result
         bs = sr.get("overall_brier", 0)
         idx = sr.get("overall_index", 0)
-        round_info = _run_round_info(r)
-        st.sidebar.text(f"{_run_label(r)}: Index {idx:.1f} (Brier {bs:.4f})")
-        st.sidebar.caption(f"  {round_info}")
+        if view_mode == "Aggregate":
+            st.sidebar.text(f"{run.label} ({run.n_rounds} rounds): Index {idx:.1f}")
+        else:
+            st.sidebar.text(f"{run.label}: Index {idx:.1f} (Brier {bs:.4f})")
     st.sidebar.markdown(
         "---\n"
         "Backtest of [ForecastBench](https://www.forecastbench.org/) "
@@ -1349,19 +1511,19 @@ def main() -> None:
         resolved_dicts = load_resolved_questions()
 
     with tab1:
-        view_overview(results, resolved_dicts)
+        view_overview(runs, resolved_dicts)
     with tab2:
-        view_leaderboard(results)
+        view_leaderboard(runs)
     with tab3:
-        view_failures(results, resolved_dicts)
+        view_failures(runs, resolved_dicts)
     with tab4:
-        view_heatmap(results, resolved_dicts)
+        view_heatmap(runs, resolved_dicts)
     with tab5:
-        view_compare(results, resolved_dicts)
+        view_compare(runs, resolved_dicts)
     with tab6:
-        view_calibration(results, resolved_dicts)
+        view_calibration(runs, resolved_dicts)
     with tab7:
-        view_question_browser(results, resolved_dicts)
+        view_question_browser(runs, resolved_dicts)
     with tab8:
         view_about()
 
