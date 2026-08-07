@@ -26,6 +26,7 @@
 - `uv run python verify_parity.py --score` to also compare scores against leaderboard
 - `uv run python verify_parity.py --refresh` to clear cached upstream data first
 - `uv run python check_staleness.py` to check if local main is behind remote
+- `uv run --extra dashboard streamlit run dashboard.py` to launch interactive results dashboard
 
 ## Architecture
 - **forecastbench-parity** (external package) - Frozen competition contract: scoring, submission, question handling
@@ -40,6 +41,7 @@
 - **verify_parity.py** - Pipeline parity verifier (fetches live from upstream ForecastBench repo/leaderboard)
 - **check_staleness.py** - Git staleness check to warn when local main is behind remote
 - **tournament.py** - Tournament analysis with cost tracking, bootstrap comparisons, and round filtering
+- **dashboard.py** - Interactive Streamlit + Plotly dashboard for exploring experiment results
 - **tests/** - pytest test suite
 - **archive/** - Archived experiment files (calibrate, ensemble, hybrid, multi-model, belief, statistical, timeseries RAG)
 
