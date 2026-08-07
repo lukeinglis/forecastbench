@@ -1,0 +1,47 @@
+{
+  "check": "parity_part_a_superforecaster",
+  "leaderboard_model": "Superforecaster median forecast",
+  "n_match": true,
+  "n_dataset": 521,
+  "n_market": 57,
+  "n_missing": 0,
+  "threshold": 0.5,
+  "all_pass": false,
+  "dimensions": {
+    "overall": {
+      "our_index": 66.1,
+      "leaderboard_index": 68.2,
+      "delta": -2.1,
+      "our_brier": 0.114587,
+      "leaderboard_brier": 0.101,
+      "pass": false
+    },
+    "dataset": {
+      "our_index": 61.8,
+      "leaderboard_index": 63.9,
+      "delta": -2.1,
+      "our_brier": 0.146154,
+      "leaderboard_brier": 0.13,
+      "pass": false
+    },
+    "market": {
+      "our_index": 71.2,
+      "leaderboard_index": 73.1,
+      "delta": -1.9,
+      "our_brier": 0.08302,
+      "leaderboard_brier": 0.072,
+      "pass": false
+    }
+  },
+  "scoring_result": {
+    "dataset_brier": 0.14615394524952016,
+    "dataset_index": 61.76991430175441,
+    "market_brier": 0.08302036951754387,
+    "market_index": 71.18674445371647,
+    "overall_brier": 0.114587157383532,
+    "overall_index": 66.14927513574753,
+    "n_dataset": 521,
+    "n_market": 57,
+    "n_missing": 0
+  }
+}
