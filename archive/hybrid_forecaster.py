@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from baseline_agent import aforecast, aforecast_multi_horizon
+from lab_forecaster import aforecast, aforecast_multi_horizon
 from belief_forecaster import belief_forecast, belief_forecast_multi_horizon
 from fetch_data import Question
 from logging_config import get_logger

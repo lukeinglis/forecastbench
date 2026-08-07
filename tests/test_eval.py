@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fetch_data import QuestionSet, Question, ResolvedQuestion
-from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync, _run_async, compute_training_base_rates
+from eval import split_held_out, save_result, load_previous_results, run_eval, _run_sync, _run_async
 from score import ScoringResult
 
 
@@ -429,6 +429,60 @@ class TestEvalResultCompositeIds:
         assert "mq1" in resolved_ids
         assert "dq1" not in resolved_ids
 
+    def test_per_date_resolved_deduplicates_for_forecasting(self, tmp_path: Path, monkeypatch: object) -> None:
+        """Dataset questions with resolution_dates get per-date forecasting and composite IDs."""
+        import eval as eval_mod
+
+        resolved = [
+            ResolvedQuestion(
+                id="dq1", source="fred", question="Dataset Q",
+                outcome=1, forecast_due_date="2024-01-01",
+                resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+                resolution_date="2024-09-01",
+            ),
+            ResolvedQuestion(
+                id="mq1", source="metaculus", question="Market Q",
+                outcome=0, forecast_due_date="2024-01-01",
+            ),
+        ]
+        question_sets = [
+            QuestionSet(
+                forecast_due_date="2024-01-01",
+                question_set="set_0",
+                questions=[
+                    Question(id="dq1", source="fred", question="Dataset Q",
+                             resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"]),
+                    Question(id="mq1", source="metaculus", question="Market Q"),
+                ],
+            ),
+            QuestionSet(forecast_due_date="2024-02-01", question_set="set_1", questions=[]),
+            QuestionSet(forecast_due_date="2024-03-01", question_set="set_2", questions=[]),
+        ]
+
+        results_dir = tmp_path / "results"
+        results_dir.mkdir()
+
+        call_count = 0
+
+        def _counting_forecaster(question, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return 0.5
+
+        monkeypatch.setattr(eval_mod, "RESULTS_DIR", results_dir)
+        monkeypatch.setattr(eval_mod, "load_data", lambda: (question_sets, resolved))
+        monkeypatch.setattr(eval_mod, "CACHE_DIR", tmp_path / "cache")
+
+        eval_result = asyncio.run(run_eval(_counting_forecaster, n_held_out=2, raw=True))
+
+        assert call_count == 1 + 3, (
+            f"Expected 4 forecaster calls (1 market + 3 per-date for dataset), "
+            f"NOT 4+3=7 (one per resolved entry). Got {call_count}"
+        )
+        resolved_ids = {rq.id for rq in eval_result.resolved}
+        assert "dq1_2024-09-01" in resolved_ids
+        assert "mq1" in resolved_ids
+
 
 class TestDifficultyAdjustmentLogging:
     def test_skip_message_includes_reason(self, tmp_path: Path, monkeypatch: object, caplog: object) -> None:
@@ -467,70 +521,5 @@ class TestDifficultyAdjustmentLogging:
         assert skip_events[0]["note"] == "scores_not_difficulty_adjusted_this_run"
 
 
-def _make_training_resolved(source: str, n_total: int, n_yes: int) -> list[ResolvedQuestion]:
-    """Create n_total resolved questions for a source with n_yes YES outcomes."""
-    resolved: list[ResolvedQuestion] = []
-    for i in range(n_total):
-        resolved.append(
-            ResolvedQuestion(
-                id=f"{source}_{i}",
-                source=source,
-                question=f"Q{i}",
-                outcome=1 if i < n_yes else 0,
-                forecast_due_date="2024-01-01",
-            )
-        )
-    return resolved
-
-
-class TestTrainingBaseRatesComputed:
-    def test_correct_rates(self) -> None:
-        """Verify compute_training_base_rates returns correct per-source YES rates."""
-        resolved = (
-            _make_training_resolved("fred", 100, 46)
-            + _make_training_resolved("dbnomics", 80, 62)
-        )
-        rates = compute_training_base_rates(resolved)
-        assert rates["fred"] == round(46 / 100, 3)
-        assert rates["dbnomics"] == round(62 / 80, 3)
-
-    def test_multiple_sources(self) -> None:
-        """Verify rates are computed independently per source."""
-        resolved = (
-            _make_training_resolved("fred", 60, 30)
-            + _make_training_resolved("yfinance", 50, 25)
-            + _make_training_resolved("acled", 200, 100)
-        )
-        rates = compute_training_base_rates(resolved)
-        assert rates["fred"] == 0.5
-        assert rates["yfinance"] == 0.5
-        assert rates["acled"] == 0.5
-
-
-
-
-class TestTrainingBaseRatesMinSamples:
-    def test_sources_below_threshold_excluded(self) -> None:
-        """Verify sources with < 50 samples are excluded from rates."""
-        resolved = (
-            _make_training_resolved("fred", 100, 50)
-            + _make_training_resolved("dbnomics", 49, 25)
-        )
-        rates = compute_training_base_rates(resolved)
-        assert "fred" in rates
-        assert "dbnomics" not in rates
-
-    def test_exactly_50_included(self) -> None:
-        """Verify sources with exactly 50 samples are included."""
-        resolved = _make_training_resolved("fred", 50, 25)
-        rates = compute_training_base_rates(resolved)
-        assert "fred" in rates
-        assert rates["fred"] == 0.5
-
-    def test_custom_min_samples(self) -> None:
-        """Verify custom min_samples threshold works."""
-        resolved = _make_training_resolved("fred", 10, 5)
-        assert "fred" not in compute_training_base_rates(resolved, min_samples=50)
-        assert "fred" in compute_training_base_rates(resolved, min_samples=10)
 
 

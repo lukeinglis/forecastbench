@@ -4,16 +4,11 @@ version = "0.1.0"
 description = "Backtest harness for ForecastBench forecasting evaluation"
 requires-python = ">=3.11"
 dependencies = [
-    "requests>=2.31",
-    "pydantic>=2.0",
+    "forecastbench-parity @ git+https://github.com/lukeinglis/forecastbench-parity.git@v0.1.1",
     "litellm>=1.0",
     "tqdm>=4.60",
     "structlog>=24.0",
     "google-cloud-aiplatform>=1.161.0",
-    "its-hub>=0.4",
-    "fredapi>=0.5.0",
-    "yfinance>=0.2.0",
-    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +30,7 @@ dev = [
 
 [tool.ruff]
 line-length = 100
+exclude = ["archive"]
 
 [tool.mypy]
 python_version = "3.11"

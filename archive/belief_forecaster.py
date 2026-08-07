@@ -12,7 +12,7 @@ from typing import Any
 
 import litellm
 
-from baseline_agent import (
+from lab_forecaster import (
     MODEL,
     TEMPERATURE,
     MAX_TOKENS,

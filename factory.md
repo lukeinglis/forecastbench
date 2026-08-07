@@ -6,17 +6,19 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 ## Scope
 
 ### Mutable (files the factory MAY modify)
-- `fetch_data.py`
-- `score.py`
 - `eval.py`
 - `dummy_forecaster.py`
 - `cutoff.py`
-- `baseline_agent.py`
+- `lab_forecaster.py`
 - `analyze.py`
+- `verify_parity.py`
 - `tests/**`
 - `pyproject.toml`
 
 ### Read-Only (files the factory MUST NOT modify)
+- `fetch_data.py` — competition pipeline (data fetching + resolution matching)
+- `score.py` — competition scoring (Brier score/index formulas)
+- `submit.py` — competition submission format
 - `CLAUDE.md`
 - `factory.md`
 - `.github/**`
@@ -31,6 +33,8 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - Binary outcomes only: `{0, 1}`
 - `forecast() -> float` signature must be preserved (no dict/union return types)
 - Composite cache keys use `_` separator (not `|`)
+- **Do not clone, modify, commit, push, tag, or interact with the forecastbench-parity repo** — it is a protected dependency. The factory treats it as a read-only upstream package. If parity changes are needed, open an issue on the backtester describing what needs to change and stop. Do not attempt workarounds (cloning, temporary checkouts, git submodules, or any other mechanism to reach the parity repo).
+- **Do not upgrade the forecastbench-parity dependency pin** in pyproject.toml without explicit human approval via a reviewed PR
 
 ## Eval
 

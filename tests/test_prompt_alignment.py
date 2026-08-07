@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fetch_data import Question
-from baseline_agent import _build_prompt
+from lab_forecaster import _build_prompt
 
 
 def _make_question(

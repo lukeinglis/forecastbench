@@ -93,7 +93,7 @@ class TestAsyncMultiHorizonFallbackNotCached:
             mock_multi = AsyncMock(return_value=None)
             with patch("eval.is_async_forecaster", return_value=True):
                 from eval import _run_async
-                with patch("baseline_agent.aforecast_multi_horizon", mock_multi):
+                with patch("lab_forecaster.aforecast_multi_horizon", mock_multi):
                     async_forecaster = AsyncMock(return_value=0.5)
                     forecasts = asyncio.run(
                         _run_async(async_forecaster, [q], "test_slug", multi_horizon=True)
@@ -121,7 +121,7 @@ class TestAsyncMultiHorizonFallbackNotCached:
             mock_multi = AsyncMock(return_value=[0.3, 0.7])
             with patch("eval.is_async_forecaster", return_value=True):
                 from eval import _run_async
-                with patch("baseline_agent.aforecast_multi_horizon", mock_multi):
+                with patch("lab_forecaster.aforecast_multi_horizon", mock_multi):
                     async_forecaster = AsyncMock(return_value=0.5)
                     forecasts = asyncio.run(
                         _run_async(async_forecaster, [q], "test_slug", multi_horizon=True)
@@ -148,7 +148,7 @@ class TestAsyncMultiHorizonFallbackNotCached:
             mock_multi = AsyncMock(side_effect=RuntimeError("API error"))
             with patch("eval.is_async_forecaster", return_value=True):
                 from eval import _run_async
-                with patch("baseline_agent.aforecast_multi_horizon", mock_multi):
+                with patch("lab_forecaster.aforecast_multi_horizon", mock_multi):
                     async_forecaster = AsyncMock(return_value=0.5)
                     forecasts = asyncio.run(
                         _run_async(async_forecaster, [q], "test_slug", multi_horizon=True)
@@ -177,7 +177,7 @@ class TestAsyncMultiHorizonFallbackNotCached:
             mock_fail = AsyncMock(return_value=None)
             async_forecaster_fail = AsyncMock(side_effect=RuntimeError("API down"))
             from eval import _run_async
-            with patch("baseline_agent.aforecast_multi_horizon", mock_fail):
+            with patch("lab_forecaster.aforecast_multi_horizon", mock_fail):
                 forecasts1 = asyncio.run(
                     _run_async(async_forecaster_fail, [q], "test_slug", multi_horizon=True)
                 )
@@ -187,7 +187,7 @@ class TestAsyncMultiHorizonFallbackNotCached:
             # Second run: returns real value, IS cached
             async_forecaster_ok = AsyncMock(return_value=0.5)
             mock_ok = AsyncMock(return_value=[0.82])
-            with patch("baseline_agent.aforecast_multi_horizon", mock_ok):
+            with patch("lab_forecaster.aforecast_multi_horizon", mock_ok):
                 forecasts2 = asyncio.run(
                     _run_async(async_forecaster_ok, [q], "test_slug", multi_horizon=True)
                 )

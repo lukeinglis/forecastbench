@@ -165,21 +165,3 @@ class TestAssembleValidation:
             assemble_submission(forecasts, questions, meta)
 
 
-class TestToFloat:
-    def test_to_float_returns_float(self) -> None:
-        from baseline_agent import _to_float
-        assert _to_float(0.5) == 0.5
-        assert isinstance(_to_float(0.5), float)
-
-    def test_to_float_int_input(self) -> None:
-        from baseline_agent import _to_float
-        assert _to_float(1) == 1.0
-        assert isinstance(_to_float(1), float)
-
-    def test_to_float_zero(self) -> None:
-        from baseline_agent import _to_float
-        assert _to_float(0) == 0.0
-
-    def test_to_float_preserves_value(self) -> None:
-        from baseline_agent import _to_float
-        assert _to_float(0.123456789) == 0.123456789

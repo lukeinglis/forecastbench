@@ -7,12 +7,6 @@ import pytest
 from fetch_data import QuestionSet, Question, ResolvedQuestion
 
 
-@pytest.fixture(autouse=True)
-def _disable_ensemble(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default to single-call mode so existing tests aren't affected by ensemble."""
-    monkeypatch.setattr("baseline_agent.ENSEMBLE_N", 1)
-
-
 @pytest.fixture
 def five_question_fixture() -> tuple[list[float], list[int], list[float], float, float]:
     """Hand-computed 5-question fixture.
@@ -52,6 +46,20 @@ def mixed_resolved_questions() -> list[ResolvedQuestion]:
     market_qs = [
         ResolvedQuestion(id="m1", source="metaculus", question="Market Q1", outcome=1, forecast_due_date="2024-01-01"),
         ResolvedQuestion(id="m2", source="polymarket", question="Market Q2", outcome=0, forecast_due_date="2024-01-01"),
+    ]
+    return dataset_qs + market_qs
+
+
+@pytest.fixture
+def unbalanced_resolved_questions() -> list[ResolvedQuestion]:
+    """3 dataset + 1 market — unbalanced split where equal-weight != count-weighted."""
+    dataset_qs = [
+        ResolvedQuestion(id="d1", source="acled", question="Dataset Q1", outcome=1, forecast_due_date="2024-01-01"),
+        ResolvedQuestion(id="d2", source="acled", question="Dataset Q2", outcome=0, forecast_due_date="2024-01-01"),
+        ResolvedQuestion(id="d3", source="acled", question="Dataset Q3", outcome=1, forecast_due_date="2024-01-01"),
+    ]
+    market_qs = [
+        ResolvedQuestion(id="m1", source="metaculus", question="Market Q1", outcome=0, forecast_due_date="2024-01-01"),
     ]
     return dataset_qs + market_qs
 
