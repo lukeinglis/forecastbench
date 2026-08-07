@@ -78,3 +78,12 @@
 - Resolution pipeline must match upstream — changes to fetch_data.py resolution logic require running verify_parity.py and tests/test_compliance.py
 - No data leakage — prompts cannot contain information from after forecast_due_date
 - Submission format must pass submit.py validate
+
+## Parity Repo Boundary — INVIOLABLE
+- The `forecastbench-parity` repo (lukeinglis/forecastbench-parity) is a **protected external dependency**
+- **NEVER** clone, checkout, modify, commit to, push to, tag, or interact with the parity repo in any way
+- **NEVER** use `git clone`, `gh repo clone`, or any mechanism to obtain a working copy of the parity repo
+- **NEVER** upgrade the forecastbench-parity pin in pyproject.toml without a reviewed PR approved by a human
+- If parity bugs are found: document them in an issue on this repo or the parity repo, then stop. The human will fix them.
+- The entire point of the separate repo is to prevent automation from touching competition-critical scoring code
+- This boundary applies to ALL agents: CEO, Builder, Researcher, and any other factory agent
