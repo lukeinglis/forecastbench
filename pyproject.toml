@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Backtest harness for ForecastBench forecasting evaluation"
 requires-python = ">=3.11"
 dependencies = [
-    "forecastbench-parity @ git+https://github.com/lukeinglis/forecastbench-parity.git@v0.1.1",
+    "forecastbench-parity @ git+https://github.com/lukeinglis/forecastbench-parity.git@v0.1.2",
     "litellm>=1.0",
     "tqdm>=4.60",
     "structlog>=24.0",
