@@ -1311,6 +1311,13 @@ def main() -> None:
     elif type_filter == "All-rounds only":
         results = [r for r in results if _run_type(r) == "all-rounds"]
 
+    run_names = [_run_label(r) for r in results]
+    selected_runs = st.sidebar.multiselect(
+        "Select runs", run_names, default=run_names, key="global_runs"
+    )
+    results = [r for r in results if _run_label(r) in selected_runs]
+    st.sidebar.caption(f"{len(results)} of {len(run_names)} runs selected")
+
     st.sidebar.markdown(f"**{len(results)} runs loaded**")
     for r in sorted(results, key=lambda x: x.get("scoring_result", {}).get("overall_brier", 1)):
         sr = r.get("scoring_result", {})
