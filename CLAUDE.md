@@ -19,6 +19,7 @@
 - `uv run python lab_forecaster.py` to run lab forecaster (shortcut)
 - `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent lab` to run with Vertex AI
 - `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent lab` to run with alternate model
+- `uv run python eval.py --agent lab --run-label thinking` to tag a run with a technique label
 - `uv run python analyze.py --compare` to compare all saved results
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage

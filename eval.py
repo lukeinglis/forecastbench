@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import inspect
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import timezone
 from pathlib import Path
 from typing import Any, NamedTuple, Protocol, Union
 
@@ -155,11 +156,32 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
     return inspect.iscoroutinefunction(forecaster)
 
 
-def _model_slug(agent_name: str | None = None) -> str:
-    raw = os.getenv("FORECAST_MODEL", "unknown")
+_PROVIDER_PREFIXES = (
+    "vertex_ai/", "openai/", "anthropic/", "google/",
+    "litellm/", "azure/", "bedrock/",
+)
+
+
+def _model_slug(
+    agent_name: str | None = None,
+    run_label: str | None = None,
+) -> str:
+    raw = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
+    for prefix in _PROVIDER_PREFIXES:
+        if raw.startswith(prefix):
+            raw = raw[len(prefix):]
+            break
+    if raw.startswith("claude-"):
+        raw = raw[len("claude-"):]
+    raw = raw.replace("@", "-")
     slug = re.sub(r"[^\w\-.]", "_", raw)
     if agent_name and agent_name not in ("lab", "dummy"):
         slug = f"{slug}.{agent_name}"
+    if run_label:
+        safe_label = re.sub(r"[^\w\-.]", "_", run_label)
+        slug = f"{slug}.{safe_label}"
+    today = datetime.date.today().strftime("%Y%m%d")
+    slug = f"{slug}.{today}"
     return slug
 
 
@@ -202,7 +224,7 @@ def save_result(
     costs: dict[str, float] | None = None,
 ) -> Path:
     """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     metadata: dict[str, object] = {
         "n_questions": result.n_dataset + result.n_market,
         "n_held_out": n_held_out,
@@ -321,6 +343,7 @@ async def run_eval(
     submit_mode: bool = False,
     agent_name: str | None = None,
     n_rounds: int | None = None,
+    run_label: str | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline."""
     if round_name is not None:
@@ -360,7 +383,7 @@ async def run_eval(
                 seen_ids.add(q.id)
                 questions.append(_build_question(q))
         logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
-    model_slug = _model_slug(agent_name)
+    model_slug = _model_slug(agent_name, run_label=run_label)
 
     if is_async_forecaster(forecaster):
         forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
@@ -790,6 +813,12 @@ def main() -> None:
         default=None,
         help="Limit evaluation to the N most recent question sets by forecast_due_date",
     )
+    parser.add_argument(
+        "--run-label",
+        type=str,
+        default=None,
+        help="Label for this run (e.g., thinking, rag, ensemble)",
+    )
     args = parser.parse_args()
 
     if args.track == "baseline":
@@ -836,6 +865,7 @@ def main() -> None:
         submit_mode=args.submit,
         agent_name=args.agent,
         n_rounds=args.rounds,
+        run_label=args.run_label,
     ))
 
     if args.ci:
