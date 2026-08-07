@@ -30,6 +30,7 @@ FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent lab
 | `cutoff.py` | Chronological data cutoff enforcement for honest backtesting |
 | `submit.py` | Re-exports submission logic from forecastbench-parity, plus CLI entry point |
 | `logging_config.py` | Structured logging (structlog) with run-level trace IDs |
+| `dashboard.py` | Interactive Streamlit + Plotly dashboard for exploring results (optional dep: `streamlit`, `plotly`) |
 | `archive/` | Archived experiment files (calibration, ensemble, hybrid, multi-model, belief, statistical, timeseries RAG) |
 
 ## Analysis tools
@@ -41,6 +42,27 @@ uv run python analyze.py --horizons results/FILE.json     # performance by resol
 uv run python analyze.py --decompose results/FILE.json    # Murphy decomposition + ECE/MCE
 uv run python analyze.py --versus results/A.json results/B.json  # paired statistical comparison
 ```
+
+## Dashboard
+
+Interactive Streamlit dashboard for exploring experiment results, comparing models, and finding failure patterns.
+
+```bash
+uv run --extra dashboard streamlit run dashboard.py
+```
+
+Opens in your browser with 8 tabs:
+
+| Tab | What it shows |
+|-----|--------------|
+| Overview | Summary metrics, all runs ranked, leaderboard reference |
+| Leaderboard | Live official ForecastBench leaderboard (124 models) |
+| Failures | Error type breakdown by source, worst questions, cross-run comparison |
+| Heatmap | Run × Source Brier score/index matrix with track grouping |
+| Compare | Pairwise run comparison with per-source breakdown and question-level disagreements |
+| Calibration | Per-run calibration curves with ECE/MCE/sharpness metrics |
+| Questions | Searchable question browser with sorting by worst Brier or disagreement |
+| About | ForecastBench methodology, scoring, and question source reference |
 
 ## Submission
 
