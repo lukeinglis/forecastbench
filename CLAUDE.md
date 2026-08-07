@@ -20,6 +20,8 @@
 - `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent lab` to run with Vertex AI
 - `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent lab` to run with alternate model
 - `uv run python analyze.py --compare` to compare all saved results
+- `uv run python investigate.py` to run parity investigation diagnostic
+- `uv run python investigate.py results/FILE.json` to investigate a single result file
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage
 - `uv run python verify_parity.py` to run structural and behavioral parity checks against upstream ForecastBench
@@ -38,6 +40,7 @@
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
 - **lab_forecaster.py** - LLM lab forecaster using litellm (zero-shot superforecaster prompt)
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
+- **investigate.py** - Parity evaluation diagnostic analysis (dataset/market asymmetry, missing forecasts, ID mismatches, knowledge cutoff)
 - **verify_parity.py** - Pipeline parity verifier (fetches live from upstream ForecastBench repo/leaderboard)
 - **check_staleness.py** - Git staleness check to warn when local main is behind remote
 - **tournament.py** - Tournament analysis with cost tracking, bootstrap comparisons, and round filtering
