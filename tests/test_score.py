@@ -437,10 +437,10 @@ class TestDifficultyAdjustedPropertyBased:
         ),
     )
     @settings(max_examples=50)
-    def test_adjusted_scores_in_range(
+    def test_adjusted_scores_are_finite(
         self, forecasts: list[tuple[float, int]],
     ) -> None:
-        """Adjusted Brier scores should remain in [0, 1]."""
+        """Adjusted Brier scores should be finite (unclamped since parity v0.1.2)."""
         qs = [
             _make_resolved(f"q{i}", "acled", o)
             for i, (_, o) in enumerate(forecasts)
@@ -451,7 +451,7 @@ class TestDifficultyAdjustedPropertyBased:
         result = adjust_for_difficulty(all_f, qs)
         for fid, scores in result.adjusted_scores.items():
             for qid, s in scores.items():
-                assert 0.0 <= s <= 1.0, f"{fid}/{qid}: {s} out of [0,1]"
+                assert math.isfinite(s), f"{fid}/{qid}: {s} is not finite"
 
 
 class TestMarketEffects:

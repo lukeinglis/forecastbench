@@ -730,7 +730,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "forecastbench-parity", git = "https://github.com/lukeinglis/forecastbench-parity.git?rev=v0.1.1" },
+    { name = "forecastbench-parity", git = "https://github.com/lukeinglis/forecastbench-parity.git?rev=v0.1.2" },
     { name = "google-cloud-aiplatform", specifier = ">=1.161.0" },
     { name = "google-cloud-storage", marker = "extra == 'gcs'", specifier = ">=2.0" },
     { name = "litellm", specifier = ">=1.0" },
@@ -753,8 +753,8 @@ dev = [
 
 [[package]]
 name = "forecastbench-parity"
-version = "0.1.1"
-source = { git = "https://github.com/lukeinglis/forecastbench-parity.git?rev=v0.1.1#b37bda6c7f0d705447c2bffd5fad34adf7d24bed" }
+version = "0.1.2"
+source = { git = "https://github.com/lukeinglis/forecastbench-parity.git?rev=v0.1.2#bf936b1b86bc1d1b46bdb01c634775dc3732df36" }
 dependencies = [
     { name = "pydantic" },
     { name = "requests" },
