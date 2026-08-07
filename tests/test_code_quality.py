@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 from unittest.mock import patch
 
@@ -9,6 +10,12 @@ import pytest
 
 from fetch_data import ResolvedQuestion
 from submit import SubmissionMetadata, assemble_submission, validate_forecasts
+
+
+class _FixedDate(datetime.date):
+    @classmethod
+    def today(cls) -> _FixedDate:  # type: ignore[override]
+        return cls(2026, 8, 7)
 
 
 def _make_resolved(
@@ -28,31 +35,68 @@ def _make_resolved(
 
 
 class TestCacheSlug:
-    def test_default_slug_is_unknown(self) -> None:
-        with patch.dict(os.environ, {}, clear=False):
+    def test_default_slug_uses_default_model(self) -> None:
+        with patch.dict(os.environ, {}, clear=False), \
+             patch("eval.datetime.date", _FixedDate):
             os.environ.pop("FORECAST_MODEL", None)
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "unknown"
+            assert slug == "sonnet-4-20250514.20260807"
 
     def test_dummy_gets_dummy_slug(self) -> None:
-        with patch.dict(os.environ, {"FORECAST_MODEL": "dummy"}):
+        with patch.dict(os.environ, {"FORECAST_MODEL": "dummy"}), \
+             patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "dummy"
+            assert slug == "dummy.20260807"
+
+    def test_strips_provider_and_claude_prefix(self) -> None:
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4@20250514"}), \
+             patch("eval.datetime.date", _FixedDate):
+            from eval import _model_slug
+            slug = _model_slug()
+            assert slug == "sonnet-4-20250514.20260807"
+
+    def test_openai_model(self) -> None:
+        with patch.dict(os.environ, {"FORECAST_MODEL": "openai/gpt-4o"}), \
+             patch("eval.datetime.date", _FixedDate):
+            from eval import _model_slug
+            slug = _model_slug()
+            assert slug == "gpt-4o.20260807"
+
+    def test_run_label(self) -> None:
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4-20250514"}), \
+             patch("eval.datetime.date", _FixedDate):
+            from eval import _model_slug
+            slug = _model_slug(run_label="thinking")
+            assert slug == "sonnet-4-20250514.thinking.20260807"
+
+    def test_custom_agent_name(self) -> None:
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4-20250514"}), \
+             patch("eval.datetime.date", _FixedDate):
+            from eval import _model_slug
+            slug = _model_slug(agent_name="custom")
+            assert slug == "sonnet-4-20250514.custom.20260807"
 
     def test_dummy_and_baseline_different_slugs(self) -> None:
-        with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("FORECAST_MODEL", None)
-            os.environ.setdefault("FORECAST_MODEL", "dummy")
+        with patch.dict(os.environ, {"FORECAST_MODEL": "dummy"}), \
+             patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             dummy_slug = _model_slug()
 
-        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4@20250514"}):
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4@20250514"}), \
+             patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             baseline_slug = _model_slug()
 
         assert dummy_slug != baseline_slug
+
+    def test_at_suffix_replaced(self) -> None:
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-opus-4-1@20250805"}), \
+             patch("eval.datetime.date", _FixedDate):
+            from eval import _model_slug
+            slug = _model_slug()
+            assert slug == "opus-4-1-20250805.20260807"
 
     def test_dummy_forecaster_sets_env(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
