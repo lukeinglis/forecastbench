@@ -48,16 +48,12 @@ class AsyncForecaster(Protocol):
 
 Forecaster = Union[SyncForecaster, AsyncForecaster]
 
-MultiForecaster = Any
-
 
 class EvalResult(NamedTuple):
     scoring: ScoringResult
     forecasts: dict[str, float]
     resolved: list[ResolvedQuestion]
     model_slug: str
-
-
 
 
 
@@ -225,9 +221,6 @@ async def run_eval(
     raw: bool = False,
     round_name: str | None = None,
     prompt_variant: str = "default",
-    multi_horizon: bool = False,
-    multi_forecaster: MultiForecaster | None = None,
-    async_multi_forecaster: MultiForecaster | None = None,
     submit_mode: bool = False,
     agent_name: str | None = None,
     n_rounds: int | None = None,
@@ -275,9 +268,9 @@ async def run_eval(
     model_slug = _model_slug(agent_name)
 
     if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_horizon=multi_horizon, async_multi_forecaster=async_multi_forecaster)  # type: ignore[arg-type]
+        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
     else:
-        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
+        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
 
     all_forecasts: dict[str, dict[str, float]] | None = None
     if not raw:
@@ -339,7 +332,6 @@ def _run_sync(
     questions: list[Question],
     model_slug: str,
     prompt_variant: str = "default",
-    multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
@@ -368,8 +360,6 @@ async def _run_async(
     questions: list[Question],
     model_slug: str,
     prompt_variant: str = "default",
-    multi_horizon: bool = False,
-    async_multi_forecaster: MultiForecaster | None = None,
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
 
@@ -549,10 +539,6 @@ def main() -> None:
                         help="Compare against leaderboard")
     parser.add_argument("--refresh", action="store_true", help="Clear cached data")
     parser.add_argument("--ci", action="store_true", help="Show bootstrap confidence intervals")
-    parser.add_argument("--multi-horizon", action="store_true", dest="multi_horizon", default=True,
-                        help="Use multi-horizon forecasting (default: enabled)")
-    parser.add_argument("--per-date", action="store_false", dest="multi_horizon",
-                        help="Disable multi-horizon batching")
     parser.add_argument("--list-rounds", action="store_true", help="List available rounds and exit")
     parser.add_argument("--submit", action="store_true", default=False,
                         help="Forecast all questions for submission coverage")
@@ -598,11 +584,9 @@ def main() -> None:
     if args.round:
         round_name = _normalize_round_name(args.round)
 
-    async_multi_forecaster_fn: MultiForecaster | None = None
     if args.agent == "lab":
-        from lab_forecaster import aforecast, aforecast_multi
+        from lab_forecaster import aforecast
         forecaster: Forecaster = aforecast
-        async_multi_forecaster_fn = aforecast_multi
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
@@ -610,8 +594,6 @@ def main() -> None:
     eval_result = asyncio.run(run_eval(
         forecaster, raw=args.raw, round_name=round_name,
         prompt_variant=args.prompt,
-        multi_horizon=args.multi_horizon and args.agent == "lab",
-        async_multi_forecaster=async_multi_forecaster_fn,
         submit_mode=args.submit,
         agent_name=args.agent,
         n_rounds=args.rounds,

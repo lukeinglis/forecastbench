@@ -14,7 +14,6 @@
 - `uv run python eval.py --agent dummy` to run dummy forecaster (default)
 - `uv run python eval.py --agent lab` to run LLM lab forecaster
 - `uv run python eval.py --agent lab --raw` to run without difficulty adjustment
-- `uv run python eval.py --agent lab --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
 - `uv run python lab_forecaster.py` to run lab forecaster (shortcut)
 - `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent lab` to run with Vertex AI
@@ -63,7 +62,7 @@
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
 - VERTEXAI_LOCATION env var sets the Vertex AI region (default: europe-west1).
 - FORECAST_TEMPERATURE env var sets temperature (default: 0). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
-- Multi-horizon forecasting is enabled by default for all dataset sources. Use --per-date to force per-date calling for all sources.
+- Multi-horizon forecasting is handled internally by forecastbench-parity (per-horizon expansion in join_resolved_questions).
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Lab forecaster always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON (auto-persisted after each eval run)
