@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 from fetch_data import Question
-from eval import _run_sync, _read_cache
+from eval import _run_sync, _run_async, _read_cache
 
 
 def _raising_forecaster(question: Question, **kwargs: object) -> float:
@@ -22,8 +22,8 @@ def _good_forecaster(question: Question, **kwargs: object) -> float:
 
 
 class TestSyncFallbackNotCached:
-    def test_multi_horizon_exception_skips(self, tmp_path: Path) -> None:
-        """When forecaster raises on a multi-horizon question, question is skipped (not cached)."""
+    def test_exception_skips_question(self, tmp_path: Path) -> None:
+        """When forecaster raises, question is skipped (not cached)."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
         eval_mod.CACHE_DIR = tmp_path / "cache"
@@ -33,14 +33,12 @@ class TestSyncFallbackNotCached:
                 resolution_dates=["2024-01-01", "2024-06-01"],
             )
             forecasts = _run_sync(_raising_forecaster, [q], "test_slug")
-            assert "mh1_2024-01-01" not in forecasts
-            assert "mh1_2024-06-01" not in forecasts
-            assert _read_cache("test_slug", "mh1_2024-01-01") is None
-            assert _read_cache("test_slug", "mh1_2024-06-01") is None
+            assert "mh1" not in forecasts
+            assert _read_cache("test_slug", "mh1") is None
         finally:
             eval_mod.CACHE_DIR = original
 
-    def test_multi_horizon_success_is_cached(self, tmp_path: Path) -> None:
+    def test_success_is_cached(self, tmp_path: Path) -> None:
         """When forecaster succeeds, the result SHOULD be cached."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
@@ -51,8 +49,8 @@ class TestSyncFallbackNotCached:
                 resolution_dates=["2024-01-01"],
             )
             forecasts = _run_sync(_good_forecaster, [q], "test_slug")
-            assert forecasts["mh2_2024-01-01"] == 0.73
-            assert _read_cache("test_slug", "mh2_2024-01-01") == 0.73
+            assert forecasts["mh2"] == 0.73
+            assert _read_cache("test_slug", "mh2") == 0.73
         finally:
             eval_mod.CACHE_DIR = original
 
@@ -66,49 +64,19 @@ class TestSyncFallbackNotCached:
                 id="mh3", source="acled", question="MH?",
                 resolution_dates=["2024-01-01"],
             )
-            # First run: forecaster raises, question skipped, NOT cached
             forecasts1 = _run_sync(_raising_forecaster, [q], "test_slug")
-            assert "mh3_2024-01-01" not in forecasts1
+            assert "mh3" not in forecasts1
 
-            # Second run: forecaster succeeds, result is 0.73, IS cached
             forecasts2 = _run_sync(_good_forecaster, [q], "test_slug")
-            assert forecasts2["mh3_2024-01-01"] == 0.73
-            assert _read_cache("test_slug", "mh3_2024-01-01") == 0.73
+            assert forecasts2["mh3"] == 0.73
+            assert _read_cache("test_slug", "mh3") == 0.73
         finally:
             eval_mod.CACHE_DIR = original
 
 
-class TestAsyncMultiHorizonFallbackNotCached:
-    def test_multi_horizon_none_retries_perdate(self, tmp_path: Path) -> None:
-        """When aforecast_multi_horizon returns None, per-date retry runs and caches successful retries."""
-        import eval as eval_mod
-        original = eval_mod.CACHE_DIR
-        eval_mod.CACHE_DIR = tmp_path / "cache"
-        try:
-            q = Question(
-                id="amh1", source="acled", question="Async MH?",
-                resolution_dates=["2024-01-01", "2024-06-01"],
-            )
-
-            mock_multi = AsyncMock(return_value=None)
-            with patch("eval.is_async_forecaster", return_value=True):
-                from eval import _run_async
-                with patch("lab_forecaster.aforecast_multi_horizon", mock_multi):
-                    async_forecaster = AsyncMock(return_value=0.5)
-                    forecasts = asyncio.run(
-                        _run_async(async_forecaster, [q], "test_slug", multi_horizon=True)
-                    )
-
-            assert forecasts["amh1_2024-01-01"] == 0.5
-            assert forecasts["amh1_2024-06-01"] == 0.5
-            # Per-date retry succeeded, so results ARE cached
-            assert _read_cache("test_slug", "amh1_2024-01-01") == 0.5
-            assert _read_cache("test_slug", "amh1_2024-06-01") == 0.5
-        finally:
-            eval_mod.CACHE_DIR = original
-
-    def test_multi_horizon_success_cached(self, tmp_path: Path) -> None:
-        """When aforecast_multi_horizon returns real values, results SHOULD be cached."""
+class TestAsyncFallbackNotCached:
+    def test_async_success_cached(self, tmp_path: Path) -> None:
+        """When async forecaster succeeds, the result SHOULD be cached by base ID."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
         eval_mod.CACHE_DIR = tmp_path / "cache"
@@ -118,24 +86,18 @@ class TestAsyncMultiHorizonFallbackNotCached:
                 resolution_dates=["2024-01-01", "2024-06-01"],
             )
 
-            mock_multi = AsyncMock(return_value=[0.3, 0.7])
-            with patch("eval.is_async_forecaster", return_value=True):
-                from eval import _run_async
-                with patch("lab_forecaster.aforecast_multi_horizon", mock_multi):
-                    async_forecaster = AsyncMock(return_value=0.5)
-                    forecasts = asyncio.run(
-                        _run_async(async_forecaster, [q], "test_slug", multi_horizon=True)
-                    )
+            async_forecaster = AsyncMock(return_value=0.7)
+            forecasts = asyncio.run(
+                _run_async(async_forecaster, [q], "test_slug")
+            )
 
-            assert forecasts["amh2_2024-01-01"] == 0.3
-            assert forecasts["amh2_2024-06-01"] == 0.7
-            assert _read_cache("test_slug", "amh2_2024-01-01") == 0.3
-            assert _read_cache("test_slug", "amh2_2024-06-01") == 0.7
+            assert forecasts["amh2"] == 0.7
+            assert _read_cache("test_slug", "amh2") == 0.7
         finally:
             eval_mod.CACHE_DIR = original
 
-    def test_multi_horizon_exception_retry_caches(self, tmp_path: Path) -> None:
-        """When aforecast_multi_horizon raises, per-date retry runs and caches successful retries."""
+    def test_async_failure_not_cached(self, tmp_path: Path) -> None:
+        """When async forecaster raises, question is skipped and NOT cached."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
         eval_mod.CACHE_DIR = tmp_path / "cache"
@@ -145,25 +107,18 @@ class TestAsyncMultiHorizonFallbackNotCached:
                 resolution_dates=["2024-01-01", "2024-06-01"],
             )
 
-            mock_multi = AsyncMock(side_effect=RuntimeError("API error"))
-            with patch("eval.is_async_forecaster", return_value=True):
-                from eval import _run_async
-                with patch("lab_forecaster.aforecast_multi_horizon", mock_multi):
-                    async_forecaster = AsyncMock(return_value=0.5)
-                    forecasts = asyncio.run(
-                        _run_async(async_forecaster, [q], "test_slug", multi_horizon=True)
-                    )
+            async_forecaster_fail = AsyncMock(side_effect=RuntimeError("API down"))
+            forecasts = asyncio.run(
+                _run_async(async_forecaster_fail, [q], "test_slug")
+            )
 
-            assert forecasts["amh3_2024-01-01"] == 0.5
-            assert forecasts["amh3_2024-06-01"] == 0.5
-            # Per-date retry succeeded, so results ARE cached
-            assert _read_cache("test_slug", "amh3_2024-01-01") == 0.5
-            assert _read_cache("test_slug", "amh3_2024-06-01") == 0.5
+            assert "amh3" not in forecasts
+            assert _read_cache("test_slug", "amh3") is None
         finally:
             eval_mod.CACHE_DIR = original
 
-    def test_rerun_after_total_failure_retries_async(self, tmp_path: Path) -> None:
-        """After async multi-horizon AND per-date retry both fail, re-running should retry."""
+    def test_rerun_after_failure_retries_async(self, tmp_path: Path) -> None:
+        """After async failure, re-running should retry and cache on success."""
         import eval as eval_mod
         original = eval_mod.CACHE_DIR
         eval_mod.CACHE_DIR = tmp_path / "cache"
@@ -173,25 +128,18 @@ class TestAsyncMultiHorizonFallbackNotCached:
                 resolution_dates=["2024-01-01"],
             )
 
-            # First run: multi-horizon returns None, per-date also fails → 0.5 fallback, NOT cached
-            mock_fail = AsyncMock(return_value=None)
             async_forecaster_fail = AsyncMock(side_effect=RuntimeError("API down"))
-            from eval import _run_async
-            with patch("lab_forecaster.aforecast_multi_horizon", mock_fail):
-                forecasts1 = asyncio.run(
-                    _run_async(async_forecaster_fail, [q], "test_slug", multi_horizon=True)
-                )
-            assert forecasts1["amh4_2024-01-01"] == 0.5
-            assert _read_cache("test_slug", "amh4_2024-01-01") is None
+            forecasts1 = asyncio.run(
+                _run_async(async_forecaster_fail, [q], "test_slug")
+            )
+            assert "amh4" not in forecasts1
+            assert _read_cache("test_slug", "amh4") is None
 
-            # Second run: returns real value, IS cached
-            async_forecaster_ok = AsyncMock(return_value=0.5)
-            mock_ok = AsyncMock(return_value=[0.82])
-            with patch("lab_forecaster.aforecast_multi_horizon", mock_ok):
-                forecasts2 = asyncio.run(
-                    _run_async(async_forecaster_ok, [q], "test_slug", multi_horizon=True)
-                )
-            assert forecasts2["amh4_2024-01-01"] == 0.82
-            assert _read_cache("test_slug", "amh4_2024-01-01") == 0.82
+            async_forecaster_ok = AsyncMock(return_value=0.82)
+            forecasts2 = asyncio.run(
+                _run_async(async_forecaster_ok, [q], "test_slug")
+            )
+            assert forecasts2["amh4"] == 0.82
+            assert _read_cache("test_slug", "amh4") == 0.82
         finally:
             eval_mod.CACHE_DIR = original

@@ -11,7 +11,6 @@ from lab_forecaster import _build_prompt
 from eval import (
     _build_question,
     _has_multi_horizon,
-    _expand_resolved_for_horizons,
     _run_async,
     _run_sync,
     _write_cache,
@@ -80,7 +79,7 @@ class TestJoinPropagatesNewFields:
             forecast_due_date="2024-01-01",
             questions=[q],
         )
-        resolutions: dict[str, Resolution] = {"q1": Resolution(id="q1", outcome=1)}
+        resolutions: dict[str, list[Resolution]] = {"q1": [Resolution(id="q1", outcome=1)]}
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 1
         rq = result[0]
@@ -90,7 +89,7 @@ class TestJoinPropagatesNewFields:
     def test_none_fields_propagated(self) -> None:
         q = Question(id="q2", source="acled", question="Test?")
         qs = QuestionSet(forecast_due_date="2024-01-01", questions=[q])
-        resolutions: dict[str, Resolution] = {"q2": Resolution(id="q2", outcome=0)}
+        resolutions: dict[str, list[Resolution]] = {"q2": [Resolution(id="q2", outcome=0)]}
         result = join_resolved_questions([qs], resolutions)
         rq = result[0]
         for field in NEW_FIELDS:
@@ -178,101 +177,16 @@ class TestHasMultiHorizon:
         assert _has_multi_horizon(q) is False
 
 
-class TestExpandResolvedForHorizons:
-    def test_dataset_expanded(self) -> None:
-        rq = ResolvedQuestion(
-            id="q1",
-            source="acled",
-            question="Test?",
-            outcome=1,
-            resolution_dates=["2024-07-28", "2025-01-17"],
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-        assert len(expanded) == 2
-        assert expanded[0].id == "q1_2024-07-28"
-        assert expanded[1].id == "q1_2025-01-17"
-        assert expanded[0].resolution_date == "2024-07-28"
-        assert expanded[1].resolution_date == "2025-01-17"
+class TestBaseIdForecasting:
+    """v0.2.0: forecasting uses base question IDs, scoring handles per-horizon internally."""
 
-    def test_market_not_expanded(self) -> None:
-        rq = ResolvedQuestion(
-            id="m1",
-            source="metaculus",
-            question="Market Q?",
-            outcome=0,
-            resolution_dates="N/A",
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-        assert len(expanded) == 1
-        assert expanded[0].id == "m1"
-
-    def test_dataset_no_resolution_dates_not_expanded(self) -> None:
-        rq = ResolvedQuestion(
-            id="d1",
-            source="acled",
-            question="Test?",
-            outcome=1,
-            resolution_dates=None,
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-        assert len(expanded) == 1
-        assert expanded[0].id == "d1"
-
-    def test_expanded_preserves_fields(self) -> None:
-        rq = ResolvedQuestion(
-            id="q1",
-            source="acled",
-            question="Test?",
-            background="bg",
-            outcome=1,
-            resolution_dates=["2024-07-28"],
-            source_intro="Intro text",
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-        assert expanded[0].background == "bg"
-        assert expanded[0].source_intro == "Intro text"
-        assert expanded[0].outcome == 1
-
-    def test_mixed_questions(self) -> None:
-        dataset_q = ResolvedQuestion(
-            id="d1",
-            source="acled",
-            question="Dataset?",
-            outcome=1,
-            resolution_dates=["2024-07-28", "2025-01-17"],
-            forecast_due_date="2024-01-01",
-        )
-        market_q = ResolvedQuestion(
-            id="m1",
-            source="metaculus",
-            question="Market?",
-            outcome=0,
-            resolution_dates="N/A",
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([dataset_q, market_q])
-        assert len(expanded) == 3
-        ids = [e.id for e in expanded]
-        assert "d1_2024-07-28" in ids
-        assert "d1_2025-01-17" in ids
-        assert "m1" in ids
-
-
-class TestMultiHorizonSyncPath:
-    def test_multi_horizon_produces_composite_keys(self, tmp_path: object) -> None:
+    def test_all_questions_use_base_id_key(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
 
-        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+        def dummy(q: Question, **kwargs: object) -> float:
             return 0.6
-
-        def mock_fm(q: Question, resolution_dates: list[str]) -> list[float]:
-            return [0.6] * len(resolution_dates)
 
         q = Question(
             id="q1",
@@ -281,18 +195,17 @@ class TestMultiHorizonSyncPath:
             resolution_dates=["2024-07-28", "2025-01-17"],
         )
         with patch("eval.CACHE_DIR", tmp):
-            forecasts = _run_sync(dummy, [q], "test", multi_forecaster=mock_fm)
+            forecasts = _run_sync(dummy, [q], "test")
 
-        assert "q1_2024-07-28" in forecasts
-        assert "q1_2025-01-17" in forecasts
-        assert "q1" not in forecasts
+        assert "q1" in forecasts
+        assert len(forecasts) == 1
 
-    def test_market_question_uses_simple_key(self, tmp_path: object) -> None:
+    def test_market_question_uses_base_id_key(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
 
-        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+        def dummy(q: Question, **kwargs: object) -> float:
             return 0.5
 
         q = Question(
@@ -307,17 +220,15 @@ class TestMultiHorizonSyncPath:
         assert "m1" in forecasts
         assert len(forecasts) == 1
 
-    def test_multi_horizon_calls_forecast_multi(self, tmp_path: object) -> None:
+    def test_forecaster_called_once_per_question(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
-        multi_calls: list[list[str]] = []
+        call_count = 0
 
-        def mock_forecast_multi(q: Question, resolution_dates: list[str]) -> list[float]:
-            multi_calls.append(resolution_dates)
-            return [0.5] * len(resolution_dates)
-
-        def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+        def counting_fn(q: Question, **kwargs: object) -> float:
+            nonlocal call_count
+            call_count += 1
             return 0.5
 
         q = Question(
@@ -327,48 +238,42 @@ class TestMultiHorizonSyncPath:
             resolution_dates=["2024-07-28", "2025-01-17"],
         )
         with patch("eval.CACHE_DIR", tmp):
-            _run_sync(tracking_fn, [q], "test", multi_forecaster=mock_forecast_multi)
+            _run_sync(counting_fn, [q], "test")
 
-        assert len(multi_calls) == 1
-        assert multi_calls[0] == ["2024-07-28", "2025-01-17"]
+        assert call_count == 1
 
-    def test_multi_horizon_uses_cache(self, tmp_path: object) -> None:
+    def test_cache_uses_base_id(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
-        multi_called = False
+        call_count = 0
 
-        def mock_forecast_multi(q: Question, resolution_dates: list[str]) -> list[float]:
-            nonlocal multi_called
-            multi_called = True
-            return [0.7] * len(resolution_dates)
-
-        def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
+        def counting_fn(q: Question, **kwargs: object) -> float:
+            nonlocal call_count
+            call_count += 1
             return 0.7
 
         with patch("eval.CACHE_DIR", tmp):
-            _write_cache("test", "q1_2024-07-28", 0.99)
-            _write_cache("test", "q1_2025-01-17", 0.88)
+            _write_cache("test", "q1", 0.99)
             q = Question(
                 id="q1",
                 source="acled",
                 question="Test?",
                 resolution_dates=["2024-07-28", "2025-01-17"],
             )
-            forecasts = _run_sync(dummy, [q], "test", multi_forecaster=mock_forecast_multi)
+            forecasts = _run_sync(counting_fn, [q], "test")
 
-        assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
-        assert forecasts["q1_2025-01-17"] == pytest.approx(0.88)
-        assert not multi_called
+        assert forecasts["q1"] == pytest.approx(0.99)
+        assert call_count == 0
 
-    def test_multi_horizon_fallback_to_per_date_without_multi_forecaster(self, tmp_path: object) -> None:
+
+class TestAsyncBaseIdForecasting:
+    async def test_async_uses_base_id_key(self, tmp_path: object) -> None:
         from pathlib import Path as P
 
         tmp = P(str(tmp_path))
-        calls: list[str | None] = []
 
-        def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
-            calls.append(resolution_date)
+        async def dummy(q: Question, **kwargs: object) -> float:
             return 0.5
 
         q = Question(
@@ -378,106 +283,31 @@ class TestMultiHorizonSyncPath:
             resolution_dates=["2024-07-28", "2025-01-17"],
         )
         with patch("eval.CACHE_DIR", tmp):
-            forecasts = _run_sync(tracking_fn, [q], "test")
+            forecasts = await _run_async(dummy, [q], "test")
 
-        assert calls == ["2024-07-28", "2025-01-17"]
-        assert "q1_2024-07-28" in forecasts
-        assert "q1_2025-01-17" in forecasts
-
-    def test_multi_horizon_sends_only_uncached_dates(self, tmp_path: object) -> None:
-        from pathlib import Path as P
-
-        tmp = P(str(tmp_path))
-        sent_dates: list[list[str]] = []
-
-        def mock_fm(q: Question, resolution_dates: list[str]) -> list[float]:
-            sent_dates.append(resolution_dates)
-            return [0.7] * len(resolution_dates)
-
-        with patch("eval.CACHE_DIR", tmp):
-            _write_cache("test", "q1_2024-07-28", 0.99)
-            q = Question(
-                id="q1",
-                source="acled",
-                question="Test?",
-                resolution_dates=["2024-07-28", "2025-01-17"],
-            )
-            forecasts = _run_sync(lambda q, **kw: 0.5, [q], "test", multi_forecaster=mock_fm)
-
-        assert sent_dates == [["2025-01-17"]]
-        assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
-        assert forecasts["q1_2025-01-17"] == pytest.approx(0.7)
-
-
-class TestMultiHorizonAsyncPath:
-    async def test_async_fallback_to_per_date_without_multi_forecaster(self, tmp_path: object) -> None:
-        from pathlib import Path as P
-
-        tmp = P(str(tmp_path))
-        calls: list[str | None] = []
-
-        async def tracking_fn(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
-            calls.append(resolution_date)
-            return 0.5
-
-        q = Question(
-            id="q1",
-            source="acled",
-            question="Test?",
-            resolution_dates=["2024-07-28", "2025-01-17"],
-        )
-        with patch("eval.CACHE_DIR", tmp):
-            forecasts = await _run_async(tracking_fn, [q], "test")
-
-        assert set(calls) == {"2024-07-28", "2025-01-17"}
-        assert "q1_2024-07-28" in forecasts
-        assert "q1_2025-01-17" in forecasts
-
-    async def test_async_multi_sends_only_uncached_dates(self, tmp_path: object) -> None:
-        from pathlib import Path as P
-
-        tmp = P(str(tmp_path))
-        sent_dates: list[list[str]] = []
-
-        async def mock_afm(q: Question, resolution_dates: list[str]) -> list[float]:
-            sent_dates.append(resolution_dates)
-            return [0.7] * len(resolution_dates)
-
-        async def dummy(q: Question, resolution_date: str | None = None, **kwargs: object) -> float:
-            return 0.5
-
-        with patch("eval.CACHE_DIR", tmp):
-            _write_cache("test", "q1_2024-07-28", 0.99)
-            q = Question(
-                id="q1",
-                source="acled",
-                question="Test?",
-                resolution_dates=["2024-07-28", "2025-01-17"],
-            )
-            forecasts = await _run_async(dummy, [q], "test", async_multi_forecaster=mock_afm)
-
-        assert sent_dates == [["2025-01-17"]]
-        assert forecasts["q1_2024-07-28"] == pytest.approx(0.99)
-        assert forecasts["q1_2025-01-17"] == pytest.approx(0.7)
+        assert "q1" in forecasts
+        assert len(forecasts) == 1
 
 
 class TestMultiHorizonEndToEnd:
-    def test_expanded_forecasts_score_against_expanded_resolved(self) -> None:
+    def test_base_id_forecasts_score_against_multi_horizon_resolved(self) -> None:
         from score import score_forecasts
 
-        rq = ResolvedQuestion(
-            id="q1",
-            source="acled",
-            question="Test?",
-            outcome=1,
-            resolution_dates=["2024-07-28", "2025-01-17"],
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-        forecasts = {
-            "q1_2024-07-28": 0.8,
-            "q1_2025-01-17": 0.9,
-        }
-        result = score_forecasts(forecasts, expanded)
+        resolved = [
+            ResolvedQuestion(
+                id="q1", source="acled", question="Test?",
+                outcome=1, resolution_date="2024-07-28",
+                resolution_dates=["2024-07-28", "2025-01-17"],
+                forecast_due_date="2024-01-01",
+            ),
+            ResolvedQuestion(
+                id="q1", source="acled", question="Test?",
+                outcome=0, resolution_date="2025-01-17",
+                resolution_dates=["2024-07-28", "2025-01-17"],
+                forecast_due_date="2024-01-01",
+            ),
+        ]
+        forecasts = {"q1": 0.8}
+        result = score_forecasts(forecasts, resolved)
         assert result.n_dataset == 2
         assert result.n_missing == 0

@@ -65,90 +65,6 @@ def _has_multi_horizon(question: Question) -> bool:
     return isinstance(rd, list) and any(d for d in rd)
 
 
-def _expand_resolved_for_horizons(
-    resolved: list[ResolvedQuestion],
-) -> list[ResolvedQuestion]:
-    """Expand resolved questions into per-horizon entries with composite IDs.
-
-    After the join phase, multi-horizon dataset questions already have one
-    ResolvedQuestion per resolution date (each with its own outcome). This
-    function creates composite IDs (base_id + resolution_date) and deduplicates
-    to avoid double-expansion.
-    """
-    expanded: list[ResolvedQuestion] = []
-    seen_composite: set[str] = set()
-
-    def _is_multi_horizon(rq: ResolvedQuestion) -> bool:
-        rd = rq.resolution_dates
-        return isinstance(rd, list) and len(rd) > 0 and any(d for d in rd)
-
-    for rq in resolved:
-        if rq.source.lower() in MARKET_SOURCES:
-            expanded.append(rq)
-            continue
-
-        if not _is_multi_horizon(rq):
-            expanded.append(rq)
-            continue
-
-        if rq.resolution_date:
-            composite_id = f"{rq.id}_{rq.resolution_date}"
-            if composite_id in seen_composite:
-                continue
-            seen_composite.add(composite_id)
-            expanded.append(
-                ResolvedQuestion(
-                    id=composite_id,
-                    source=rq.source,
-                    question=rq.question,
-                    background=rq.background,
-                    resolution_criteria=rq.resolution_criteria,
-                    freeze_datetime=rq.freeze_datetime,
-                    freeze_datetime_value=rq.freeze_datetime_value,
-                    resolution_dates=rq.resolution_dates,
-                    url=rq.url,
-                    combination_of=rq.combination_of,
-                    source_intro=rq.source_intro,
-                    freeze_datetime_value_explanation=rq.freeze_datetime_value_explanation,
-                    market_info_open_datetime=rq.market_info_open_datetime,
-                    market_info_close_datetime=rq.market_info_close_datetime,
-                    market_info_resolution_criteria=rq.market_info_resolution_criteria,
-                    outcome=rq.outcome,
-                    resolution_date=rq.resolution_date,
-                    forecast_due_date=rq.forecast_due_date,
-                    question_set=rq.question_set,
-                )
-            )
-        else:
-            for date_str in rq.resolution_dates:
-                composite_id = f"{rq.id}_{date_str}"
-                if composite_id in seen_composite:
-                    continue
-                seen_composite.add(composite_id)
-                expanded.append(
-                    ResolvedQuestion(
-                        id=composite_id,
-                        source=rq.source,
-                        question=rq.question,
-                        background=rq.background,
-                        resolution_criteria=rq.resolution_criteria,
-                        freeze_datetime=rq.freeze_datetime,
-                        freeze_datetime_value=rq.freeze_datetime_value,
-                        resolution_dates=rq.resolution_dates,
-                        url=rq.url,
-                        combination_of=rq.combination_of,
-                        source_intro=rq.source_intro,
-                        freeze_datetime_value_explanation=rq.freeze_datetime_value_explanation,
-                        market_info_open_datetime=rq.market_info_open_datetime,
-                        market_info_close_datetime=rq.market_info_close_datetime,
-                        market_info_resolution_criteria=rq.market_info_resolution_criteria,
-                        outcome=rq.outcome,
-                        resolution_date=date_str,
-                        forecast_due_date=rq.forecast_due_date,
-                        question_set=rq.question_set,
-                    )
-                )
-    return expanded
 
 
 def is_async_forecaster(forecaster: Forecaster) -> bool:
@@ -339,8 +255,10 @@ async def run_eval(
             logger.info("rounds_filter", n_rounds=n_rounds, n_selected=len(question_sets),
                         dates=[qs.forecast_due_date for qs in question_sets])
         iteration_set, _held_out = split_held_out(question_sets, n_held_out)
-        resolutions_by_id = {q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
-                             for q in resolved}
+        resolutions_by_id: dict[str, list[Resolution]] = {}
+        for q in resolved:
+            r = Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+            resolutions_by_id.setdefault(q.id, []).append(r)
         iteration_resolved = join_resolved_questions(
             iteration_set, resolutions_by_id,
         )
@@ -367,8 +285,6 @@ async def run_eval(
     else:
         forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant, multi_forecaster=multi_forecaster)  # type: ignore[arg-type]
 
-    expanded_resolved = _expand_resolved_for_horizons(iteration_resolved)
-
     all_forecasts: dict[str, dict[str, float]] | None = None
     if not raw:
         previous = load_previous_results()
@@ -385,14 +301,14 @@ async def run_eval(
                         note="scores_not_difficulty_adjusted_this_run")
 
     result = score_forecasts(
-        forecasts, expanded_resolved,
+        forecasts, iteration_resolved,
         difficulty_adjusted=not raw,
         all_forecasts=all_forecasts,
     )
     _print_results(result)
 
-    outcomes = {q.id: q.outcome for q in expanded_resolved}
-    sources = {q.id: q.source.lower() for q in expanded_resolved}
+    outcomes = {q.id: q.outcome for q in iteration_resolved}
+    sources = {q.id: q.source.lower() for q in iteration_resolved}
     question_sets_used = [qs.forecast_due_date for qs in iteration_set]
 
     costs: dict[str, float] | None = None
@@ -421,7 +337,7 @@ async def run_eval(
         )
     logger.info("results_saved", path=str(result_path))
 
-    return EvalResult(scoring=result, forecasts=forecasts, resolved=expanded_resolved, model_slug=model_slug)
+    return EvalResult(scoring=result, forecasts=forecasts, resolved=iteration_resolved, model_slug=model_slug)
 
 
 def _run_sync(
@@ -433,70 +349,23 @@ def _run_sync(
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
-        if _has_multi_horizon(q) and multi_forecaster is not None:
-            dates = [d for d in q.resolution_dates if d]
-            uncached_dates: list[str] = []
-            for date_str in dates:
-                composite_key = f"{q.id}_{date_str}"
-                cached = _read_cache(model_slug, composite_key)
-                if cached is not None:
-                    forecasts[composite_key] = cached
-                else:
-                    uncached_dates.append(date_str)
-            if not uncached_dates:
-                continue
-            try:
-                probs = multi_forecaster(q, resolution_dates=uncached_dates)
-            except ValueError:
-                logger.warning("parse_failure_skip_multi", question_id=q.id)
-                continue
-            except Exception:
-                logger.warning("forecast_error_skip_multi", question_id=q.id, exc_info=True)
-                continue
-            for date_str, prob in zip(uncached_dates, probs):
-                composite_key = f"{q.id}_{date_str}"
-                forecasts[composite_key] = prob
-                _write_cache(model_slug, composite_key, prob)
-        elif _has_multi_horizon(q):
-            dates = [d for d in q.resolution_dates if d]
-            for date_str in dates:
-                composite_key = f"{q.id}_{date_str}"
-                cached = _read_cache(model_slug, composite_key)
-                if cached is not None:
-                    forecasts[composite_key] = cached
-                    continue
-                try:
-                    prob = forecaster(
-                        q, resolution_date=date_str,
-                        source=q.source, resolution_dates=q.resolution_dates,
-                        prompt_variant=prompt_variant,
-                    )
-                except ValueError:
-                    logger.warning("parse_failure_skip", question_id=q.id, resolution_date=date_str)
-                    continue
-                except Exception:
-                    logger.warning("forecast_error_skip", question_id=q.id, resolution_date=date_str, exc_info=True)
-                    continue
-                forecasts[composite_key] = prob
-                _write_cache(model_slug, composite_key, prob)
-        else:
-            cached = _read_cache(model_slug, q.id)
-            if cached is not None:
-                forecasts[q.id] = cached
-                continue
-            try:
-                prob = forecaster(
-                    q, source=q.source, resolution_dates=q.resolution_dates,
-                    prompt_variant=prompt_variant,
-                )
-            except ValueError:
-                logger.warning("parse_failure_skip", question_id=q.id)
-                continue
-            except Exception:
-                logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
-                continue
-            forecasts[q.id] = prob
-            _write_cache(model_slug, q.id, prob)
+        cached = _read_cache(model_slug, q.id)
+        if cached is not None:
+            forecasts[q.id] = cached
+            continue
+        try:
+            prob = forecaster(
+                q, source=q.source, resolution_dates=q.resolution_dates,
+                prompt_variant=prompt_variant,
+            )
+        except ValueError:
+            logger.warning("parse_failure_skip", question_id=q.id)
+            continue
+        except Exception:
+            logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
+            continue
+        forecasts[q.id] = prob
+        _write_cache(model_slug, q.id, prob)
     return forecasts
 
 
@@ -515,114 +384,30 @@ async def _run_async(
 
     async def _forecast_one(
         q: Question,
-        cache_key: str,
-        resolution_date: str | None = None,
     ) -> tuple[str, float] | None:
-        cached = _read_cache(model_slug, cache_key)
+        cached = _read_cache(model_slug, q.id)
         if cached is not None:
-            return cache_key, cached
+            return q.id, cached
         async with semaphore:
             try:
                 prob = await forecaster(
                     q,
-                    resolution_date=resolution_date,
                     source=q.source,
                     resolution_dates=q.resolution_dates,
                     prompt_variant=prompt_variant,
                 )
             except ValueError:
-                logger.warning("parse_failure_skip", question_id=q.id, resolution_date=resolution_date)
+                logger.warning("parse_failure_skip", question_id=q.id)
                 return None
             except Exception:
-                logger.warning("forecast_error_skip", question_id=q.id, resolution_date=resolution_date, exc_info=True)
+                logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
                 return None
-        _write_cache(model_slug, cache_key, prob)
-        return cache_key, prob
+        _write_cache(model_slug, q.id, prob)
+        return q.id, prob
 
-    async def _forecast_multi_horizon(
-        q: Question,
-        dates: list[str],
-    ) -> list[tuple[str, float]]:
-        cached_results: dict[str, float] = {}
-        uncached_dates: list[str] = []
-        for date_str in dates:
-            composite_key = f"{q.id}_{date_str}"
-            cached = _read_cache(model_slug, composite_key)
-            if cached is not None:
-                cached_results[composite_key] = cached
-            else:
-                uncached_dates.append(date_str)
-
-        if not uncached_dates:
-            return list(cached_results.items())
-
-        async with semaphore:
-            try:
-                if async_multi_forecaster is not None:
-                    probs_result = await async_multi_forecaster(q, resolution_dates=uncached_dates)
-                else:
-                    from lab_forecaster import aforecast_multi_horizon
-                    probs_result = await aforecast_multi_horizon(
-                        q,
-                        resolution_dates=uncached_dates,
-                        source=q.source,
-                        prompt_variant=prompt_variant,
-                    )
-            except Exception:
-                logger.warning("multi_horizon_error_fallback", question_id=q.id, exc_info=True)
-                probs_result = None
-
-        results = list(cached_results.items())
-        if probs_result is None:
-            logger.info("multi_horizon_retry_perdate", question_id=q.id, n_retry=len(uncached_dates))
-            retry_tasks = []
-            for date_str in uncached_dates:
-                composite_key = f"{q.id}_{date_str}"
-                retry_tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
-            retry_results = await asyncio.gather(*retry_tasks)
-            n_success = 0
-            for date_str, r in zip(uncached_dates, retry_results):
-                if r is not None:
-                    results.append(r)
-                    n_success += 1
-                else:
-                    composite_key = f"{q.id}_{date_str}"
-                    results.append((composite_key, 0.5))
-            logger.info("multi_horizon_retry_result", question_id=q.id,
-                        n_success=n_success, n_default=len(uncached_dates) - n_success)
-        else:
-            for date_str, prob in zip(uncached_dates, probs_result):
-                composite_key = f"{q.id}_{date_str}"
-                _write_cache(model_slug, composite_key, prob)
-                results.append((composite_key, prob))
-        return results
-
-    single_tasks: list[Any] = []
-    multi_tasks: list[Any] = []
-    for q in questions:
-        if _has_multi_horizon(q) and (multi_horizon or async_multi_forecaster is not None):
-            dates = [d for d in q.resolution_dates if d and str(d).upper() != "N/A"]
-            multi_tasks.append(_forecast_multi_horizon(q, dates))
-        elif _has_multi_horizon(q):
-            dates = [d for d in q.resolution_dates if d]
-            for date_str in dates:
-                composite_key = f"{q.id}_{date_str}"
-                single_tasks.append(_forecast_one(q, composite_key, resolution_date=date_str))
-        else:
-            single_tasks.append(_forecast_one(q, q.id))
-
-    all_results: list[tuple[str, float]] = []
-
-    if single_tasks:
-        single_results = await tqdm_asyncio.gather(*single_tasks, desc="Forecasting")
-        all_results.extend(r for r in single_results if r is not None)
-
-    if multi_tasks:
-        multi_results = await tqdm_asyncio.gather(*multi_tasks, desc="Multi-horizon")
-        for batch in multi_results:
-            all_results.extend(batch)
-
-    return {qid: prob for qid, prob in all_results}
+    tasks = [_forecast_one(q) for q in questions]
+    raw_results = await tqdm_asyncio.gather(*tasks, desc="Forecasting")
+    return {qid: prob for r in raw_results if r is not None for qid, prob in [r]}
 
 
 def _normalize_round_name(name: str) -> str:

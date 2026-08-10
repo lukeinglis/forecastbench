@@ -244,8 +244,8 @@ def _raising_forecaster(question: Question, resolution_date: str | None = None, 
 
 
 class TestForecastErrorFallback:
-    def test_multi_horizon_error_skips_question(self) -> None:
-        """A forecaster that raises on multi-horizon question should skip it."""
+    def test_error_skips_question(self) -> None:
+        """A forecaster that raises should skip the question."""
         q = Question(
             id="mh1", source="acled", question="MH?",
             resolution_dates=["2024-01-01"],
@@ -253,9 +253,9 @@ class TestForecastErrorFallback:
         with patch("eval._read_cache", return_value=None), \
              patch("eval._write_cache"):
             forecasts = _run_sync(_raising_forecaster, [q], "test_slug")
-        assert "mh1_2024-01-01" not in forecasts
+        assert "mh1" not in forecasts
 
-    def test_multi_horizon_error_logs_warning(self) -> None:
+    def test_error_logs_warning(self) -> None:
         """A skipped question should log a warning with question_id."""
         import eval as eval_mod
 
@@ -301,9 +301,9 @@ async def _async_multi_ok(q: Question, resolution_dates: list[str], **kwargs: ob
     return [0.6] * len(resolution_dates)
 
 
-class TestMultiHorizonRetryFallback:
-    def test_multi_horizon_retry_on_failure(self) -> None:
-        """When multi-horizon fails, each date is retried via _forecast_one."""
+class TestAsyncForecasting:
+    def test_async_forecaster_produces_base_id_keys(self) -> None:
+        """Async forecasting uses base IDs for all questions."""
         q = Question(
             id="retry1", source="acled", question="Retry?",
             resolution_dates=["2024-01-01", "2024-06-01"],
@@ -312,39 +312,12 @@ class TestMultiHorizonRetryFallback:
              patch("eval._write_cache"):
             forecasts = asyncio.run(_run_async(
                 _async_forecaster_ok, [q], "test_slug",
-                multi_horizon=True,
-                async_multi_forecaster=_async_multi_raising,
             ))
-        assert forecasts["retry1_2024-01-01"] == 0.7
-        assert forecasts["retry1_2024-06-01"] == 0.7
+        assert "retry1" in forecasts
+        assert forecasts["retry1"] == 0.7
 
-    def test_multi_horizon_retry_partial_success(self) -> None:
-        """Some per-date retries succeed, some fail — mixed results."""
-        call_count = 0
-
-        async def _partial_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
-            nonlocal call_count
-            call_count += 1
-            if resolution_date == "2024-01-01":
-                return 0.8
-            raise ValueError("parse failure")
-
-        q = Question(
-            id="partial1", source="acled", question="Partial?",
-            resolution_dates=["2024-01-01", "2024-06-01"],
-        )
-        with patch("eval._read_cache", return_value=None), \
-             patch("eval._write_cache"):
-            forecasts = asyncio.run(_run_async(
-                _partial_forecaster, [q], "test_slug",
-                multi_horizon=True,
-                async_multi_forecaster=_async_multi_raising,
-            ))
-        assert forecasts["partial1_2024-01-01"] == 0.8
-        assert forecasts["partial1_2024-06-01"] == 0.5
-
-    def test_multi_horizon_retry_all_fail(self) -> None:
-        """All per-date retries fail — 0.5 fallback for every date."""
+    def test_async_error_skips_question(self) -> None:
+        """A failing async forecaster skips the question."""
         q = Question(
             id="allfail1", source="acled", question="AllFail?",
             resolution_dates=["2024-01-01", "2024-06-01", "2024-12-01"],
@@ -353,40 +326,13 @@ class TestMultiHorizonRetryFallback:
              patch("eval._write_cache"):
             forecasts = asyncio.run(_run_async(
                 _async_forecaster_fail, [q], "test_slug",
-                multi_horizon=True,
-                async_multi_forecaster=_async_multi_raising,
             ))
-        assert forecasts["allfail1_2024-01-01"] == 0.5
-        assert forecasts["allfail1_2024-06-01"] == 0.5
-        assert forecasts["allfail1_2024-12-01"] == 0.5
-
-    def test_multi_horizon_no_retry_on_success(self) -> None:
-        """When multi-horizon succeeds, no per-date retry is attempted."""
-        single_calls: list[str] = []
-
-        async def _tracking_forecaster(question: Question, resolution_date: str | None = None, **kwargs: object) -> float:
-            single_calls.append(resolution_date or "")
-            return 0.9
-
-        q = Question(
-            id="noretry1", source="acled", question="NoRetry?",
-            resolution_dates=["2024-01-01", "2024-06-01"],
-        )
-        with patch("eval._read_cache", return_value=None), \
-             patch("eval._write_cache"):
-            forecasts = asyncio.run(_run_async(
-                _tracking_forecaster, [q], "test_slug",
-                multi_horizon=True,
-                async_multi_forecaster=_async_multi_ok,
-            ))
-        assert forecasts["noretry1_2024-01-01"] == 0.6
-        assert forecasts["noretry1_2024-06-01"] == 0.6
-        assert len(single_calls) == 0
+        assert "allfail1" not in forecasts
 
 
-class TestEvalResultCompositeIds:
-    def test_resolved_has_composite_ids_for_multi_horizon(self, tmp_path: Path, monkeypatch: object) -> None:
-        """run_eval should return expanded_resolved with composite IDs for dataset questions."""
+class TestEvalResultBaseIds:
+    def test_resolved_has_base_ids_for_multi_horizon(self, tmp_path: Path, monkeypatch: object) -> None:
+        """run_eval should return iteration_resolved with base IDs (parity v0.2.0)."""
         import eval as eval_mod
 
         resolved = [
@@ -394,6 +340,13 @@ class TestEvalResultCompositeIds:
                 id="dq1", source="fred", question="Dataset Q",
                 outcome=1, forecast_due_date="2024-01-01",
                 resolution_dates=["2024-07-01", "2024-08-01"],
+                resolution_date="2024-07-01",
+            ),
+            ResolvedQuestion(
+                id="dq1", source="fred", question="Dataset Q",
+                outcome=0, forecast_due_date="2024-01-01",
+                resolution_dates=["2024-07-01", "2024-08-01"],
+                resolution_date="2024-08-01",
             ),
             ResolvedQuestion(
                 id="mq1", source="metaculus", question="Market Q",
@@ -405,9 +358,9 @@ class TestEvalResultCompositeIds:
                 forecast_due_date="2024-01-01",
                 question_set="set_0",
                 questions=[
-                    Question(id=rq.id, source=rq.source, question=rq.question,
-                             resolution_dates=rq.resolution_dates)
-                    for rq in resolved
+                    Question(id="dq1", source="fred", question="Dataset Q",
+                             resolution_dates=["2024-07-01", "2024-08-01"]),
+                    Question(id="mq1", source="metaculus", question="Market Q"),
                 ],
             ),
             QuestionSet(forecast_due_date="2024-02-01", question_set="set_1", questions=[]),
@@ -424,13 +377,11 @@ class TestEvalResultCompositeIds:
         eval_result = asyncio.run(run_eval(_dummy_forecaster, n_held_out=2, raw=True))
 
         resolved_ids = {rq.id for rq in eval_result.resolved}
-        assert "dq1_2024-07-01" in resolved_ids
-        assert "dq1_2024-08-01" in resolved_ids
+        assert "dq1" in resolved_ids
         assert "mq1" in resolved_ids
-        assert "dq1" not in resolved_ids
 
-    def test_per_date_resolved_deduplicates_for_forecasting(self, tmp_path: Path, monkeypatch: object) -> None:
-        """Dataset questions with resolution_dates get per-date forecasting and composite IDs."""
+    def test_forecaster_called_once_per_base_question(self, tmp_path: Path, monkeypatch: object) -> None:
+        """Multi-horizon questions get one forecaster call per base question."""
         import eval as eval_mod
 
         resolved = [
@@ -475,13 +426,11 @@ class TestEvalResultCompositeIds:
 
         eval_result = asyncio.run(run_eval(_counting_forecaster, n_held_out=2, raw=True))
 
-        assert call_count == 1 + 3, (
-            f"Expected 4 forecaster calls (1 market + 3 per-date for dataset), "
-            f"NOT 4+3=7 (one per resolved entry). Got {call_count}"
+        assert call_count == 2, (
+            f"Expected 2 forecaster calls (1 per base question), got {call_count}"
         )
-        resolved_ids = {rq.id for rq in eval_result.resolved}
-        assert "dq1_2024-09-01" in resolved_ids
-        assert "mq1" in resolved_ids
+        assert "dq1" in eval_result.forecasts
+        assert "mq1" in eval_result.forecasts
 
 
 class TestDifficultyAdjustmentLogging:

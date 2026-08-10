@@ -77,8 +77,8 @@ class TestEvalDummyAgent:
                 Question(id="q1", source="acled", question="Test Q1"),
             ],
         )
-        mock_resolutions = {
-            "q1": Resolution(id="q1", outcome=1, resolution_date="2026-07-19"),
+        mock_resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=1, resolution_date="2026-07-19")],
         }
 
         with patch("eval.fetch_question_set", return_value=mock_qs), \
@@ -104,9 +104,9 @@ class TestEvalRoundWithDummy:
                 Question(id="q2", source="metaculus", question="Will event Y happen?"),
             ],
         )
-        mock_resolutions = {
-            "q1": Resolution(id="q1", outcome=0, resolution_date="2026-07-19"),
-            "q2": Resolution(id="q2", outcome=1, resolution_date="2026-07-19"),
+        mock_resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=0, resolution_date="2026-07-19")],
+            "q2": [Resolution(id="q2", outcome=1, resolution_date="2026-07-19")],
         }
 
         with patch("eval.fetch_question_set", return_value=mock_qs), \
@@ -148,8 +148,8 @@ class TestSubmitFlag:
                 Question(id="q2", source="acled", question="Test Q2 (unresolved)"),
             ],
         )
-        mock_resolutions = {
-            "q1": Resolution(id="q1", outcome=1, resolution_date="2026-07-19"),
+        mock_resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=1, resolution_date="2026-07-19")],
         }
 
         with patch("eval.fetch_question_set", return_value=mock_qs), \

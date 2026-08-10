@@ -593,10 +593,10 @@ def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], l
 
     all_qs, resolved = load_data()
     used_qs = [qs for qs in all_qs if qs.forecast_due_date in question_sets_used]
-    resolutions = {
-        q.id: Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
-        for q in resolved
-    }
+    resolutions: dict[str, list[Resolution]] = {}
+    for q in resolved:
+        r = Resolution(id=q.id, outcome=q.outcome, resolution_date=q.resolution_date)
+        resolutions.setdefault(q.id, []).append(r)
     iteration_resolved = join_resolved_questions(used_qs, resolutions)
     return forecasts, iteration_resolved
 

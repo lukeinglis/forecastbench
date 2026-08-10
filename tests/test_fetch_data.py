@@ -513,16 +513,16 @@ class TestResolvedFieldFiltering:
 
     def test_resolved_false_excluded(self) -> None:
         qs = self._make_qs()
-        resolutions: dict[str, Resolution] = {
-            "q1": Resolution(id="q1", outcome=1, resolved=False),
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=1, resolved=False)],
         }
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 0
 
     def test_resolved_true_included(self) -> None:
         qs = self._make_qs()
-        resolutions: dict[str, Resolution] = {
-            "q1": Resolution(id="q1", outcome=1, resolved=True),
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=1, resolved=True)],
         }
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 1
@@ -530,16 +530,16 @@ class TestResolvedFieldFiltering:
 
     def test_resolved_none_included(self) -> None:
         qs = self._make_qs()
-        resolutions: dict[str, Resolution] = {
-            "q1": Resolution(id="q1", outcome=0, resolved=None),
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=0, resolved=None)],
         }
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 1
 
     def test_resolved_missing_included(self) -> None:
         qs = self._make_qs()
-        resolutions: dict[str, Resolution] = {
-            "q1": Resolution(id="q1", outcome=1),
+        resolutions: dict[str, list[Resolution]] = {
+            "q1": [Resolution(id="q1", outcome=1)],
         }
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 1
