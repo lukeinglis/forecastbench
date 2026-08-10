@@ -10,7 +10,6 @@ from fetch_data import Question, QuestionSet, ResolvedQuestion, join_resolved_qu
 from lab_forecaster import _build_prompt
 from eval import (
     _build_question,
-    _has_multi_horizon,
     _run_async,
     _run_sync,
     _write_cache,
@@ -149,32 +148,6 @@ class TestPromptResolutionDate:
         q = Question(id="q1", source="metaculus", question="Test?")
         prompt = _build_prompt(q, resolution_date="2025-07-15")
         assert "Question resolution date:" in prompt
-
-
-class TestHasMultiHorizon:
-    def test_dataset_with_list(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?", resolution_dates=["2024-07-28", "2025-01-17"])
-        assert _has_multi_horizon(q) is True
-
-    def test_dataset_with_empty_list(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?", resolution_dates=[])
-        assert _has_multi_horizon(q) is False
-
-    def test_dataset_with_na(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?", resolution_dates="N/A")
-        assert _has_multi_horizon(q) is False
-
-    def test_dataset_with_none(self) -> None:
-        q = Question(id="q1", source="acled", question="Test?", resolution_dates=None)
-        assert _has_multi_horizon(q) is False
-
-    def test_market_question_never_multi(self) -> None:
-        q = Question(id="q1", source="metaculus", question="Test?", resolution_dates=["2024-07-28"])
-        assert _has_multi_horizon(q) is False
-
-    def test_polymarket_never_multi(self) -> None:
-        q = Question(id="q1", source="polymarket", question="Test?", resolution_dates=["2024-07-28"])
-        assert _has_multi_horizon(q) is False
 
 
 class TestBaseIdForecasting:

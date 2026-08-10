@@ -480,8 +480,8 @@ def _build_summary(report: dict[str, Any]) -> dict[str, Any]:
         recommendations.append(
             "Root-cause the ID mismatch: forecast composite keys use horizon dates "
             "but outcome keys use resolution dates. Fix likely in eval.py "
-            "(_expand_resolved_for_horizons) or forecastbench-parity "
-            "(join_resolved_questions). If parity package, file an issue."
+            "or forecastbench-parity (join_resolved_questions). "
+            "If parity package, file an issue."
         )
 
     sources = analyses.get("source_stratification", {})

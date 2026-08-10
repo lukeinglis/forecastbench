@@ -16,7 +16,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
+from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
 
@@ -57,12 +57,6 @@ class EvalResult(NamedTuple):
     resolved: list[ResolvedQuestion]
     model_slug: str
 
-
-def _has_multi_horizon(question: Question) -> bool:
-    if question.source.lower() in MARKET_SOURCES:
-        return False
-    rd = question.resolution_dates
-    return isinstance(rd, list) and any(d for d in rd)
 
 
 

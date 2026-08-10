@@ -112,10 +112,7 @@ def check_resolution_matching() -> tuple[bool, str]:
             fetch_question_set,
             join_resolved_questions,
             list_question_set_files,
-            MARKET_SOURCES,
         )
-        from eval import _expand_resolved_for_horizons
-
         filenames = list_question_set_files()
         if not filenames:
             return True, "[WARN] No question sets available"
@@ -128,30 +125,14 @@ def check_resolution_matching() -> tuple[bool, str]:
         if not resolved:
             return True, "[WARN] No resolved questions in latest set"
 
-        base_count = len(resolved)
-        expanded = _expand_resolved_for_horizons(resolved)
-        expanded_count = len(expanded)
+        resolved_count = len(resolved)
+        base_ids = {q.id for q in qs.questions}
+        base_count = len(base_ids)
 
-        dataset_q = [q for q in resolved if q.source.lower() not in MARKET_SOURCES]
-
-        for rq in dataset_q:
-            rd = rq.resolution_dates
-            if isinstance(rd, list) and len(rd) > 0:
-                matching_expanded = [
-                    e for e in expanded
-                    if e.id.startswith(f"{rq.id}_")
-                ]
-                if len(matching_expanded) != len(rd):
-                    return (
-                        False,
-                        f"[FAIL] Resolution expansion mismatch for {rq.id}: "
-                        f"expected {len(rd)} entries, got {len(matching_expanded)}",
-                    )
-
-        ratio = expanded_count / base_count if base_count > 0 else 0
+        ratio = resolved_count / base_count if base_count > 0 else 0
         return (
             True,
-            f"[PASS] Resolution matching: {expanded_count} resolved "
+            f"[PASS] Resolution matching: {resolved_count} resolved "
             f"from {base_count} base questions (ratio {ratio:.1f}x)",
         )
     except (requests.RequestException, OSError) as e:
@@ -459,7 +440,6 @@ def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tupl
 def check_dummy_score() -> tuple[bool, str]:
     """Dummy forecaster (always 0.5) must score overall_index == 50.0 ± 0.01."""
     from dummy_forecaster import forecast as dummy_forecast
-    from eval import _expand_resolved_for_horizons
     from fetch_data import (
         Question,
         fetch_all_question_sets,
@@ -479,10 +459,8 @@ def check_dummy_score() -> tuple[bool, str]:
     if not resolved:
         return False, "[FAIL] check_dummy_score: no resolved questions after join"
 
-    expanded = _expand_resolved_for_horizons(resolved)
-
     forecasts: dict[str, float] = {}
-    for rq in expanded:
+    for rq in resolved:
         q = Question(
             id=rq.id,
             source=rq.source,
@@ -498,7 +476,7 @@ def check_dummy_score() -> tuple[bool, str]:
         prob = dummy_forecast(q, resolution_date=rq.resolution_date, source=rq.source)
         forecasts[rq.id] = prob
 
-    result = score_forecasts(forecasts, expanded, difficulty_adjusted=False)
+    result = score_forecasts(forecasts, resolved, difficulty_adjusted=False)
 
     if abs(result.overall_index - 50.0) <= 0.01:
         return (
