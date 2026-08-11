@@ -10,19 +10,19 @@ import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, TypeVar, cast
 
 try:
     import pandas as pd
     import streamlit as st
     import plotly.graph_objects as go
+
+    _HAS_DASHBOARD_DEPS = True
 except ImportError:
-    print(
-        "Dashboard requires streamlit and plotly.\n"
-        "Install with: uv pip install 'forecastbench[dashboard]'\n"
-        "Or run: uv run --extra dashboard streamlit run dashboard.py"
-    )
-    sys.exit(1)
+    pd = None
+    st = None
+    go = None
+    _HAS_DASHBOARD_DEPS = False
 
 from analyze import (
     _lookup_forecast,
@@ -65,7 +65,16 @@ class AggregateRun:
         return self.slug
 
 
-@st.cache_data  # type: ignore[untyped-decorator]
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def _cache_data(fn: _F) -> _F:
+    if _HAS_DASHBOARD_DEPS:
+        return cast(_F, st.cache_data(fn))
+    return fn
+
+
+@_cache_data
 def load_all_results() -> list[ResultData]:
     if not RESULTS_DIR.exists():
         return []
@@ -81,7 +90,7 @@ def load_all_results() -> list[ResultData]:
     return results
 
 
-@st.cache_data  # type: ignore[untyped-decorator]
+@_cache_data
 def load_resolved_questions() -> list[dict[str, Any]]:
     _, resolved = load_data()
     return [
@@ -95,9 +104,9 @@ def load_resolved_questions() -> list[dict[str, Any]]:
     ]
 
 
-@st.cache_data  # type: ignore[untyped-decorator]
+@_cache_data
 def load_leaderboard(name: str) -> list[dict[str, str]]:
-    return fetch_leaderboard(name)
+    return list(fetch_leaderboard(name))
 
 
 def _round_name_from_result(result: ResultData) -> str:
@@ -108,7 +117,7 @@ def _round_name_from_result(result: ResultData) -> str:
     qsets = meta.get("question_sets_used", [])
     if qsets:
         return ", ".join(sorted(qsets))
-    return result.get("_filename", "unknown")
+    return str(result.get("_filename", "unknown"))
 
 
 def _compute_aggregate_scoring(
@@ -144,7 +153,7 @@ def _compute_aggregate_scoring(
     def _mean_brier(pairs: list[tuple[float, int]]) -> float:
         if not pairs:
             return 0.25
-        return sum(brier_score(f, o) for f, o in pairs) / len(pairs)
+        return float(sum(brier_score(f, o) for f, o in pairs) / len(pairs))
 
     ds_brier = _mean_brier(dataset_pairs)
     mk_brier = _mean_brier(market_pairs)
@@ -202,7 +211,7 @@ def _group_results_into_runs(results: list[ResultData]) -> list[AggregateRun]:
     return runs
 
 
-@st.cache_data  # type: ignore[untyped-decorator]
+@_cache_data
 def group_results(results: list[ResultData]) -> list[dict[str, Any]]:
     """Cached wrapper that returns serializable dicts (Streamlit requirement)."""
     runs = _group_results_into_runs(results)
@@ -592,15 +601,15 @@ def _view_heatmap_by_source(
     col_order = [source_idx_map[s] for s in sources_sorted]
 
     display_matrix: list[list[float | None]] = []
-    for row in matrix:
-        reordered = [row[j] for j in col_order]
+    for mat_row in matrix:
+        reordered: list[float | None] = [mat_row[j] for j in col_order]
         if show_index:
             reordered = [brier_index(v) if v is not None else None for v in reordered]
         display_matrix.append(reordered)
 
     display_counts: list[list[int]] = []
-    for row in counts:
-        display_counts.append([row[j] for j in col_order])
+    for cnt_row in counts:
+        display_counts.append([cnt_row[j] for j in col_order])
 
     display_sources = sources_sorted
     label_sources = []
@@ -617,21 +626,21 @@ def _view_heatmap_by_source(
     st.caption(caption)
 
     hover_text: list[list[str]] = []
-    for i, run in enumerate(run_labels):
-        row: list[str] = []
+    for i, run_lbl in enumerate(run_labels):
+        hover_row: list[str] = []
         for j, source in enumerate(label_sources):
             val = display_matrix[i][j]
             n = display_counts[i][j]
             if val is not None:
-                row.append(
-                    f"Run: {run}<br>Source: {source}<br>{metric_label}: {val:.3f}<br>N: {n}"
+                hover_row.append(
+                    f"Run: {run_lbl}<br>Source: {source}<br>{metric_label}: {val:.3f}<br>N: {n}"
                 )
             else:
-                row.append(f"Run: {run}<br>Source: {source}<br>No data")
-        hover_text.append(row)
+                hover_row.append(f"Run: {run_lbl}<br>Source: {source}<br>No data")
+        hover_text.append(hover_row)
 
     annotations: list[dict[str, Any]] = []
-    for i, run in enumerate(run_labels):
+    for i, _run_label in enumerate(run_labels):
         for j in range(len(label_sources)):
             val = display_matrix[i][j]
             if val is not None:
@@ -687,11 +696,11 @@ def _view_heatmap_by_source(
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**By Run**")
-        for run in sorted(runs, key=lambda r: r.scoring_result.get("overall_brier", 1.0)):
-            sr = run.scoring_result
+        for agg in sorted(runs, key=lambda r: r.scoring_result.get("overall_brier", 1.0)):
+            sr = agg.scoring_result
             bs = sr.get("overall_brier", 0)
             idx = sr.get("overall_index", 0)
-            st.text(f"{run.label}: Brier {bs:.4f} | Index {idx:.1f}")
+            st.text(f"{agg.label}: Brier {bs:.4f} | Index {idx:.1f}")
     with col2:
         st.markdown("**By Source (avg across runs)**")
         source_avgs: dict[str, list[float]] = {}
@@ -715,8 +724,8 @@ def _view_heatmap_by_track(
     show_index: bool,
 ) -> None:
     overall_brier_map: dict[str, float] = {}
-    for run in runs:
-        overall_brier_map[run.label] = run.scoring_result.get("overall_brier", 1.0)
+    for agg_run in runs:
+        overall_brier_map[agg_run.label] = agg_run.scoring_result.get("overall_brier", 1.0)
     run_labels = sorted(overall_brier_map.keys(), key=lambda r: overall_brier_map.get(r, 1.0))
 
     tracks = ["dataset", "market"]
@@ -724,8 +733,8 @@ def _view_heatmap_by_track(
     track_counts: list[list[int]] = []
 
     for run_label in run_labels:
-        run = next(r for r in runs if r.label == run_label)
-        sr = run.scoring_result
+        matched_run = next(r for r in runs if r.label == run_label)
+        sr = matched_run.scoring_result
         ds_bs = sr.get("dataset_brier")
         mk_bs = sr.get("market_brier")
         ds_n = sr.get("n_dataset", 0)
@@ -752,13 +761,13 @@ def _view_heatmap_by_track(
 
     hover_text: list[list[str]] = []
     annotations: list[dict[str, Any]] = []
-    for i, run in enumerate(run_labels):
+    for i, run_name in enumerate(run_labels):
         row_hover: list[str] = []
         for j, track in enumerate(tracks):
             val = track_matrix[i][j]
             n = track_counts[i][j]
             if val is not None:
-                row_hover.append(f"Run: {run}<br>Track: {track}<br>{metric_label}: {val:.3f}<br>N: {n}")
+                row_hover.append(f"Run: {run_name}<br>Track: {track}<br>{metric_label}: {val:.3f}<br>N: {n}")
                 fmt = f"{val:.1f}" if show_index else f"{val:.3f}"
                 threshold = 50 if show_index else 0.15
                 annotations.append(
@@ -774,7 +783,7 @@ def _view_heatmap_by_track(
                     )
                 )
             else:
-                row_hover.append(f"Run: {run}<br>Track: {track}<br>No data")
+                row_hover.append(f"Run: {run_name}<br>Track: {track}<br>No data")
         hover_text.append(row_hover)
 
     fig = go.Figure(
@@ -1431,6 +1440,13 @@ def view_compare(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]])
 
 
 def main() -> None:
+    if not _HAS_DASHBOARD_DEPS:
+        print(
+            "Dashboard requires streamlit, pandas and plotly.\n"
+            "Install with: uv pip install 'forecastbench[dashboard]'\n"
+            "Or run: uv run --extra dashboard streamlit run dashboard.py"
+        )
+        sys.exit(1)
     st.set_page_config(page_title="ForecastBench Dashboard", layout="wide")
     st.title("ForecastBench Experiment Dashboard")
 

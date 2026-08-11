@@ -13,7 +13,6 @@ import math
 
 import pytest
 
-from eval import _expand_resolved_for_horizons
 from fetch_data import (
     Question,
     QuestionSet,
@@ -76,8 +75,8 @@ class TestResolutionModelPreservation:
             questions=[question],
         )
 
-        resolutions = {
-            "ts1": Resolution(id="ts1", outcome=1, resolution_date="2024-03-01"),
+        resolutions: dict[str, list[Resolution]] = {
+            "ts1": [Resolution(id="ts1", outcome=1, resolution_date="2024-03-01")],
         }
         resolved = join_resolved_questions([qs], resolutions)
 
@@ -97,8 +96,8 @@ class TestResolutionModelPreservation:
             forecast_due_date="2024-01-01",
             questions=[question],
         )
-        resolutions = {
-            "ts2": Resolution(id="ts2", outcome=0, resolution_date="2024-03-01"),
+        resolutions: dict[str, list[Resolution]] = {
+            "ts2": [Resolution(id="ts2", outcome=0, resolution_date="2024-03-01")],
         }
         resolved = join_resolved_questions([qs], resolutions)
 
@@ -161,78 +160,49 @@ class TestOutcomeValidation:
             brier_score(-0.1, 0)
 
 
-class TestCompositeIdCorrectness:
-    """_expand_resolved_for_horizons must produce {id}_{date} composite IDs."""
+class TestScoringKeyCorrectness:
+    """score_forecasts uses _scoring_key for per-horizon scoring with base-ID forecast lookup."""
 
-    def test_dataset_question_expands_to_composite_ids(self) -> None:
-        rq = ResolvedQuestion(
-            id="fred_q1",
-            source="fred",
-            question="Will value exceed threshold?",
-            resolution_dates=["2026-01-01", "2026-02-01", "2026-03-01"],
-            outcome=1,
-            forecast_due_date="2025-12-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
+    def test_multi_horizon_scored_with_base_id_forecast(self) -> None:
+        resolved = [
+            ResolvedQuestion(
+                id="q1", source="fred", question="Q",
+                outcome=1, resolution_date="2026-01-01",
+                resolution_dates=["2026-01-01", "2026-02-01"],
+                forecast_due_date="2025-12-01",
+            ),
+            ResolvedQuestion(
+                id="q1", source="fred", question="Q",
+                outcome=0, resolution_date="2026-02-01",
+                resolution_dates=["2026-01-01", "2026-02-01"],
+                forecast_due_date="2025-12-01",
+            ),
+        ]
+        forecasts = {"q1": 0.8}
+        result = score_forecasts(forecasts, resolved, difficulty_adjusted=False)
+        assert result.n_dataset == 2
+        assert result.n_missing == 0
 
-        assert len(expanded) == 3
-        ids = {e.id for e in expanded}
-        assert ids == {"fred_q1_2026-01-01", "fred_q1_2026-02-01", "fred_q1_2026-03-01"}
+    def test_market_question_scored_by_base_id(self) -> None:
+        resolved = [
+            ResolvedQuestion(
+                id="mkt1", source="metaculus", question="Market question",
+                outcome=1, forecast_due_date="2024-01-01",
+            ),
+        ]
+        result = score_forecasts({"mkt1": 0.9}, resolved, difficulty_adjusted=False)
+        assert result.n_market == 1
+        assert result.n_missing == 0
 
-    def test_composite_id_has_correct_resolution_date(self) -> None:
-        rq = ResolvedQuestion(
-            id="ts1",
-            source="dbnomics",
-            question="Test",
-            resolution_dates=["2026-04-01", "2026-07-01"],
-            outcome=0,
-            forecast_due_date="2026-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-
-        by_id = {e.id: e for e in expanded}
-        assert by_id["ts1_2026-04-01"].resolution_date == "2026-04-01"
-        assert by_id["ts1_2026-07-01"].resolution_date == "2026-07-01"
-
-    def test_market_question_not_expanded(self) -> None:
-        rq = ResolvedQuestion(
-            id="mkt1",
-            source="metaculus",
-            question="Market question",
-            outcome=1,
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-
-        assert len(expanded) == 1
-        assert expanded[0].id == "mkt1"
-
-    def test_no_resolution_dates_not_expanded(self) -> None:
-        rq = ResolvedQuestion(
-            id="plain1",
-            source="fred",
-            question="Simple question",
-            outcome=1,
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-
-        assert len(expanded) == 1
-        assert expanded[0].id == "plain1"
-
-    def test_empty_resolution_dates_not_expanded(self) -> None:
-        rq = ResolvedQuestion(
-            id="empty1",
-            source="fred",
-            question="Empty dates",
-            resolution_dates=[],
-            outcome=0,
-            forecast_due_date="2024-01-01",
-        )
-        expanded = _expand_resolved_for_horizons([rq])
-
-        assert len(expanded) == 1
-        assert expanded[0].id == "empty1"
+    def test_missing_forecast_defaults_to_half(self) -> None:
+        resolved = [
+            ResolvedQuestion(
+                id="plain1", source="fred", question="Simple question",
+                outcome=1, forecast_due_date="2024-01-01",
+            ),
+        ]
+        result = score_forecasts({}, resolved, difficulty_adjusted=False)
+        assert result.n_missing == 1
 
 
 class TestScoringMathInvariants:

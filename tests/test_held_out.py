@@ -19,20 +19,19 @@ class TestHeldOutLeakage:
 
     def test_held_out_excluded_from_scoring_path(self, mock_question_sets: list[QuestionSet]) -> None:
         """Even if resolutions exist for held-out questions, they must not be scored."""
+        from fetch_data import Resolution
+
         iteration, held_out = split_held_out(mock_question_sets, n_held_out=2)
 
         all_question_ids = {q.id for qs in mock_question_sets for q in qs.questions}
         held_question_ids = {q.id for qs in held_out for q in qs.questions}
 
-        class FakeRes:
-            def __init__(self, qid: str) -> None:
-                self.id = qid
-                self.outcome = 1
-                self.resolution_date = "2024-06-01"
+        all_resolutions: dict[str, list[Resolution]] = {
+            qid: [Resolution(id=qid, outcome=1, resolution_date="2024-06-01")]
+            for qid in all_question_ids
+        }
 
-        all_resolutions = {qid: FakeRes(qid) for qid in all_question_ids}  # type: ignore[dict-item]
-
-        resolved = join_resolved_questions(iteration, all_resolutions)  # type: ignore[arg-type]
+        resolved = join_resolved_questions(iteration, all_resolutions)
         resolved_ids = {q.id for q in resolved}
 
         leaked = resolved_ids & held_question_ids

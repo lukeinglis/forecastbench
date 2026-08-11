@@ -14,13 +14,14 @@
 - `uv run python eval.py --agent dummy` to run dummy forecaster (default)
 - `uv run python eval.py --agent lab` to run LLM lab forecaster
 - `uv run python eval.py --agent lab --raw` to run without difficulty adjustment
-- `uv run python eval.py --agent lab --per-date` to disable multi-horizon batching (multi-horizon is default)
 - `uv run python dummy_forecaster.py` to run dummy forecaster (shortcut)
 - `uv run python lab_forecaster.py` to run lab forecaster (shortcut)
 - `FORECAST_MODEL=vertex_ai/claude-sonnet-4-6 uv run python eval.py --agent lab` to run with Vertex AI
 - `FORECAST_MODEL=openai/gpt-4o uv run python eval.py --agent lab` to run with alternate model
 - `uv run python eval.py --agent lab --run-label thinking` to tag a run with a technique label
 - `uv run python analyze.py --compare` to compare all saved results
+- `uv run python investigate.py` to run parity investigation diagnostic
+- `uv run python investigate.py results/FILE.json` to investigate a single result file
 - `uv run python submit.py assemble --org ORG --model MODEL --model-org ORG --result results/FILE.json` to build submission
 - `uv run python submit.py validate submissions/FILE.json` to validate coverage
 - `uv run python verify_parity.py` to run structural and behavioral parity checks against upstream ForecastBench
@@ -39,6 +40,7 @@
 - **cutoff.py** - Chronological data cutoff enforcement (CutoffEnvironment, CutoffContext)
 - **lab_forecaster.py** - LLM lab forecaster using litellm (zero-shot superforecaster prompt)
 - **analyze.py** - Error analysis, calibration, bias detection, and results comparison
+- **investigate.py** - Parity evaluation diagnostic analysis (dataset/market asymmetry, missing forecasts, ID mismatches, knowledge cutoff)
 - **verify_parity.py** - Pipeline parity verifier (fetches live from upstream ForecastBench repo/leaderboard)
 - **check_staleness.py** - Git staleness check to warn when local main is behind remote
 - **tournament.py** - Tournament analysis with cost tracking, bootstrap comparisons, and round filtering
@@ -61,7 +63,7 @@
 - FORECAST_MODEL env var selects LLM provider/model (default: vertex_ai/claude-sonnet-4@20250514). Vertex AI ADC tokens auto-refresh.
 - VERTEXAI_LOCATION env var sets the Vertex AI region (default: europe-west1).
 - FORECAST_TEMPERATURE env var sets temperature (default: 0). FORECAST_MAX_TOKENS sets max tokens (default: 16384).
-- Multi-horizon forecasting is enabled by default for all dataset sources. Use --per-date to force per-date calling for all sources.
+- Multi-horizon forecasting is handled internally by forecastbench-parity (per-horizon expansion in join_resolved_questions).
 - Vertex AI auth via `gcloud auth application-default login`, project: itpc-gcp-product-all-claude
 - Lab forecaster always returns valid [0, 1] float, never raises
 - Results saved to results/ directory as JSON (auto-persisted after each eval run)
