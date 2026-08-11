@@ -49,3 +49,11 @@ even with raw scoring.
 
 ### Archived (pre-fix, invalid)
 - `pre-fix-archived/` — Results from broken pipeline, see README there
+
+### Archived (parity v0.1.2, invalid)
+- `archive/parity-v0.1.2-23rounds/` — 24 result files generated 2026-08-07 with
+  forecastbench-parity v0.1.2. Archived because v0.1.2 had broken multi-horizon
+  resolution that silently dropped horizons >0, causing data loss on multi-horizon
+  questions. Fixed in parity v0.2.0 which corrects `join_resolved_questions` to
+  properly expand and match all horizons. These results should not be used for
+  analysis or comparison — regenerate with v0.2.0.
