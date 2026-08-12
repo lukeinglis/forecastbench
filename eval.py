@@ -17,7 +17,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
-from fetch_data import Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
+from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
 
@@ -47,7 +47,32 @@ class AsyncForecaster(Protocol):
     ) -> float: ...
 
 
+class AsyncMultiForecaster(Protocol):
+    async def __call__(
+        self, question: Question,
+        resolution_dates: list[str],
+        source: str | None = ...,
+        prompt_variant: str = ...,
+    ) -> list[float]: ...
+
+
+class SyncMultiForecaster(Protocol):
+    def __call__(
+        self, question: Question,
+        resolution_dates: list[str],
+        source: str | None = ...,
+        prompt_variant: str = ...,
+    ) -> list[float]: ...
+
+
 Forecaster = Union[SyncForecaster, AsyncForecaster]
+
+
+def _is_multi_horizon(q: Question) -> bool:
+    if q.source.lower() in MARKET_SOURCES:
+        return False
+    rd = q.resolution_dates
+    return isinstance(rd, list) and len(rd) > 1
 
 
 class EvalResult(NamedTuple):
@@ -247,6 +272,7 @@ async def run_eval(
     agent_name: str | None = None,
     n_rounds: int | None = None,
     run_label: str | None = None,
+    multi_forecaster: AsyncMultiForecaster | SyncMultiForecaster | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline."""
     if round_name is not None:
@@ -291,9 +317,33 @@ async def run_eval(
     model_slug = _model_slug(agent_name, run_label=run_label)
 
     if is_async_forecaster(forecaster):
-        forecasts = await _run_async(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
+        forecasts = await _run_async(
+            forecaster, questions, model_slug,  # type: ignore[arg-type]
+            prompt_variant=prompt_variant,
+            multi_forecaster=multi_forecaster,  # type: ignore[arg-type]
+        )
     else:
-        forecasts = _run_sync(forecaster, questions, model_slug, prompt_variant=prompt_variant)  # type: ignore[arg-type]
+        forecasts = _run_sync(
+            forecaster, questions, model_slug,  # type: ignore[arg-type]
+            prompt_variant=prompt_variant,
+            multi_forecaster=multi_forecaster,  # type: ignore[arg-type]
+        )
+
+    has_composite = any(
+        "_" in k and k != q_id
+        for k in forecasts
+        for q_id in [k.rsplit("_", 1)[0]] if k.rsplit("_", 1)[0] != k
+    )
+    if has_composite:
+        scoring_resolved: list[ResolvedQuestion] = []
+        for rq in iteration_resolved:
+            composite = f"{rq.id}_{rq.resolution_date}" if rq.resolution_date and rq.resolution_date != "N/A" else None
+            if composite and composite in forecasts:
+                scoring_resolved.append(rq.model_copy(update={"id": composite, "resolution_date": None}))
+            else:
+                scoring_resolved.append(rq)
+    else:
+        scoring_resolved = iteration_resolved
 
     all_forecasts: dict[str, dict[str, float]] | None = None
     if not raw:
@@ -311,7 +361,7 @@ async def run_eval(
                         note="scores_not_difficulty_adjusted_this_run")
 
     result = score_forecasts(
-        forecasts, iteration_resolved,
+        forecasts, scoring_resolved,
         difficulty_adjusted=not raw,
         all_forecasts=all_forecasts,
     )
@@ -355,26 +405,55 @@ def _run_sync(
     questions: list[Question],
     model_slug: str,
     prompt_variant: str = "default",
+    multi_forecaster: SyncMultiForecaster | None = None,
 ) -> dict[str, float]:
     forecasts: dict[str, float] = {}
     for q in questions:
-        cached = _read_cache(model_slug, q.id)
-        if cached is not None:
-            forecasts[q.id] = cached
-            continue
-        try:
-            prob = forecaster(
-                q, source=q.source, resolution_dates=q.resolution_dates,
-                prompt_variant=prompt_variant,
-            )
-        except ValueError:
-            logger.warning("parse_failure_skip", question_id=q.id)
-            continue
-        except Exception:
-            logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
-            continue
-        forecasts[q.id] = prob
-        _write_cache(model_slug, q.id, prob)
+        if _is_multi_horizon(q) and multi_forecaster is not None:
+            rd = q.resolution_dates
+            composite_keys = [f"{q.id}_{d}" for d in rd]
+            all_cached = True
+            for ck in composite_keys:
+                cached = _read_cache(model_slug, ck)
+                if cached is not None:
+                    forecasts[ck] = cached
+                else:
+                    all_cached = False
+            if all_cached:
+                continue
+            try:
+                probs = multi_forecaster(
+                    q, resolution_dates=rd, source=q.source,
+                    prompt_variant=prompt_variant,
+                )
+            except ValueError:
+                logger.warning("parse_failure_skip", question_id=q.id)
+                continue
+            except Exception:
+                logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
+                continue
+            for date, prob in zip(rd, probs):
+                ck = f"{q.id}_{date}"
+                forecasts[ck] = prob
+                _write_cache(model_slug, ck, prob)
+        else:
+            cached = _read_cache(model_slug, q.id)
+            if cached is not None:
+                forecasts[q.id] = cached
+                continue
+            try:
+                prob = forecaster(
+                    q, source=q.source, resolution_dates=q.resolution_dates,
+                    prompt_variant=prompt_variant,
+                )
+            except ValueError:
+                logger.warning("parse_failure_skip", question_id=q.id)
+                continue
+            except Exception:
+                logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
+                continue
+            forecasts[q.id] = prob
+            _write_cache(model_slug, q.id, prob)
     return forecasts
 
 
@@ -383,6 +462,7 @@ async def _run_async(
     questions: list[Question],
     model_slug: str,
     prompt_variant: str = "default",
+    multi_forecaster: AsyncMultiForecaster | None = None,
 ) -> dict[str, float]:
     from tqdm.asyncio import tqdm_asyncio
 
@@ -391,30 +471,67 @@ async def _run_async(
 
     async def _forecast_one(
         q: Question,
-    ) -> tuple[str, float] | None:
-        cached = _read_cache(model_slug, q.id)
-        if cached is not None:
-            return q.id, cached
-        async with semaphore:
-            try:
-                prob = await forecaster(
-                    q,
-                    source=q.source,
-                    resolution_dates=q.resolution_dates,
-                    prompt_variant=prompt_variant,
-                )
-            except ValueError:
-                logger.warning("parse_failure_skip", question_id=q.id)
-                return None
-            except Exception:
-                logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
-                return None
-        _write_cache(model_slug, q.id, prob)
-        return q.id, prob
+    ) -> list[tuple[str, float]] | None:
+        if _is_multi_horizon(q) and multi_forecaster is not None:
+            rd = q.resolution_dates
+            composite_keys = [f"{q.id}_{d}" for d in rd]
+            cached_results: list[tuple[str, float]] = []
+            all_cached = True
+            for ck in composite_keys:
+                cached = _read_cache(model_slug, ck)
+                if cached is not None:
+                    cached_results.append((ck, cached))
+                else:
+                    all_cached = False
+            if all_cached:
+                return cached_results
+            async with semaphore:
+                try:
+                    probs = await multi_forecaster(
+                        q, resolution_dates=rd, source=q.source,
+                        prompt_variant=prompt_variant,
+                    )
+                except ValueError:
+                    logger.warning("parse_failure_skip", question_id=q.id)
+                    return None
+                except Exception:
+                    logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
+                    return None
+            results: list[tuple[str, float]] = []
+            for date, prob in zip(rd, probs):
+                ck = f"{q.id}_{date}"
+                _write_cache(model_slug, ck, prob)
+                results.append((ck, prob))
+            return results
+        else:
+            cached = _read_cache(model_slug, q.id)
+            if cached is not None:
+                return [(q.id, cached)]
+            async with semaphore:
+                try:
+                    prob = await forecaster(
+                        q,
+                        source=q.source,
+                        resolution_dates=q.resolution_dates,
+                        prompt_variant=prompt_variant,
+                    )
+                except ValueError:
+                    logger.warning("parse_failure_skip", question_id=q.id)
+                    return None
+                except Exception:
+                    logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
+                    return None
+            _write_cache(model_slug, q.id, prob)
+            return [(q.id, prob)]
 
     tasks = [_forecast_one(q) for q in questions]
     raw_results = await tqdm_asyncio.gather(*tasks, desc="Forecasting")
-    return {qid: prob for r in raw_results if r is not None for qid, prob in [r]}
+    forecasts: dict[str, float] = {}
+    for r in raw_results:
+        if r is not None:
+            for qid, prob in r:
+                forecasts[qid] = prob
+    return forecasts
 
 
 def _normalize_round_name(name: str) -> str:
@@ -613,9 +730,11 @@ def main() -> None:
     if args.round:
         round_name = _normalize_round_name(args.round)
 
+    multi_forecaster_fn: AsyncMultiForecaster | SyncMultiForecaster | None = None
     if args.agent == "lab":
-        from lab_forecaster import aforecast
+        from lab_forecaster import aforecast, amulti_forecast
         forecaster: Forecaster = aforecast
+        multi_forecaster_fn = amulti_forecast
     else:
         from dummy_forecaster import forecast
         forecaster = forecast
@@ -627,6 +746,7 @@ def main() -> None:
         agent_name=args.agent,
         n_rounds=args.rounds,
         run_label=args.run_label,
+        multi_forecaster=multi_forecaster_fn,
     ))
 
     if args.ci:
