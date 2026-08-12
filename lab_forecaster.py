@@ -522,6 +522,68 @@ async def aforecast_multi(
     raise ValueError(f"Could not extract {len(resolution_dates)} probabilities from response")
 
 
+def multi_forecast(
+    question: Question,
+    resolution_dates: list[str],
+    source: str | None = None,
+    prompt_variant: str = "zero-shot",
+) -> list[float]:
+    n = len(resolution_dates)
+    logger.info("multi_forecast_start", question_id=question.id, n_horizons=n, model=MODEL)
+    _ensure_vertex_credentials()
+    prompt = _build_prompt(question, source=source, resolution_dates=resolution_dates)
+    messages = [{"role": "user", "content": prompt}]
+    kwargs = _forecast_kwargs(messages)
+    response = litellm.completion(**kwargs)
+    _track_cost(question.id, response)
+    text = response.choices[0].message.content or ""
+
+    probs = _extract_probabilities(text, n)
+    if probs is not None:
+        return probs
+
+    logger.warning("multi_forecast_regex_failed", question_id=question.id, n_horizons=n)
+    fallback: list[float] = []
+    for date in resolution_dates:
+        try:
+            p = forecast(question, resolution_date=date, source=source, prompt_variant=prompt_variant)
+        except Exception:
+            logger.warning("multi_forecast_single_fallback_error", question_id=question.id, date=date)
+            p = 0.5
+        fallback.append(p)
+    return fallback
+
+
+async def amulti_forecast(
+    question: Question,
+    resolution_dates: list[str],
+    source: str | None = None,
+    prompt_variant: str = "zero-shot",
+    model_override: str | None = None,
+) -> list[float]:
+    n = len(resolution_dates)
+    probs = await aforecast_multi_horizon(
+        question, resolution_dates, source=source,
+        prompt_variant=prompt_variant, model_override=model_override,
+    )
+    if probs is not None:
+        return probs
+
+    logger.info("amulti_forecast_single_fallback", question_id=question.id, n_horizons=n)
+    fallback: list[float] = []
+    for date in resolution_dates:
+        try:
+            p = await aforecast(
+                question, resolution_date=date, source=source,
+                prompt_variant=prompt_variant, model_override=model_override,
+            )
+        except Exception:
+            logger.warning("amulti_forecast_single_fallback_error", question_id=question.id, date=date)
+            p = 0.5
+        fallback.append(p)
+    return fallback
+
+
 if __name__ == "__main__":
     import asyncio
     from eval import run_eval
