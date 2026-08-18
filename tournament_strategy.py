@@ -139,7 +139,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.0,
         evidence_source="arXiv:2409.19839",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=113,
         tier=1,
     ),
     Technique(
@@ -155,7 +154,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=3.0,
         evidence_source="arXiv:2409.19839",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=114,
         tier=1,
     ),
     Technique(
@@ -171,7 +169,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.0,
         evidence_source="arXiv:2605.27668",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=118,
         tier=1,
     ),
     # Tier 2 — differentiation
@@ -190,7 +187,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=10.0,
         evidence_source="arXiv:2604.18576v4",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=120,
         tier=2,
     ),
     Technique(
@@ -206,7 +202,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.5,
         evidence_source="arXiv:2604.18576v4",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=111,
         tier=2,
     ),
     Technique(
@@ -222,7 +217,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.5,
         evidence_source="arXiv:2409.19839",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=121,
         tier=2,
     ),
     Technique(
@@ -238,7 +232,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.0,
         evidence_source="arXiv:2602.21229v2",
         evidence_quality=EvidenceQuality.VALIDATED_IN_PAPER,
-        github_issue=113,
         tier=2,
     ),
     Technique(
@@ -300,7 +293,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.0,
         evidence_source="Project analysis (no published research found)",
         evidence_quality=EvidenceQuality.THEORETICAL,
-        github_issue=115,
         tier=3,
     ),
     Technique(
@@ -316,7 +308,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.3,
         evidence_source="Project architecture analysis",
         evidence_quality=EvidenceQuality.THEORETICAL,
-        github_issue=119,
         tier=3,
     ),
     Technique(
@@ -332,7 +323,6 @@ TECHNIQUES: list[Technique] = [
         cost_multiplier=1.0,
         evidence_source="arXiv:2312.09081v1",
         evidence_quality=EvidenceQuality.PUBLISHED_CLAIM,
-        github_issue=113,
         tier=3,
     ),
     # Tier 4 — defer unless needed
@@ -512,7 +502,7 @@ PITFALLS: list[Pitfall] = [
             "Cost explosion in agentic workflows: 5-step agent uses 8x-15x "
             "tokens (not 5x) due to growing context."
         ),
-        evidence_source="Cost analysis research",
+        evidence_source="morphllm.com/llm-cost-optimization",
         severity=Severity.MEDIUM,
     ),
     Pitfall(
@@ -520,7 +510,7 @@ PITFALLS: list[Pitfall] = [
             "Diminishing returns on premium models: 20x cost for ~4% accuracy "
             "improvement."
         ),
-        evidence_source="Cost comparison research",
+        evidence_source="launchdarkly.com/blog/llm-pricing-comparison",
         severity=Severity.MEDIUM,
     ),
 ]
@@ -547,6 +537,10 @@ def get_techniques_for_track(track: str) -> list[Technique]:
 def get_competitor_by_name(name: str) -> Competitor | None:
     for c in COMPETITORS:
         if c.name == name:
+            return c
+    query = name.lower()
+    for c in COMPETITORS:
+        if query in c.name.lower():
             return c
     return None
 

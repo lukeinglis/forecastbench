@@ -153,6 +153,9 @@ class TestHelperFunctions:
         c = get_competitor_by_name("Superforecasters")
         assert c is not None
         assert c.best_known_brier == 0.096
+        blf = get_competitor_by_name("BLF")
+        assert blf is not None
+        assert blf.name == "BLF (Bayesian Linguistic Forecaster)"
 
     def test_get_competitor_by_name_not_found(self) -> None:
         assert get_competitor_by_name("Nonexistent") is None
