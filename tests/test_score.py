@@ -9,6 +9,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from fetch_data import ResolvedQuestion
+from forecastbench_parity.score import _scoring_key
 from score import (
     _build_market_effects,
     _estimate_difficulty_effects_ols,
@@ -193,15 +194,16 @@ class TestDifficultyEffectsOLS:
             _make_resolved("q1", "acled", 1),
             _make_resolved("q2", "acled", 0),
         ]
+        sk1, sk2 = _scoring_key(qs[0]), _scoring_key(qs[1])
         forecasts = {
-            "A": {"q1": 0.9, "q2": 0.1},
-            "B": {"q1": 0.7, "q2": 0.3},
+            "A": {sk1: 0.9, sk2: 0.1},
+            "B": {sk1: 0.7, sk2: 0.3},
         }
-        outcomes = {q.id: q.outcome for q in qs}
+        outcomes = {_scoring_key(q): q.outcome for q in qs}
         effects = _estimate_difficulty_effects_ols(
-            forecasts, outcomes, ["q1", "q2"],
+            forecasts, outcomes, [sk1, sk2],
         )
-        assert abs(effects["q1"] + effects["q2"]) < 1e-10
+        assert abs(effects[sk1] + effects[sk2]) < 1e-10
 
     def test_single_forecaster_effects_zero(self) -> None:
         """With one forecaster, all effects equal mean minus grand_mean = 0."""
@@ -209,13 +211,14 @@ class TestDifficultyEffectsOLS:
             _make_resolved("q1", "acled", 1),
             _make_resolved("q2", "acled", 0),
         ]
-        forecasts = {"A": {"q1": 0.8, "q2": 0.2}}
-        outcomes = {q.id: q.outcome for q in qs}
+        sk1, sk2 = _scoring_key(qs[0]), _scoring_key(qs[1])
+        forecasts = {"A": {sk1: 0.8, sk2: 0.2}}
+        outcomes = {_scoring_key(q): q.outcome for q in qs}
         effects = _estimate_difficulty_effects_ols(
-            forecasts, outcomes, ["q1", "q2"],
+            forecasts, outcomes, [sk1, sk2],
         )
-        assert abs(effects["q1"]) < 1e-10
-        assert abs(effects["q2"]) < 1e-10
+        assert abs(effects[sk1]) < 1e-10
+        assert abs(effects[sk2]) < 1e-10
 
 
 class TestAdjustForDifficulty:
@@ -226,10 +229,11 @@ class TestAdjustForDifficulty:
             _make_resolved("q2", "acled", 0),
             _make_resolved("q3", "acled", 1),
         ]
+        sks = {q.id: _scoring_key(q) for q in qs}
         forecasts = {
-            "half": {"q1": 0.5, "q2": 0.5, "q3": 0.5},
-            "good": {"q1": 0.9, "q2": 0.1, "q3": 0.8},
-            "bad": {"q1": 0.2, "q2": 0.8, "q3": 0.3},
+            "half": {sks["q1"]: 0.5, sks["q2"]: 0.5, sks["q3"]: 0.5},
+            "good": {sks["q1"]: 0.9, sks["q2"]: 0.1, sks["q3"]: 0.8},
+            "bad": {sks["q1"]: 0.2, sks["q2"]: 0.8, sks["q3"]: 0.3},
         }
         result = adjust_for_difficulty(forecasts, qs)
         half_scores = result.adjusted_scores["half"]
@@ -244,10 +248,11 @@ class TestAdjustForDifficulty:
             _make_resolved("q3", "acled", 1),
             _make_resolved("q4", "acled", 0),
         ]
+        sks = {q.id: _scoring_key(q) for q in qs}
         forecasts = {
-            "good": {"q1": 0.95, "q2": 0.05, "q3": 0.9, "q4": 0.1},
-            "half": {"q1": 0.5, "q2": 0.5, "q3": 0.5, "q4": 0.5},
-            "bad": {"q1": 0.1, "q2": 0.9, "q3": 0.2, "q4": 0.8},
+            "good": {sks["q1"]: 0.95, sks["q2"]: 0.05, sks["q3"]: 0.9, sks["q4"]: 0.1},
+            "half": {sks["q1"]: 0.5, sks["q2"]: 0.5, sks["q3"]: 0.5, sks["q4"]: 0.5},
+            "bad": {sks["q1"]: 0.1, sks["q2"]: 0.9, sks["q3"]: 0.2, sks["q4"]: 0.8},
         }
         result = adjust_for_difficulty(forecasts, qs)
         adjusted = result.adjusted_scores
@@ -274,16 +279,17 @@ class TestAdjustForDifficulty:
             _make_resolved("q1", "acled", 1),
             _make_resolved("q2", "acled", 0),
         ]
+        sk1, sk2 = _scoring_key(qs[0]), _scoring_key(qs[1])
         forecasts = {
-            "A": {"q1": 0.9, "q2": 0.1},
-            "B": {"q1": 0.7, "q2": 0.3},
+            "A": {sk1: 0.9, sk2: 0.1},
+            "B": {sk1: 0.7, sk2: 0.3},
         }
         result = adjust_for_difficulty(forecasts, qs)
         adjusted = result.adjusted_scores
-        assert abs(adjusted["A"]["q1"] - 0.01) < 1e-10
-        assert abs(adjusted["A"]["q2"] - 0.01) < 1e-10
-        assert abs(adjusted["B"]["q1"] - 0.09) < 1e-10
-        assert abs(adjusted["B"]["q2"] - 0.09) < 1e-10
+        assert abs(adjusted["A"][sk1] - 0.01) < 1e-10
+        assert abs(adjusted["A"][sk2] - 0.01) < 1e-10
+        assert abs(adjusted["B"][sk1] - 0.09) < 1e-10
+        assert abs(adjusted["B"][sk2] - 0.09) < 1e-10
 
     def test_asymmetric_difficulty(self) -> None:
         """When questions have different difficulty, adjustment should compensate.
@@ -307,14 +313,15 @@ class TestAdjustForDifficulty:
             _make_resolved("q1", "acled", 1),
             _make_resolved("q2", "acled", 1),
         ]
+        sk1, sk2 = _scoring_key(qs[0]), _scoring_key(qs[1])
         forecasts = {
-            "A": {"q1": 0.6, "q2": 0.9},
-            "B": {"q1": 0.5, "q2": 0.95},
+            "A": {sk1: 0.6, sk2: 0.9},
+            "B": {sk1: 0.5, sk2: 0.95},
         }
         result = adjust_for_difficulty(forecasts, qs)
         adjusted = result.adjusted_scores
-        assert abs(adjusted["A"]["q1"] - 0.060625) < 1e-10
-        assert abs(adjusted["A"]["q2"] - 0.109375) < 1e-10
+        assert abs(adjusted["A"][sk1] - 0.060625) < 1e-10
+        assert abs(adjusted["A"][sk2] - 0.109375) < 1e-10
 
     def test_empty_returns_empty(self) -> None:
         result = adjust_for_difficulty({}, [])

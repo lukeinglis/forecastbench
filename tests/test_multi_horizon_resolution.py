@@ -28,7 +28,7 @@ class TestJoinResolvedQuestionsBasic:
             questions=[
                 Question(
                     id=question_id, source=source, question="Will X?",
-                    resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
+                    resolution_dates=["2024-07-01", "2024-08-30", "2024-11-28"],
                 )
             ],
         )
@@ -47,14 +47,14 @@ class TestJoinResolvedQuestionsBasic:
         resolutions: dict[str, list[Resolution]] = {
             "q1": [
                 Resolution(id="q1", outcome=0, resolution_date="2024-07-01"),
-                Resolution(id="q1", outcome=1, resolution_date="2024-08-01"),
+                Resolution(id="q1", outcome=1, resolution_date="2024-08-30"),
             ],
         }
         result = join_resolved_questions([qs], resolutions)
         assert len(result) == 2
         outcomes = {r.resolution_date: r.outcome for r in result}
         assert outcomes["2024-07-01"] == 0
-        assert outcomes["2024-08-01"] == 1
+        assert outcomes["2024-08-30"] == 1
 
     def test_market_question_single_resolution(self) -> None:
         qs = QuestionSet(
@@ -105,13 +105,13 @@ class TestJoinResolvedPreservesBaseId:
             question_set="round_1",
             questions=[
                 Question(id="q1", source="fred", question="Q",
-                         resolution_dates=["2024-07-01", "2024-08-01"]),
+                         resolution_dates=["2024-07-01", "2024-08-30"]),
             ],
         )
         resolutions: dict[str, list[Resolution]] = {
             "q1": [
                 Resolution(id="q1", outcome=0, resolution_date="2024-07-01"),
-                Resolution(id="q1", outcome=1, resolution_date="2024-08-01"),
+                Resolution(id="q1", outcome=1, resolution_date="2024-08-30"),
             ],
         }
         result = join_resolved_questions([qs], resolutions)
@@ -124,19 +124,19 @@ class TestJoinResolvedPreservesBaseId:
             question_set="round_1",
             questions=[
                 Question(id="q1", source="fred", question="Q",
-                         resolution_dates=["2024-07-01", "2024-08-01"]),
+                         resolution_dates=["2024-07-01", "2024-08-30"]),
             ],
         )
         resolutions: dict[str, list[Resolution]] = {
             "q1": [
                 Resolution(id="q1", outcome=0, resolution_date="2024-07-01"),
-                Resolution(id="q1", outcome=1, resolution_date="2024-08-01"),
+                Resolution(id="q1", outcome=1, resolution_date="2024-08-30"),
             ],
         }
         result = join_resolved_questions([qs], resolutions)
         by_date = {rq.resolution_date: rq.outcome for rq in result}
         assert by_date["2024-07-01"] == 0
-        assert by_date["2024-08-01"] == 1
+        assert by_date["2024-08-30"] == 1
 
     def test_market_questions_pass_through(self) -> None:
         qs = QuestionSet(
