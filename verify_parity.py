@@ -17,6 +17,10 @@ from typing import Any
 
 import requests
 
+from logging_config import get_logger
+
+logger = get_logger("verify_parity")
+
 
 UPSTREAM_PROMPTS_URL = (
     "https://raw.githubusercontent.com/forecastingresearch/"
@@ -75,6 +79,7 @@ def _get_local_template(name: str) -> str | None:
 
 
 def check_prompt_templates(upstream_source: str | None) -> tuple[bool, str]:
+    logger.info("check_prompt_templates_start", has_upstream=upstream_source is not None)
     if upstream_source is None:
         return True, "[WARN] Could not fetch upstream prompts — skipping live comparison"
 
@@ -106,6 +111,7 @@ def check_prompt_templates(upstream_source: str | None) -> tuple[bool, str]:
 
 
 def check_resolution_matching() -> tuple[bool, str]:
+    logger.info("check_resolution_matching_start")
     try:
         from fetch_data import (
             fetch_all_resolutions,
@@ -140,6 +146,7 @@ def check_resolution_matching() -> tuple[bool, str]:
 
 
 def check_scoring_formula(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_scoring_formula_start", has_leaderboard=leaderboard is not None)
     from score import brier_index
 
     if brier_index(0.25) != 50.0:
@@ -171,6 +178,7 @@ def check_scoring_formula(leaderboard: list[dict[str, str]] | None) -> tuple[boo
 
 
 def check_missing_forecast_default() -> tuple[bool, str]:
+    logger.info("check_missing_forecast_default_start")
     from fetch_data import ResolvedQuestion
     from score import score_forecasts, brier_score
 
@@ -195,6 +203,7 @@ def check_missing_forecast_default() -> tuple[bool, str]:
 
 
 def check_multi_horizon_batching() -> tuple[bool, str]:
+    logger.info("check_multi_horizon_batching_start")
     try:
         from fetch_data import (
             fetch_question_set,
@@ -235,6 +244,7 @@ def check_multi_horizon_batching() -> tuple[bool, str]:
 
 
 def check_question_count(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_question_count_start", has_leaderboard=leaderboard is not None)
     try:
         from fetch_data import fetch_question_set, list_question_set_files
 
@@ -348,6 +358,7 @@ def _find_reference_model(
 
 
 def check_score_comparison(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_score_comparison_start")
     result = _load_latest_result()
     if result is None:
         return True, "[SKIP] No results found — run eval first"
@@ -379,6 +390,7 @@ def check_score_comparison(leaderboard: list[dict[str, str]] | None) -> tuple[bo
 
 
 def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_per_source_breakdown_start")
     result = _load_latest_result()
     if result is None:
         return True, "[SKIP] No results found — run eval first"
@@ -439,6 +451,7 @@ def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tupl
 
 def check_dummy_score() -> tuple[bool, str]:
     """Dummy forecaster (always 0.5) must score overall_index == 50.0 ± 0.01."""
+    logger.info("check_dummy_score_start")
     from dummy_forecaster import forecast as dummy_forecast
     from fetch_data import (
         Question,
@@ -509,6 +522,7 @@ def _fetch_all_resolutions_as_lists() -> dict[str, list[Any]]:
 
 def check_resolution_outcome_diversity() -> tuple[bool, str]:
     """Resolution entries with the same ID but different dates must have diverse outcomes."""
+    logger.info("check_resolution_outcome_diversity_start")
     resolutions = _fetch_all_resolutions_as_lists()
 
     multi_entry_ids: dict[str, set[int | None]] = {}
@@ -538,6 +552,7 @@ def check_resolution_outcome_diversity() -> tuple[bool, str]:
 
 def check_resolution_entry_preservation() -> tuple[bool, str]:
     """Total resolution entries must significantly exceed unique question IDs."""
+    logger.info("check_resolution_entry_preservation_start")
     resolutions = _fetch_all_resolutions_as_lists()
 
     unique_ids = len(resolutions)
@@ -565,6 +580,7 @@ def check_cross_round_filtering() -> tuple[bool, str]:
     so their effective dates include all resolution_dates from all questions in the round.
     Dataset questions still use only their own resolution_dates list.
     """
+    logger.info("check_cross_round_filtering_start")
     from fetch_data import (
         MARKET_SOURCES,
         fetch_all_question_sets,

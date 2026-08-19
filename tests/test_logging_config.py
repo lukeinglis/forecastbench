@@ -149,7 +149,10 @@ class TestSmokeTests:
 
     def test_multiple_loggers(self) -> None:
         configure_logging()
-        for name in ["eval", "score", "fetch_data", "lab_forecaster", "cutoff", "dummy_forecaster"]:
+        for name in [
+            "eval", "score", "fetch_data", "lab_forecaster", "cutoff",
+            "dummy_forecaster", "tournament", "analyze", "verify_parity",
+        ]:
             log = get_logger(name)
             log.info("smoke_test", module=name)
             log.debug("smoke_debug", module=name)
