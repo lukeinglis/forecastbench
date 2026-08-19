@@ -1,0 +1,1 @@
+These files are from the pre-parity era (before August 2026). All experiment results and scores in these files were produced without confirmed scoring parity and CANNOT BE TRUSTED. They are preserved for historical reference only. See issue #147 for context.

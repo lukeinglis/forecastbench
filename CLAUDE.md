@@ -28,6 +28,8 @@
 - `uv run python verify_parity.py --score` to also compare scores against leaderboard
 - `uv run python verify_parity.py --refresh` to clear cached upstream data first
 - `uv run python check_staleness.py` to check if local main is behind remote
+- `uv run python tournament_strategy.py` to view tournament competitive landscape summary
+- `uv run python tournament_strategy.py --roadmap` to view technique implementation roadmap
 - `uv run --extra dashboard streamlit run dashboard.py` to launch interactive results dashboard
 
 ## Architecture
@@ -44,6 +46,7 @@
 - **verify_parity.py** - Pipeline parity verifier (fetches live from upstream ForecastBench repo/leaderboard)
 - **check_staleness.py** - Git staleness check to warn when local main is behind remote
 - **tournament.py** - Tournament analysis with cost tracking, bootstrap comparisons, and round filtering
+- **tournament_strategy.py** - Tournament track competitive landscape (structured Pydantic v2 data: techniques, competitors, pitfalls, benchmarks, roadmap, CLI)
 - **dashboard.py** - Interactive Streamlit + Plotly dashboard for exploring experiment results
 - **tests/** - pytest test suite
 - **archive/** - Archived experiment files (calibrate, ensemble, hybrid, multi-model, belief, statistical, timeseries RAG)

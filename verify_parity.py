@@ -559,8 +559,14 @@ def check_resolution_entry_preservation() -> tuple[bool, str]:
 
 
 def check_cross_round_filtering() -> tuple[bool, str]:
-    """Resolved questions must only contain resolution_dates from the original question."""
+    """Resolved questions must only contain resolution_dates from their effective date set.
+
+    v0.4.0: market questions are expanded to all round dates via explode_question_set,
+    so their effective dates include all resolution_dates from all questions in the round.
+    Dataset questions still use only their own resolution_dates list.
+    """
     from fetch_data import (
+        MARKET_SOURCES,
         fetch_all_question_sets,
         fetch_all_resolutions,
         join_resolved_questions,
@@ -575,13 +581,25 @@ def check_cross_round_filtering() -> tuple[bool, str]:
     resolved = join_resolved_questions(question_sets, resolutions)
 
     original_res_dates: dict[tuple[str, str], set[str]] = {}
+    all_round_dates_by_qs: dict[tuple[str, str], set[str]] = {}
+    question_source: dict[tuple[str, str], str] = {}
+
     for qs in question_sets:
+        round_dates: set[str] = set()
         for q in qs.questions:
+            rd = q.resolution_dates
+            if isinstance(rd, list):
+                round_dates.update(str(d) for d in rd if d and str(d).upper() != "N/A")
+
+        for q in qs.questions:
+            key = (q.id, qs.forecast_due_date)
+            all_round_dates_by_qs[key] = round_dates
+            question_source[key] = q.source.lower()
             rd = q.resolution_dates
             if isinstance(rd, list):
                 dates = {str(d) for d in rd if d and str(d).upper() != "N/A"}
                 if dates:
-                    original_res_dates[(q.id, qs.forecast_due_date)] = dates
+                    original_res_dates[key] = dates
 
     violations = 0
     checked = 0
@@ -592,7 +610,12 @@ def check_cross_round_filtering() -> tuple[bool, str]:
         if rq.resolution_date is None:
             continue
         checked += 1
-        if rq.resolution_date not in original_res_dates[key]:
+        is_market = any(s in question_source.get(key, "") for s in MARKET_SOURCES)
+        if is_market:
+            effective_dates = all_round_dates_by_qs.get(key, set())
+        else:
+            effective_dates = original_res_dates[key]
+        if rq.resolution_date not in effective_dates:
             violations += 1
 
     if violations == 0:
@@ -604,7 +627,7 @@ def check_cross_round_filtering() -> tuple[bool, str]:
     return (
         False,
         f"[FAIL] check_cross_round_filtering: "
-        f"{violations}/{checked} resolution dates not in original question's list",
+        f"{violations}/{checked} resolution dates not in effective date set",
     )
 
 

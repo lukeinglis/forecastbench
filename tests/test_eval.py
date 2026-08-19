@@ -339,14 +339,14 @@ class TestEvalResultBaseIds:
             ResolvedQuestion(
                 id="dq1", source="fred", question="Dataset Q",
                 outcome=1, forecast_due_date="2024-01-01",
-                resolution_dates=["2024-07-01", "2024-08-01"],
-                resolution_date="2024-07-01",
+                resolution_dates=["2024-06-29", "2024-12-31"],
+                resolution_date="2024-06-29",
             ),
             ResolvedQuestion(
                 id="dq1", source="fred", question="Dataset Q",
                 outcome=0, forecast_due_date="2024-01-01",
-                resolution_dates=["2024-07-01", "2024-08-01"],
-                resolution_date="2024-08-01",
+                resolution_dates=["2024-06-29", "2024-12-31"],
+                resolution_date="2024-12-31",
             ),
             ResolvedQuestion(
                 id="mq1", source="metaculus", question="Market Q",
@@ -359,7 +359,7 @@ class TestEvalResultBaseIds:
                 question_set="set_0",
                 questions=[
                     Question(id="dq1", source="fred", question="Dataset Q",
-                             resolution_dates=["2024-07-01", "2024-08-01"]),
+                             resolution_dates=["2024-06-29", "2024-12-31"]),
                     Question(id="mq1", source="metaculus", question="Market Q"),
                 ],
             ),
@@ -388,8 +388,8 @@ class TestEvalResultBaseIds:
             ResolvedQuestion(
                 id="dq1", source="fred", question="Dataset Q",
                 outcome=1, forecast_due_date="2024-01-01",
-                resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"],
-                resolution_date="2024-09-01",
+                resolution_dates=["2024-03-31", "2024-06-29", "2024-12-31"],
+                resolution_date="2024-12-31",
             ),
             ResolvedQuestion(
                 id="mq1", source="metaculus", question="Market Q",
@@ -402,7 +402,7 @@ class TestEvalResultBaseIds:
                 question_set="set_0",
                 questions=[
                     Question(id="dq1", source="fred", question="Dataset Q",
-                             resolution_dates=["2024-07-01", "2024-08-01", "2024-09-01"]),
+                             resolution_dates=["2024-03-31", "2024-06-29", "2024-12-31"]),
                     Question(id="mq1", source="metaculus", question="Market Q"),
                 ],
             ),

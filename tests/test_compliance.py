@@ -66,7 +66,7 @@ class TestResolutionModelPreservation:
             id="ts1",
             source="fred",
             question="Will value exceed threshold?",
-            resolution_dates=["2024-03-01", "2024-06-01", "2024-09-01"],
+            resolution_dates=["2024-03-31", "2024-06-29", "2024-12-31"],
             forecast_due_date="2024-01-01",
         )
         qs = QuestionSet(
@@ -76,20 +76,20 @@ class TestResolutionModelPreservation:
         )
 
         resolutions: dict[str, list[Resolution]] = {
-            "ts1": [Resolution(id="ts1", outcome=1, resolution_date="2024-03-01")],
+            "ts1": [Resolution(id="ts1", outcome=1, resolution_date="2024-03-31")],
         }
         resolved = join_resolved_questions([qs], resolutions)
 
         assert len(resolved) == 1
         assert resolved[0].id == "ts1"
-        assert resolved[0].resolution_dates == ["2024-03-01", "2024-06-01", "2024-09-01"]
+        assert resolved[0].resolution_dates == ["2024-03-31", "2024-06-29", "2024-12-31"]
 
     def test_resolution_date_carried_to_resolved(self) -> None:
         question = Question(
             id="ts2",
             source="dbnomics",
             question="Test question",
-            resolution_dates=["2024-03-01"],
+            resolution_dates=["2024-03-31"],
             forecast_due_date="2024-01-01",
         )
         qs = QuestionSet(
@@ -97,12 +97,12 @@ class TestResolutionModelPreservation:
             questions=[question],
         )
         resolutions: dict[str, list[Resolution]] = {
-            "ts2": [Resolution(id="ts2", outcome=0, resolution_date="2024-03-01")],
+            "ts2": [Resolution(id="ts2", outcome=0, resolution_date="2024-03-31")],
         }
         resolved = join_resolved_questions([qs], resolutions)
 
         assert len(resolved) == 1
-        assert resolved[0].resolution_date == "2024-03-01"
+        assert resolved[0].resolution_date == "2024-03-31"
         assert resolved[0].outcome == 0
 
 
