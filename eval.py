@@ -177,6 +177,8 @@ def save_result(
     costs: dict[str, float] | None = None,
 ) -> Path:
     """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
+    logger.info("save_result_start", model_slug=model_slug, n_forecasts=len(forecasts),
+                round_name=round_name)
     timestamp = datetime.datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     metadata: dict[str, object] = {
         "n_questions": result.n_dataset + result.n_market,
@@ -234,6 +236,7 @@ def load_previous_results(results_dir: Path | None = None) -> list[dict[str, obj
     if results_dir is None:
         results_dir = RESULTS_DIR
     if not results_dir.exists():
+        logger.info("load_previous_results_no_dir", path=str(results_dir))
         return []
     results: list[dict[str, object]] = []
     for p in sorted(results_dir.glob("*.json")):
@@ -242,6 +245,7 @@ def load_previous_results(results_dir: Path | None = None) -> list[dict[str, obj
             results.append(data)
         except (json.JSONDecodeError, KeyError):
             continue
+    logger.info("load_previous_results", n_results=len(results))
     return results
 
 
@@ -250,6 +254,7 @@ def split_held_out(
     n_held_out: int = 2,
 ) -> tuple[list[QuestionSet], list[QuestionSet]]:
     """Split question sets into iteration and held-out sets by forecast_due_date."""
+    logger.info("split_held_out", n_question_sets=len(question_sets), n_held_out=n_held_out)
     if n_held_out < 0:
         raise ValueError(f"n_held_out must be non-negative, got {n_held_out}")
     if n_held_out >= len(question_sets):
@@ -589,6 +594,7 @@ def _normalize_round_name(name: str) -> str:
 
 
 def list_rounds() -> list[tuple[str, int]]:
+    logger.info("list_rounds_start")
     filenames = list_question_set_files()
     rounds: list[tuple[str, int]] = []
     for fname in sorted(filenames, reverse=True):
@@ -605,6 +611,7 @@ def print_leaderboard_comparison(
     user_index: float,
     leaderboard_name: str = "baseline",
 ) -> None:
+    logger.info("print_leaderboard_comparison", user_index=user_index, leaderboard=leaderboard_name)
     try:
         rows = fetch_leaderboard(leaderboard_name)
     except Exception:
