@@ -24,12 +24,18 @@ import argparse
 import asyncio
 import json
 import random
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "gate_manifest.json"
 BASELINE = REPO / "gate_baseline.json"
+
+# gate/ is not the repo root, so `python gate/make_manifest.py` puts gate/ on
+# sys.path rather than the root and `import fetch_data` fails.
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
 MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
 
