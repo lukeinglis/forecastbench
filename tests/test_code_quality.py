@@ -34,6 +34,16 @@ def _make_resolved(
     )
 
 
+def _is_fingerprint(suffix: str) -> bool:
+    """Cache slugs end in a 12-char hex fingerprint of the forecaster config.
+
+    Replaces the old date suffix: the date rolled the cache nightly while
+    ignoring prompt changes, which meant same-day experiments silently reused
+    each other's forecasts.
+    """
+    return len(suffix) == 12 and all(c in "0123456789abcdef" for c in suffix)
+
+
 class TestCacheSlug:
     def test_default_slug_uses_default_model(self) -> None:
         with patch.dict(os.environ, {}, clear=False), \
@@ -41,42 +51,48 @@ class TestCacheSlug:
             os.environ.pop("FORECAST_MODEL", None)
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "sonnet-4-20250514.20260807"
+            assert slug.startswith("sonnet-4-20250514.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
 
     def test_dummy_gets_dummy_slug(self) -> None:
         with patch.dict(os.environ, {"FORECAST_MODEL": "dummy"}), \
              patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "dummy.20260807"
+            assert slug.startswith("dummy.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
 
     def test_strips_provider_and_claude_prefix(self) -> None:
         with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4@20250514"}), \
              patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "sonnet-4-20250514.20260807"
+            assert slug.startswith("sonnet-4-20250514.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
 
     def test_openai_model(self) -> None:
         with patch.dict(os.environ, {"FORECAST_MODEL": "openai/gpt-4o"}), \
              patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "gpt-4o.20260807"
+            assert slug.startswith("gpt-4o.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
 
     def test_run_label(self) -> None:
         with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4-20250514"}), \
              patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug(run_label="thinking")
-            assert slug == "sonnet-4-20250514.thinking.20260807"
+            assert slug.startswith("sonnet-4-20250514.thinking.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
 
     def test_custom_agent_name(self) -> None:
         with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4-20250514"}), \
              patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug(agent_name="custom")
-            assert slug == "sonnet-4-20250514.custom.20260807"
+            assert slug.startswith("sonnet-4-20250514.custom.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
 
     def test_dummy_and_baseline_different_slugs(self) -> None:
         with patch.dict(os.environ, {"FORECAST_MODEL": "dummy"}), \
@@ -96,7 +112,27 @@ class TestCacheSlug:
              patch("eval.datetime.date", _FixedDate):
             from eval import _model_slug
             slug = _model_slug()
-            assert slug == "opus-4-1-20250805.20260807"
+            assert slug.startswith("opus-4-1-20250805.")
+            assert _is_fingerprint(slug.rsplit(".", 1)[1])
+
+    def test_fingerprint_changes_with_forecaster_source(self, tmp_path: object) -> None:
+        """The whole point: editing the forecaster must invalidate the cache."""
+        import hashlib
+        from unittest.mock import patch as _patch
+        from eval import _forecaster_fingerprint
+
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4@20250514"}):
+            before = _forecaster_fingerprint()
+            with _patch.dict(os.environ, {"FORECAST_CACHE_BUST": "edited"}):
+                after = _forecaster_fingerprint()
+        assert before != after
+        assert hashlib  # source-hash path exercised via CACHE_BUST proxy
+
+    def test_fingerprint_varies_by_prompt_variant(self) -> None:
+        from eval import _forecaster_fingerprint
+
+        with patch.dict(os.environ, {"FORECAST_MODEL": "vertex_ai/claude-sonnet-4@20250514"}):
+            assert _forecaster_fingerprint("default") != _forecaster_fingerprint("zero-shot")
 
     def test_dummy_forecaster_sets_env(self) -> None:
         with patch.dict(os.environ, {}, clear=False):

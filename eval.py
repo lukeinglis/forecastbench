@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import inspect
 import json
 import os
@@ -23,7 +24,7 @@ from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E40
 
 logger = get_logger("eval")
 
-CACHE_DIR = Path(".cache/forecasts")
+CACHE_DIR = Path(os.getenv("FORECAST_CACHE_DIR", ".cache/forecasts"))
 RESULTS_DIR = Path("results")
 
 
@@ -93,9 +94,31 @@ _PROVIDER_PREFIXES = (
 )
 
 
+def _forecaster_fingerprint(prompt_variant: str = "default") -> str:
+    """Hash of everything that can change a forecast.
+
+    Hashes the whole of lab_forecaster.py rather than just the prompt builder.
+    Coarse on purpose: an agent editing that file MUST invalidate the cache.
+    Over-invalidating costs a re-run. Under-invalidating silently scores stale
+    forecasts against new code, which is unrecoverable in an experiment loop.
+    """
+    parts = [
+        os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514"),
+        os.getenv("FORECAST_TEMPERATURE", ""),
+        os.getenv("FORECAST_MAX_TOKENS", ""),
+        os.getenv("FORECAST_CACHE_BUST", ""),
+        prompt_variant,
+    ]
+    src = Path(__file__).resolve().parent / "lab_forecaster.py"
+    if src.exists():
+        parts.append(hashlib.sha256(src.read_bytes()).hexdigest())
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+
+
 def _model_slug(
     agent_name: str | None = None,
     run_label: str | None = None,
+    prompt_variant: str = "default",
 ) -> str:
     raw = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
     for prefix in _PROVIDER_PREFIXES:
@@ -111,8 +134,7 @@ def _model_slug(
     if run_label:
         safe_label = re.sub(r"[^\w\-.]", "_", run_label)
         slug = f"{slug}.{safe_label}"
-    today = datetime.date.today().strftime("%Y%m%d")
-    slug = f"{slug}.{today}"
+    slug = f"{slug}.{_forecaster_fingerprint(prompt_variant)}"
     return slug
 
 
@@ -273,6 +295,7 @@ async def run_eval(
     n_rounds: int | None = None,
     run_label: str | None = None,
     multi_forecaster: AsyncMultiForecaster | SyncMultiForecaster | None = None,
+    question_filter: set[str] | None = None,
 ) -> EvalResult:
     """Run the full evaluation pipeline."""
     if round_name is not None:
@@ -299,6 +322,12 @@ async def run_eval(
             iteration_set, resolutions_by_id,
         )
 
+    if question_filter is not None:
+        before = len(iteration_resolved)
+        iteration_resolved = [q for q in iteration_resolved if q.id in question_filter]
+        logger.info("question_filter_applied", n_before=before,
+                    n_after=len(iteration_resolved), n_pinned=len(question_filter))
+
     if submit_mode:
         all_questions: list[Question] = []
         for qs in iteration_set:
@@ -314,7 +343,7 @@ async def run_eval(
                 seen_ids.add(q.id)
                 questions.append(_build_question(q))
         logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
-    model_slug = _model_slug(agent_name, run_label=run_label)
+    model_slug = _model_slug(agent_name, run_label=run_label, prompt_variant=prompt_variant)
 
     if is_async_forecaster(forecaster):
         forecasts = await _run_async(
