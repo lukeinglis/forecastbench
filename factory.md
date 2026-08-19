@@ -20,7 +20,7 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - `score.py` — competition scoring (Brier score/index formulas)
 - `submit.py` — competition submission format
 - `gate/**` — outer-loop fitness function; editing this is score tampering
-- `gate_rounds.json` — pinned question subsample the gate scores
+- `gate_rounds.json` — full rounds the gate scores, one run_eval call each
 - `gate_baseline.json` — Brier Index the gate ladder is centered on
 - `CLAUDE.md`
 - `factory.md`
