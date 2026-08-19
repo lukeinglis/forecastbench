@@ -1,47 +1,42 @@
-"""Graded Brier Index gate. This is the outer loop's fitness function.
+"""Graded Brier Index gate. This is the outer-loop fitness function.
 
-remote-factory scores a candidate by piping the --test-command stdout through
-parse_pytest_stdout, which regexes for "(\\d+) passed" / "(\\d+) failed" /
-"(\\d+) error", then computes:
+Scores FULL rounds, one at a time, and averages the per-round Brier Index.
+See gate/make_manifest.py::score_rounds for why per-round rather than pooled.
 
-    fitness = passed / total - 0.01 * node_count
-
-A binary pass/fail gate gives that search no gradient: every candidate scores
-1.0 or 0.0 and the contrastive reflector, which needs variance between top-K
-and bottom-K, produces an empty report. So this emits a ladder of 10 graded
-assertions centered on a committed baseline. At baseline the score is 0.5,
-which leaves room to move in both directions.
+remote-factory scores a candidate by piping this command's stdout through
+parse_pytest_stdout, which regexes "(\d+) passed" / "(\d+) failed" /
+"(\d+) error", then computes `passed / total - 0.01 * node_count`. A binary
+pass/fail gives that search no gradient, and the contrastive reflector returns
+an empty report when top-K and bottom-K don't differ. Hence a 10-rung ladder
+centered on a committed baseline: at baseline the score is 0.5, with room to
+move both ways.
 
 Run:  uv run pytest gate/ -q
 
 Invisible to `uv run pytest` because pyproject sets testpaths = ["tests"].
-Listed Read-Only in factory.md: this file defines how the factory is scored,
-so the factory must not be able to edit it.
+Listed Read-Only in factory.md: this file defines how the factory is scored.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-MANIFEST = REPO / "gate_manifest.json"
+ROUNDS = REPO / "gate_rounds.json"
 BASELINE = REPO / "gate_baseline.json"
 
-# Ladder spans baseline - 4 through baseline + 5 in 1-point steps.
-# Asymmetric on purpose: more headroom above than below, since the point is
-# to reward improvement more finely than it punishes small regressions.
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+# Offsets, not absolute thresholds. Parametrize arguments are evaluated at
+# import time, and pytest.skip() at module level is a collection error rather
+# than a skip. The baseline is read inside a fixture instead.
 LADDER_BELOW = 4
 LADDER_ABOVE = 5
-
-
-# Offsets, not absolute thresholds. Collection must not depend on
-# gate_baseline.json existing: parametrize arguments are evaluated at import
-# time, and pytest.skip() at module level is a collection error, not a skip.
-# The baseline is read inside the fixture instead.
 _OFFSETS = list(range(-LADDER_BELOW, LADDER_ABOVE + 1))
 
 
@@ -65,46 +60,27 @@ def baseline() -> float:
 
 @pytest.fixture(scope="session")
 def brier_index(baseline: float) -> float:
-    """Score the pinned subsample once per session, not once per rung.
+    """Score every pinned round once per session, not once per rung.
 
     Depends on `baseline` so a missing baseline skips before any API calls.
     """
-    import sys
+    if not ROUNDS.exists():
+        pytest.skip("gate_rounds.json missing; run gate/make_manifest.py --rounds ...")
 
-    if not MANIFEST.exists():
-        pytest.skip("gate_manifest.json missing; run gate/make_manifest.py --rounds ...")
+    from gate.make_manifest import score_rounds
 
-    sys.path.insert(0, str(REPO))
-    import eval as ev
-    import lab_forecaster
+    rounds = json.loads(ROUNDS.read_text())["rounds"]
+    index, per_round = score_rounds(rounds)
 
-    manifest = json.loads(MANIFEST.read_text())
-    ids = set(manifest["market_ids"]) | set(manifest["dataset_ids"])
-
-    result = asyncio.run(
-        ev.run_eval(
-            forecaster=lab_forecaster.aforecast,
-            multi_forecaster=lab_forecaster.aforecast_multi_horizon,
-            agent_name="lab",
-            raw=True,                       # difficulty adjustment stays off
-            n_held_out=0,                   # the manifest is the split
-            question_filter=ids,
+    print()
+    for name, res in per_round:
+        print(
+            f"gate: {name} index={res.overall_index:.3f} "
+            f"rows={res.n_dataset + res.n_market} "
+            f"(dataset={res.n_dataset} market={res.n_market} missing={res.n_missing})"
         )
-    )
-
-    scored = result.scoring.n_dataset + result.scoring.n_market
-    assert scored > 0, (
-        "gate scored zero rows: the manifest IDs did not match any resolved "
-        "questions. Check that gate_manifest.json rounds have resolution sets."
-    )
-
-    print(
-        f"\ngate: index={result.scoring.overall_index:.3f} "
-        f"(dataset={result.scoring.dataset_index:.3f} n={result.scoring.n_dataset}, "
-        f"market={result.scoring.market_index:.3f} n={result.scoring.n_market}, "
-        f"missing={result.scoring.n_missing})"
-    )
-    return float(result.scoring.overall_index)
+    print(f"gate: mean index={index:.3f} across {len(per_round)} rounds")
+    return index
 
 
 @pytest.mark.parametrize("offset", _OFFSETS)
@@ -117,18 +93,15 @@ def test_brier_index_at_or_above(brier_index: float, baseline: float, offset: in
     )
 
 
-def test_coverage_is_intact(brier_index: float) -> None:
-    """Guard against scoring a shrunken question set.
+def test_pinned_rounds_well_formed() -> None:
+    """Guard against a shrunken evaluation.
 
-    Missing forecasts default to 0.5 per ForecastBench rules, so a forecaster
-    that silently drops hard questions could otherwise look better than one
-    that answers them. This rung fails if the manifest was not fully scored.
+    Missing forecasts default to 0.5 under ForecastBench rules, so a run that
+    silently drops rounds produces a plausible number rather than an obvious
+    failure. score_rounds() raises on zero rows; this checks the pinned set.
     """
-    import sys
-
-    sys.path.insert(0, str(REPO))
-    manifest = json.loads(MANIFEST.read_text())
-    # brier_index fixture already ran; re-reading the result would double the
-    # cost, so this asserts on manifest integrity rather than re-scoring.
-    assert manifest["n_total"] == len(manifest["market_ids"]) + len(manifest["dataset_ids"])
-    assert manifest["n_market"] > 0 and manifest["n_dataset"] > 0
+    if not ROUNDS.exists():
+        pytest.skip("gate_rounds.json missing")
+    rounds = json.loads(ROUNDS.read_text())["rounds"]
+    assert len(rounds) >= 1
+    assert len(set(rounds)) == len(rounds), "duplicate rounds pinned"

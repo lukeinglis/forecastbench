@@ -1,21 +1,22 @@
-"""Build and maintain the pinned question subsample used by the Brier gate.
+"""Pin the rounds the Brier gate scores, and set its baseline.
 
-Two jobs:
-
-    --rounds R1 R2 --market 100 --dataset 100
-        Writes gate_manifest.json: a fixed, stratified, deterministic set of
-        question IDs. Run once. Commit the result. Changing it invalidates
-        every comparison you have made.
+    --rounds 2026-03-01 2026-04-12 2026-05-10
+        Writes gate_rounds.json. Full rounds, no sampling. Run once, commit
+        the result. Changing it invalidates every comparison you have made.
 
     --set-baseline
-        Runs the current forecaster over the manifest and writes
-        gate_baseline.json. The gate ladder is centered on this value, so the
-        score sits mid-ladder and the search has room in both directions.
+        Scores the pinned rounds with the current lab forecaster and writes
+        gate_baseline.json. The ladder in test_brier_gate.py is centered on
+        this value, so the score sits mid-ladder with room to move both ways.
         Re-run deliberately, as a commit, after accepting a real gain.
 
-Kept outside tests/ so `uv run pytest` (testpaths = ["tests"]) never touches
-it, and outside factory.md's Mutable list so the factory cannot edit the
-thing that scores it.
+    --dry-run
+        Same scoring path with the dummy forecaster. No API calls. Use it to
+        check row counts before spending anything.
+
+Kept outside tests/ so `uv run pytest` (testpaths = ["tests"]) never triggers
+it, and outside factory.md's Mutable list so the factory cannot edit the thing
+that scores it.
 """
 
 from __future__ import annotations
@@ -23,132 +24,131 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import random
 import sys
-from collections import defaultdict
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 REPO = Path(__file__).resolve().parent.parent
-MANIFEST = REPO / "gate_manifest.json"
+ROUNDS = REPO / "gate_rounds.json"
 BASELINE = REPO / "gate_baseline.json"
 
 # gate/ is not the repo root, so `python gate/make_manifest.py` puts gate/ on
-# sys.path rather than the root and `import fetch_data` fails.
+# sys.path rather than the root and `import eval` fails.
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-MARKET_SOURCES = {"metaculus", "polymarket", "manifold", "infer"}
-
-# Fixed. Do not change without re-baselining, or comparisons across runs
-# stop meaning anything.
-SEED = 20260818
+if TYPE_CHECKING:
+    from score import ScoringResult
 
 
-def build_manifest(rounds: list[str], n_market: int, n_dataset: int) -> dict:
-    from fetch_data import fetch_question_set
-
-    by_source: dict[str, list[str]] = defaultdict(list)
-    for round_name in rounds:
-        filename = round_name if round_name.endswith(".json") else f"{round_name}-llm.json"
-        qs = fetch_question_set(filename)
-        for q in qs.questions:
-            by_source[q.source].append(q.id)
-
-    rng = random.Random(SEED)
-    market_pool = sorted({s for s in by_source if s in MARKET_SOURCES})
-    dataset_pool = sorted({s for s in by_source if s not in MARKET_SOURCES})
-
-    def stratify(pool: list[str], total: int) -> list[str]:
-        """Proportional allocation across sources, deterministic."""
-        if not pool:
-            return []
-        sizes = {s: len(by_source[s]) for s in pool}
-        grand = sum(sizes.values())
-        picked: list[str] = []
-        for source in pool:
-            share = round(total * sizes[source] / grand)
-            ids = sorted(set(by_source[source]))
-            rng.shuffle(ids)
-            picked.extend(ids[:share])
-        return sorted(set(picked))
-
-    market_ids = stratify(market_pool, n_market)
-    dataset_ids = stratify(dataset_pool, n_dataset)
-
-    return {
-        "seed": SEED,
-        "rounds": sorted(rounds),
-        "market_ids": market_ids,
-        "dataset_ids": dataset_ids,
-        "n_market": len(market_ids),
-        "n_dataset": len(dataset_ids),
-        "n_total": len(market_ids) + len(dataset_ids),
-    }
-
-
-def load_manifest() -> dict:
-    if not MANIFEST.exists():
+def load_rounds() -> list[str]:
+    if not ROUNDS.exists():
         raise SystemExit(
-            f"{MANIFEST} not found. Run: python gate/make_manifest.py "
-            "--rounds 2026-06-21 2026-07-05 --market 100 --dataset 100"
+            f"{ROUNDS} not found. Run: python gate/make_manifest.py "
+            "--rounds 2026-03-01 2026-04-12 2026-05-10"
         )
-    return json.loads(MANIFEST.read_text())
+    rounds: list[str] = json.loads(ROUNDS.read_text())["rounds"]
+    return rounds
 
 
-def score_manifest() -> float:
-    """Run the lab forecaster over the pinned subsample. Returns Brier Index."""
-    import eval as ev
-    import lab_forecaster
+def score_rounds(
+    rounds: list[str],
+    dummy: bool = False,
+) -> tuple[float, list[tuple[str, ScoringResult]]]:
+    """Score each round separately, return the mean index and the per-round results.
 
-    manifest = load_manifest()
-    ids = set(manifest["market_ids"]) | set(manifest["dataset_ids"])
+    One run_eval call per round with round_name set. Without round_name,
+    run_eval loads every published round at once; question IDs recur across
+    rounds and are forecast only once, keyed on the first occurrence's
+    resolution dates, so rows from other rounds match no forecast and fall
+    through to the 0.5 default. Per-round calls keep identity unambiguous.
 
-    result = asyncio.run(
-        ev.run_eval(
-            forecaster=lab_forecaster.aforecast,
-            multi_forecaster=lab_forecaster.aforecast_multi_horizon,
-            agent_name="lab",
-            raw=True,                       # difficulty adjustment off, always
-            n_held_out=0,                   # the manifest IS the split
-            question_filter=ids,            # requires the eval.py patch
+    Averaging round indices rather than pooling rows is also the honest
+    statistic: questions within a round are correlated, so the effective
+    sample size for generalization tracks the round count.
+    """
+    import eval as ev  # noqa: PLC0415
+
+    if dummy:
+        import dummy_forecaster  # noqa: PLC0415
+
+        forecaster: Any = dummy_forecaster.forecast
+        multi: Any = None
+        agent = "dummy"
+    else:
+        import lab_forecaster  # noqa: PLC0415
+
+        forecaster = lab_forecaster.aforecast
+        multi = lab_forecaster.aforecast_multi_horizon
+        agent = "lab"
+
+    per_round: list[tuple[str, ScoringResult]] = []
+    for name in rounds:
+        result = asyncio.run(
+            ev.run_eval(
+                forecaster=forecaster,
+                multi_forecaster=multi,
+                agent_name=agent,
+                raw=True,                    # difficulty adjustment off, always
+                round_name=f"{name}-llm",    # loads exactly ONE question set
+                n_held_out=0,                # the pinned rounds are the split
+            )
         )
-    )
-    scored = result.scoring.n_dataset + result.scoring.n_market
-    if scored == 0:
-        raise SystemExit(
-            "Scored zero rows. The manifest IDs matched no resolved questions.\n"
-            "Check that the pinned rounds have resolution sets published."
+        scoring = result.scoring
+        rows = scoring.n_dataset + scoring.n_market
+        if rows == 0:
+            raise SystemExit(
+                f"Round {name} scored zero rows. Check that it has a published "
+                "resolution set."
+            )
+        per_round.append((name, scoring))
+
+    if not per_round:
+        raise SystemExit("No rounds scored.")
+
+    mean_index = sum(r.overall_index for _, r in per_round) / len(per_round)
+    return mean_index, per_round
+
+
+def _report(mean_index: float, per_round: list[tuple[str, ScoringResult]]) -> None:
+    for name, r in per_round:
+        print(
+            f"{name}  index={r.overall_index:7.3f}  "
+            f"rows={r.n_dataset + r.n_market:5d}  "
+            f"dataset={r.n_dataset:5d} ({r.dataset_index:6.2f})  "
+            f"market={r.n_market:4d} ({r.market_index:6.2f})  "
+            f"missing={r.n_missing}"
         )
-    print(f"scored {scored} rows ({result.scoring.n_dataset} dataset, "
-          f"{result.scoring.n_market} market, {result.scoring.n_missing} missing)")
-    return float(result.scoring.overall_index)
+    print(f"mean index across {len(per_round)} rounds: {mean_index:.3f}")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Brier gate manifest tooling")
-    p.add_argument("--rounds", nargs="+", help="Round names, e.g. 2026-06-21 2026-07-05")
-    p.add_argument("--market", type=int, default=100, help="Market questions to pin")
-    p.add_argument("--dataset", type=int, default=100, help="Dataset questions to pin")
-    p.add_argument("--set-baseline", action="store_true", help="Score manifest, write baseline")
+    p = argparse.ArgumentParser(description="Brier gate round pinning")
+    p.add_argument("--rounds", nargs="+", help="Round names, e.g. 2026-03-01 2026-04-12")
+    p.add_argument("--set-baseline", action="store_true", help="Score rounds, write baseline")
+    p.add_argument("--dry-run", action="store_true", help="Score with dummy forecaster, no API calls")
     args = p.parse_args()
 
     if args.rounds:
-        manifest = build_manifest(args.rounds, args.market, args.dataset)
-        MANIFEST.write_text(json.dumps(manifest, indent=2))
-        print(
-            f"wrote {MANIFEST.name}: {manifest['n_total']} questions "
-            f"({manifest['n_market']} market, {manifest['n_dataset']} dataset) "
-            f"from {len(manifest['rounds'])} rounds"
-        )
+        if len(set(args.rounds)) != len(args.rounds):
+            p.error("duplicate rounds")
+        ROUNDS.write_text(json.dumps({"rounds": sorted(args.rounds)}, indent=2))
+        print(f"wrote {ROUNDS.name}: {len(args.rounds)} rounds {sorted(args.rounds)}")
+
+    if args.dry_run:
+        mean_index, per_round = score_rounds(load_rounds(), dummy=True)
+        print("\n--- dry run (dummy forecaster, no API calls) ---")
+        _report(mean_index, per_round)
 
     if args.set_baseline:
-        index = score_manifest()
-        BASELINE.write_text(json.dumps({"brier_index": round(index, 3)}, indent=2))
-        print(f"wrote {BASELINE.name}: brier_index = {index:.3f}")
-        print("ladder will span", f"{index - 4:.1f}", "to", f"{index + 5:.1f}")
+        mean_index, per_round = score_rounds(load_rounds())
+        _report(mean_index, per_round)
+        BASELINE.write_text(json.dumps({"brier_index": round(mean_index, 3)}, indent=2))
+        print(f"\nwrote {BASELINE.name}: brier_index = {mean_index:.3f}")
+        print(f"ladder spans {mean_index - 4:.1f} to {mean_index + 5:.1f}")
 
-    if not args.rounds and not args.set_baseline:
-        p.error("nothing to do: pass --rounds and/or --set-baseline")
+    if not (args.rounds or args.dry_run or args.set_baseline):
+        p.error("nothing to do: pass --rounds, --dry-run, and/or --set-baseline")
 
 
 if __name__ == "__main__":

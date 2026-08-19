@@ -20,7 +20,7 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - `score.py` — competition scoring (Brier score/index formulas)
 - `submit.py` — competition submission format
 - `gate/**` — outer-loop fitness function; editing this is score tampering
-- `gate_manifest.json` — pinned question subsample the gate scores
+- `gate_rounds.json` — pinned question subsample the gate scores
 - `gate_baseline.json` — Brier Index the gate ladder is centered on
 - `CLAUDE.md`
 - `factory.md`
@@ -34,7 +34,7 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - Do not change the flat file layout — all modules stay at project root, no package subdirectories
 - Missing forecasts must default to 0.5 per ForecastBench rules
 - Binary outcomes only: `{0, 1}`
-- Do not edit anything under `gate/`, `gate_manifest.json`, or `gate_baseline.json` — these define how your work is scored
+- Do not edit anything under `gate/`, `gate_rounds.json`, or `gate_baseline.json` — these define how your work is scored
 - Do not add or remove questions from the pinned manifest
 - `forecast() -> float` signature must be preserved (no dict/union return types)
 - Composite cache keys use `_` separator (not `|`)

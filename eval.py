@@ -461,6 +461,13 @@ def _run_sync(
             except Exception:
                 logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
                 continue
+            if probs is None:
+                logger.warning("multi_horizon_none_skip", question_id=q.id)
+                continue
+            if len(probs) != len(rd):
+                logger.warning("multi_horizon_length_mismatch", question_id=q.id,
+                               n_probs=len(probs), n_horizons=len(rd))
+                continue
             for date, prob in zip(rd, probs):
                 ck = f"{q.id}_{date}"
                 forecasts[ck] = prob
@@ -526,6 +533,17 @@ async def _run_async(
                 except Exception:
                     logger.warning("forecast_error_skip", question_id=q.id, exc_info=True)
                     return None
+            # multi_forecaster returns list[float] | None: it RETURNS None on a
+            # parse failure rather than raising, so the try above does not catch
+            # it. Without this guard the zip below raises TypeError outside the
+            # try, which propagates out of gather() and kills the whole run.
+            if probs is None:
+                logger.warning("multi_horizon_none_skip", question_id=q.id)
+                return None
+            if len(probs) != len(rd):
+                logger.warning("multi_horizon_length_mismatch", question_id=q.id,
+                               n_probs=len(probs), n_horizons=len(rd))
+                return None
             results: list[tuple[str, float]] = []
             for date, prob in zip(rd, probs):
                 ck = f"{q.id}_{date}"
