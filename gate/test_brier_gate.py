@@ -38,24 +38,45 @@ LADDER_BELOW = 4
 LADDER_ABOVE = 5
 
 
-def _thresholds() -> list[float]:
+# Offsets, not absolute thresholds. Collection must not depend on
+# gate_baseline.json existing: parametrize arguments are evaluated at import
+# time, and pytest.skip() at module level is a collection error, not a skip.
+# The baseline is read inside the fixture instead.
+_OFFSETS = list(range(-LADDER_BELOW, LADDER_ABOVE + 1))
+
+
+def _load_baseline() -> float | None:
     if not BASELINE.exists():
-        pytest.skip("gate_baseline.json missing; run gate/make_manifest.py --set-baseline")
-    base = float(json.loads(BASELINE.read_text())["brier_index"])
-    return [base + offset for offset in range(-LADDER_BELOW, LADDER_ABOVE + 1)]
+        return None
+    try:
+        return float(json.loads(BASELINE.read_text())["brier_index"])
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return None
 
 
 @pytest.fixture(scope="session")
-def brier_index() -> float:
-    """Score the pinned subsample once per session, not once per threshold."""
+def baseline() -> float:
+    """Brier Index the ladder is centered on."""
+    base = _load_baseline()
+    if base is None:
+        pytest.skip("gate_baseline.json missing; run gate/make_manifest.py --set-baseline")
+    return base
+
+
+@pytest.fixture(scope="session")
+def brier_index(baseline: float) -> float:
+    """Score the pinned subsample once per session, not once per rung.
+
+    Depends on `baseline` so a missing baseline skips before any API calls.
+    """
     import sys
+
+    if not MANIFEST.exists():
+        pytest.skip("gate_manifest.json missing; run gate/make_manifest.py --rounds ...")
 
     sys.path.insert(0, str(REPO))
     import eval as ev
     import lab_forecaster
-
-    if not MANIFEST.exists():
-        pytest.skip("gate_manifest.json missing; run gate/make_manifest.py --rounds ...")
 
     manifest = json.loads(MANIFEST.read_text())
     ids = set(manifest["market_ids"]) | set(manifest["dataset_ids"])
@@ -81,11 +102,13 @@ def brier_index() -> float:
     return float(result.scoring.overall_index)
 
 
-@pytest.mark.parametrize("threshold", _thresholds())
-def test_brier_index_at_or_above(brier_index: float, threshold: float) -> None:
+@pytest.mark.parametrize("offset", _OFFSETS)
+def test_brier_index_at_or_above(brier_index: float, baseline: float, offset: int) -> None:
     """One rung of the ladder. Pass count is the fitness signal."""
+    threshold = baseline + offset
     assert brier_index >= threshold, (
-        f"Brier Index {brier_index:.3f} below rung {threshold:.1f}"
+        f"Brier Index {brier_index:.3f} below rung {threshold:.1f} "
+        f"(baseline {baseline:.3f}{offset:+d})"
     )
 
 
