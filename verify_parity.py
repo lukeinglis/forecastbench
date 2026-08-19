@@ -574,24 +574,25 @@ def check_cross_round_filtering() -> tuple[bool, str]:
 
     resolved = join_resolved_questions(question_sets, resolutions)
 
-    original_res_dates: dict[str, set[str]] = {}
+    original_res_dates: dict[tuple[str, str], set[str]] = {}
     for qs in question_sets:
         for q in qs.questions:
             rd = q.resolution_dates
             if isinstance(rd, list):
                 dates = {str(d) for d in rd if d and str(d).upper() != "N/A"}
                 if dates:
-                    original_res_dates[q.id] = dates
+                    original_res_dates[(q.id, qs.forecast_due_date)] = dates
 
     violations = 0
     checked = 0
     for rq in resolved:
-        if rq.id not in original_res_dates:
+        key = (rq.id, rq.forecast_due_date)
+        if key not in original_res_dates:
             continue
         if rq.resolution_date is None:
             continue
         checked += 1
-        if rq.resolution_date not in original_res_dates[rq.id]:
+        if rq.resolution_date not in original_res_dates[key]:
             violations += 1
 
     if violations == 0:
