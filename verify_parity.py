@@ -580,10 +580,9 @@ def check_cross_round_filtering() -> tuple[bool, str]:
 
     resolved = join_resolved_questions(question_sets, resolutions)
 
-    original_res_dates: dict[str, set[str]] = {}
-    all_round_dates_by_qs: dict[str, set[str]] = {}
-    question_source: dict[str, str] = {}
-    question_to_qs: dict[str, str] = {}
+    original_res_dates: dict[tuple[str, str], set[str]] = {}
+    all_round_dates_by_qs: dict[tuple[str, str], set[str]] = {}
+    question_source: dict[tuple[str, str], str] = {}
 
     for qs in question_sets:
         round_dates: set[str] = set()
@@ -592,32 +591,30 @@ def check_cross_round_filtering() -> tuple[bool, str]:
             if isinstance(rd, list):
                 round_dates.update(str(d) for d in rd if d and str(d).upper() != "N/A")
 
-        qs_key = qs.forecast_due_date or qs.question_set or ""
-        all_round_dates_by_qs[qs_key] = round_dates
-
         for q in qs.questions:
+            key = (q.id, qs.forecast_due_date)
+            all_round_dates_by_qs[key] = round_dates
+            question_source[key] = q.source.lower()
             rd = q.resolution_dates
             if isinstance(rd, list):
                 dates = {str(d) for d in rd if d and str(d).upper() != "N/A"}
                 if dates:
-                    original_res_dates[q.id] = dates
-            question_source[q.id] = q.source.lower()
-            question_to_qs[q.id] = qs_key
+                    original_res_dates[key] = dates
 
     violations = 0
     checked = 0
     for rq in resolved:
-        if rq.id not in original_res_dates:
+        key = (rq.id, rq.forecast_due_date)
+        if key not in original_res_dates:
             continue
         if rq.resolution_date is None:
             continue
         checked += 1
-        is_market = any(s in question_source.get(rq.id, "") for s in MARKET_SOURCES)
+        is_market = any(s in question_source.get(key, "") for s in MARKET_SOURCES)
         if is_market:
-            qs_key = question_to_qs.get(rq.id, "")
-            effective_dates = all_round_dates_by_qs.get(qs_key, set())
+            effective_dates = all_round_dates_by_qs.get(key, set())
         else:
-            effective_dates = original_res_dates[rq.id]
+            effective_dates = original_res_dates[key]
         if rq.resolution_date not in effective_dates:
             violations += 1
 
