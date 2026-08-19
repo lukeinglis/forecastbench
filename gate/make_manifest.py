@@ -104,10 +104,17 @@ def score_manifest() -> float:
             agent_name="lab",
             raw=True,                       # difficulty adjustment off, always
             n_held_out=0,                   # the manifest IS the split
-            n_rounds=len(manifest["rounds"]),
             question_filter=ids,            # requires the eval.py patch
         )
     )
+    scored = result.scoring.n_dataset + result.scoring.n_market
+    if scored == 0:
+        raise SystemExit(
+            "Scored zero rows. The manifest IDs matched no resolved questions.\n"
+            "Check that the pinned rounds have resolution sets published."
+        )
+    print(f"scored {scored} rows ({result.scoring.n_dataset} dataset, "
+          f"{result.scoring.n_market} market, {result.scoring.n_missing} missing)")
     return float(result.scoring.overall_index)
 
 

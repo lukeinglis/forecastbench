@@ -88,9 +88,14 @@ def brier_index(baseline: float) -> float:
             agent_name="lab",
             raw=True,                       # difficulty adjustment stays off
             n_held_out=0,                   # the manifest is the split
-            n_rounds=len(manifest["rounds"]),
             question_filter=ids,
         )
+    )
+
+    scored = result.scoring.n_dataset + result.scoring.n_market
+    assert scored > 0, (
+        "gate scored zero rows: the manifest IDs did not match any resolved "
+        "questions. Check that gate_manifest.json rounds have resolution sets."
     )
 
     print(
