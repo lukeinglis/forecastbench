@@ -19,6 +19,9 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - `fetch_data.py` — competition pipeline (data fetching + resolution matching)
 - `score.py` — competition scoring (Brier score/index formulas)
 - `submit.py` — competition submission format
+- `gate/**` — outer-loop fitness function; editing this is score tampering
+- `gate_manifest.json` — pinned question subsample the gate scores
+- `gate_baseline.json` — Brier Index the gate ladder is centered on
 - `CLAUDE.md`
 - `factory.md`
 - `.github/**`
@@ -31,6 +34,8 @@ Build and evolve a Python backtest harness for ForecastBench forecasting evaluat
 - Do not change the flat file layout — all modules stay at project root, no package subdirectories
 - Missing forecasts must default to 0.5 per ForecastBench rules
 - Binary outcomes only: `{0, 1}`
+- Do not edit anything under `gate/`, `gate_manifest.json`, or `gate_baseline.json` — these define how your work is scored
+- Do not add or remove questions from the pinned manifest
 - `forecast() -> float` signature must be preserved (no dict/union return types)
 - Composite cache keys use `_` separator (not `|`)
 - **Do not clone, modify, commit, push, tag, or interact with the forecastbench-parity repo** — it is a protected dependency. The factory treats it as a read-only upstream package. If parity changes are needed, open an issue on the backtester describing what needs to change and stop. Do not attempt workarounds (cloning, temporary checkouts, git submodules, or any other mechanism to reach the parity repo).
@@ -68,6 +73,12 @@ discovered (confidence: 0.80, human_reviewed: true)
 
 ## Project Eval
 
+- name: brier_gate
+  command: uv run pytest gate/ -q
+  parse: exit_code
+  weight: 4.0
+  description: Graded Brier Index gate on the pinned question subsample
+
 - name: uv_tests
   command: uv run pytest -q
   parse: exit_code
@@ -81,7 +92,7 @@ discovered (confidence: 0.80, human_reviewed: true)
   description: Run ruff linter via uv
 
 - name: uv_typecheck
-  command: uv run mypy --ignore-missing-imports --exclude eval/ --exclude tests/ .
+  command: uv run mypy --ignore-missing-imports --exclude eval/ --exclude tests/ --exclude gate/ .
   parse: exit_code
   weight: 1.0
   description: Run mypy type checker via uv
