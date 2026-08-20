@@ -1,0 +1,17 @@
+[meta]
+name = "forecastbench"
+description = "ForecastBench — Brier Index gate with graded pytest ladder"
+
+[test]
+format = "pytest"
+command = "uv run pytest gate/ -q"
+timeout = 600
+
+[instances]
+format = "directory"
+
+[seed_workflow]
+name = ""
+
+[scoring]
+method = "partial_credit"
