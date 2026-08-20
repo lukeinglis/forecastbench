@@ -18,6 +18,7 @@ import litellm  # noqa: E402
 
 litellm.suppress_debug_info = True
 
+from cutoff import CutoffEnvironment  # noqa: E402
 from fetch_data import MARKET_SOURCES, Question, QuestionSet, Resolution, ResolvedQuestion, load_data, join_resolved_questions, fetch_question_set, fetch_all_resolutions, list_question_set_files, fetch_leaderboard, refresh_cache  # noqa: E402
 from logging_config import configure_logging, generate_run_id, get_logger  # noqa: E402
 from score import ScoringResult, brier_skill_score, score_forecasts  # noqa: E402
@@ -284,6 +285,14 @@ def _build_question(q: Question | ResolvedQuestion, forecast_due_date: str | Non
     )
 
 
+def _apply_cutoff(question: Question) -> Question:
+    freeze = question.freeze_datetime or getattr(question, "forecast_due_date", None)
+    if not freeze:
+        return question
+    env = CutoffEnvironment(str(freeze))
+    return env.prepare_question(question)
+
+
 async def run_eval(
     forecaster: Forecaster,
     n_held_out: int = 2,
@@ -344,6 +353,8 @@ async def run_eval(
                 questions.append(_build_question(q))
         logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
     model_slug = _model_slug(agent_name, run_label=run_label, prompt_variant=prompt_variant)
+
+    questions = [_apply_cutoff(q) for q in questions]
 
     if is_async_forecaster(forecaster):
         forecasts = await _run_async(
