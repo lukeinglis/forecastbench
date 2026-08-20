@@ -3,12 +3,18 @@
 import subprocess
 import sys
 
+from logging_config import get_logger
+
+logger = get_logger("check_staleness")
+
 
 def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
+    logger.debug("run_command", cmd=cmd)
     return subprocess.run(cmd, capture_output=True, text=True, check=check)
 
 
 def main() -> int:
+    logger.info("staleness_check_start")
     run(["git", "fetch", "origin", "main", "--quiet"])
 
     result = run(

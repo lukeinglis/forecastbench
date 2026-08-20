@@ -24,6 +24,7 @@ EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
+THINKING_BUDGET = int(os.getenv("FORECAST_THINKING_BUDGET", "10000"))
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -204,19 +205,59 @@ def _format_question_text(text: str, forecast_due_date: str, is_dataset: bool) -
         return text
 
 
+def _is_thinking_model(model: str) -> bool:
+    return "claude" in model.lower() and THINKING_BUDGET > 0
+
+
 def _forecast_kwargs(
     messages: list[dict[str, str]],
     timeout: int = 180,
+    model: str | None = None,
 ) -> dict[str, Any]:
+    effective_model = model or MODEL
+
+    full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+
     kwargs: dict[str, Any] = {
-        "model": MODEL,
-        "messages": messages,
+        "model": effective_model,
+        "messages": full_messages,
         "max_tokens": MAX_TOKENS,
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
-        "temperature": TEMPERATURE,
     }
+
+    if _is_thinking_model(effective_model):
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+    else:
+        kwargs["temperature"] = TEMPERATURE
+
     return kwargs
+
+
+SYSTEM_PROMPT = """\
+You are a superforecaster making calibrated probabilistic predictions.
+
+Before giving your probability, mentally work through these steps:
+
+1. REFERENCE CLASS: Identify the most relevant reference class for this question. \
+What is the base rate for events of this type? Start from the outside view.
+
+2. SPECIFIC EVIDENCE: What factors in the question background, resolution criteria, \
+and current data shift the probability away from the base rate? Consider both \
+directions — evidence FOR and AGAINST resolution.
+
+3. TIME HORIZON: How much time remains until resolution? Longer horizons generally \
+mean more uncertainty — push toward the base rate. Shorter horizons allow more \
+confident predictions if current trends are clear.
+
+4. CALIBRATION CHECK: Before giving your final answer, sanity-check your probability:
+   - Would you bet at these odds?
+   - Are you being anchored by salient but unreliable details?
+   - Very few real-world outcomes are truly >95% or <5% probable. \
+Reserve extreme probabilities for near-certainties only.
+   - When uncertain, err toward moderate probabilities (0.3-0.7).
+
+Give your final probability between 0 and 1."""
 
 
 def _build_prompt(
@@ -442,8 +483,7 @@ async def aforecast(
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(question, resolution_date=resolution_date, source=source, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    kwargs = _forecast_kwargs(messages)
-    kwargs["model"] = model
+    kwargs = _forecast_kwargs(messages, model=model)
     response = await litellm.acompletion(**kwargs)
     _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
@@ -483,8 +523,7 @@ async def aforecast_multi_horizon(
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(question, source=source, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    kwargs = _forecast_kwargs(messages)
-    kwargs["model"] = model
+    kwargs = _forecast_kwargs(messages, model=model)
     try:
         response = await litellm.acompletion(**kwargs)
     except Exception:

@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from logging_config import get_logger
 from score import brier_score, brier_index
 
+logger = get_logger("tournament")
 
 SMALL_N_THRESHOLD = 100
 
@@ -31,8 +33,10 @@ class ModelResult:
 
 
 def load_tournament_results(results_dir: str | Path = "results") -> list[ModelResult]:
+    logger.info("load_tournament_results", results_dir=str(results_dir))
     p = Path(results_dir)
     if not p.exists():
+        logger.warning("load_tournament_results_no_dir", path=str(p))
         return []
     results: list[ModelResult] = []
     for f in sorted(p.glob("*.json")):
@@ -51,7 +55,9 @@ def load_tournament_results(results_dir: str | Path = "results") -> list[ModelRe
                 timestamp=data.get("timestamp", ""),
             ))
         except (json.JSONDecodeError, KeyError):
+            logger.warning("load_tournament_result_error", path=str(f))
             continue
+    logger.info("load_tournament_results_complete", n_loaded=len(results))
     return results
 
 
@@ -81,6 +87,7 @@ def model_source_matrix(
     n_bootstrap: int = 1000,
     seed: int = 42,
 ) -> dict[str, dict[str, CellStats]]:
+    logger.info("model_source_matrix_start", n_models=len(results), n_bootstrap=n_bootstrap)
     matrix: dict[str, dict[str, CellStats]] = {}
     for result in results:
         by_source = _source_pairs(result)
@@ -156,6 +163,7 @@ def paired_bootstrap_test(
 ) -> BootstrapResult:
     shared_ids = sorted(set(forecasts_a) & set(forecasts_b) & set(outcomes))
     n = len(shared_ids)
+    logger.debug("paired_bootstrap_test", n_shared=n, n_bootstrap=n_bootstrap)
     if n == 0:
         return BootstrapResult(0.0, 0.0, 0.0, 1.0, 0)
 
@@ -205,6 +213,7 @@ def pairwise_comparison_table(
     n_bootstrap: int = 10000,
     seed: int = 42,
 ) -> list[PairwiseEntry]:
+    logger.info("pairwise_comparison_start", n_models=len(results))
     entries: list[PairwiseEntry] = []
     for i, ra in enumerate(results):
         for rb in results[i + 1:]:
@@ -247,6 +256,7 @@ class CostEntry:
 
 
 def cost_accuracy_summary(results: list[ModelResult]) -> list[CostEntry]:
+    logger.info("cost_accuracy_summary_start", n_models=len(results))
     entries: list[CostEntry] = []
     for r in results:
         if not r.costs:
@@ -270,6 +280,7 @@ def cost_accuracy_summary(results: list[ModelResult]) -> list[CostEntry]:
 
 
 def tournament_report(results: list[ModelResult]) -> str:
+    logger.info("tournament_report_start", n_models=len(results))
     if not results:
         return "No results to report."
 

@@ -22,6 +22,7 @@ class CutoffEnvironment:
         logger.info("cutoff_environment_created", cutoff_date=freeze_datetime, display_date=self.display_date)
 
     def frame_temporal_context(self, question: Question) -> str:
+        logger.debug("frame_temporal_context", question_id=question.id, display_date=self.display_date)
         return (
             f"Today's Date: {self.display_date}. "
             "You should forecast based on information available as of this date."
