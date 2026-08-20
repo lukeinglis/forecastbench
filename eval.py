@@ -132,6 +132,7 @@ def _forecaster_fingerprint(prompt_variant: str = "default") -> str:
     Over-invalidating costs a re-run. Under-invalidating silently scores stale
     forecasts against new code, which is unrecoverable in an experiment loop.
     """
+    logger.debug("forecaster_fingerprint", prompt_variant=prompt_variant)
     parts = [
         os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514"),
         os.getenv("FORECAST_TEMPERATURE", ""),
@@ -212,6 +213,7 @@ def save_result(
     costs: dict[str, float] | None = None,
 ) -> Path:
     """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
+    logger.info("save_result", model_slug=model_slug, n_forecasts=len(forecasts), round_name=round_name)
     timestamp = datetime.datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     metadata: dict[str, object] = {
         "n_questions": result.n_dataset + result.n_market,
@@ -632,6 +634,7 @@ def _normalize_round_name(name: str) -> str:
 
 
 def list_rounds() -> list[tuple[str, int]]:
+    logger.info("list_rounds")
     filenames = list_question_set_files()
     rounds: list[tuple[str, int]] = []
     for fname in sorted(filenames, reverse=True):
@@ -648,6 +651,7 @@ def print_leaderboard_comparison(
     user_index: float,
     leaderboard_name: str = "baseline",
 ) -> None:
+    logger.info("print_leaderboard_comparison", user_index=user_index, leaderboard=leaderboard_name)
     try:
         rows = fetch_leaderboard(leaderboard_name)
     except Exception:
