@@ -17,6 +17,10 @@ from typing import Any
 
 import requests
 
+from logging_config import get_logger
+
+logger = get_logger("verify_parity")
+
 
 UPSTREAM_PROMPTS_URL = (
     "https://raw.githubusercontent.com/forecastingresearch/"
@@ -54,6 +58,7 @@ def _strip_enhancements(text: str) -> str:
 
 def extract_template(source: str, var_name: str) -> str | None:
     """Extract a triple-quoted string assigned to var_name from Python source."""
+    logger.debug("extract_template", var_name=var_name, source_length=len(source))
     pattern = rf'{var_name}\s*=\s*"""(.*?)"""'
     match = re.search(pattern, source, re.DOTALL)
     if match:
@@ -70,11 +75,13 @@ def _get_local_template(name: str) -> str | None:
 
     val = getattr(lab_forecaster, name, None)
     if val is None:
+        logger.debug("local_template_not_found", name=name)
         return None
     return str(val)
 
 
 def check_prompt_templates(upstream_source: str | None) -> tuple[bool, str]:
+    logger.info("check_prompt_templates")
     if upstream_source is None:
         return True, "[WARN] Could not fetch upstream prompts — skipping live comparison"
 
@@ -106,6 +113,7 @@ def check_prompt_templates(upstream_source: str | None) -> tuple[bool, str]:
 
 
 def check_resolution_matching() -> tuple[bool, str]:
+    logger.info("check_resolution_matching")
     try:
         from fetch_data import (
             fetch_all_resolutions,
@@ -140,6 +148,7 @@ def check_resolution_matching() -> tuple[bool, str]:
 
 
 def check_scoring_formula(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_scoring_formula")
     from score import brier_index
 
     if brier_index(0.25) != 50.0:
@@ -171,6 +180,7 @@ def check_scoring_formula(leaderboard: list[dict[str, str]] | None) -> tuple[boo
 
 
 def check_missing_forecast_default() -> tuple[bool, str]:
+    logger.info("check_missing_forecast_default")
     from fetch_data import ResolvedQuestion
     from score import score_forecasts, brier_score
 
@@ -195,6 +205,7 @@ def check_missing_forecast_default() -> tuple[bool, str]:
 
 
 def check_multi_horizon_batching() -> tuple[bool, str]:
+    logger.info("check_multi_horizon_batching")
     try:
         from fetch_data import (
             fetch_question_set,
@@ -235,6 +246,7 @@ def check_multi_horizon_batching() -> tuple[bool, str]:
 
 
 def check_question_count(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_question_count")
     try:
         from fetch_data import fetch_question_set, list_question_set_files
 
@@ -271,16 +283,21 @@ def check_question_count(leaderboard: list[dict[str, str]] | None) -> tuple[bool
 
 
 def _load_latest_result() -> dict[str, Any] | None:
+    logger.debug("load_latest_result")
     if not RESULTS_DIR.exists():
+        logger.debug("load_latest_result_no_dir")
         return None
     result_files = sorted(RESULTS_DIR.glob("*.json"))
     result_files = [f for f in result_files if f.name != "RESULTS.md"]
     if not result_files:
+        logger.debug("load_latest_result_no_files")
         return None
     try:
         data: dict[str, Any] = json.loads(result_files[-1].read_text())
+        logger.debug("load_latest_result_loaded", path=str(result_files[-1]))
         return data
     except (json.JSONDecodeError, OSError):
+        logger.warning("load_latest_result_error", path=str(result_files[-1]))
         return None
 
 
@@ -305,6 +322,7 @@ def _find_reference_model(
     Returns (model_name, overall_score, is_fallback) or None.
     When model_hint is provided, finds the closest match by overlap ratio.
     """
+    logger.debug("find_reference_model", model_hint=model_hint, n_leaderboard=len(leaderboard))
     if model_hint:
         cleaned = _clean_model_slug(model_hint).lower()
         best: tuple[str, float, int] | None = None
@@ -348,6 +366,7 @@ def _find_reference_model(
 
 
 def check_score_comparison(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_score_comparison")
     result = _load_latest_result()
     if result is None:
         return True, "[SKIP] No results found — run eval first"
@@ -379,6 +398,7 @@ def check_score_comparison(leaderboard: list[dict[str, str]] | None) -> tuple[bo
 
 
 def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tuple[bool, str]:
+    logger.info("check_per_source_breakdown")
     result = _load_latest_result()
     if result is None:
         return True, "[SKIP] No results found — run eval first"
@@ -439,6 +459,7 @@ def check_per_source_breakdown(leaderboard: list[dict[str, str]] | None) -> tupl
 
 def check_dummy_score() -> tuple[bool, str]:
     """Dummy forecaster (always 0.5) must score overall_index == 50.0 ± 0.01."""
+    logger.info("check_dummy_score")
     from dummy_forecaster import forecast as dummy_forecast
     from fetch_data import (
         Question,
@@ -493,6 +514,7 @@ def check_dummy_score() -> tuple[bool, str]:
 
 def _fetch_all_resolutions_as_lists() -> dict[str, list[Any]]:
     """Fetch all resolutions preserving every entry per question ID."""
+    logger.info("fetch_all_resolutions_as_lists")
     from fetch_data import Resolution, fetch_resolution, list_resolution_files
 
     filenames = list_resolution_files()
@@ -509,6 +531,7 @@ def _fetch_all_resolutions_as_lists() -> dict[str, list[Any]]:
 
 def check_resolution_outcome_diversity() -> tuple[bool, str]:
     """Resolution entries with the same ID but different dates must have diverse outcomes."""
+    logger.info("check_resolution_outcome_diversity")
     resolutions = _fetch_all_resolutions_as_lists()
 
     multi_entry_ids: dict[str, set[int | None]] = {}
@@ -538,6 +561,7 @@ def check_resolution_outcome_diversity() -> tuple[bool, str]:
 
 def check_resolution_entry_preservation() -> tuple[bool, str]:
     """Total resolution entries must significantly exceed unique question IDs."""
+    logger.info("check_resolution_entry_preservation")
     resolutions = _fetch_all_resolutions_as_lists()
 
     unique_ids = len(resolutions)
@@ -565,6 +589,7 @@ def check_cross_round_filtering() -> tuple[bool, str]:
     so their effective dates include all resolution_dates from all questions in the round.
     Dataset questions still use only their own resolution_dates list.
     """
+    logger.info("check_cross_round_filtering")
     from fetch_data import (
         MARKET_SOURCES,
         fetch_all_question_sets,
@@ -632,6 +657,7 @@ def check_cross_round_filtering() -> tuple[bool, str]:
 
 
 def _fetch_upstream_prompts(refresh: bool = False) -> str | None:
+    logger.info("fetch_upstream_prompts", refresh=refresh)
     try:
         from fetch_data import _fetch_text
 
@@ -648,6 +674,7 @@ def _fetch_upstream_prompts(refresh: bool = False) -> str | None:
 
 
 def _fetch_leaderboard(refresh: bool = False) -> list[dict[str, str]] | None:
+    logger.info("fetch_leaderboard", refresh=refresh)
     try:
         if refresh:
             from fetch_data import refresh_cache
@@ -661,6 +688,7 @@ def _fetch_leaderboard(refresh: bool = False) -> list[dict[str, str]] | None:
 
 
 def main() -> None:
+    logger.info("verify_parity_main")
     import os
     os.environ["FORECASTBENCH_LOG_FORMAT"] = "json"
 

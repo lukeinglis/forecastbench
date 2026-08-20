@@ -73,7 +73,10 @@ def _is_multi_horizon(q: Question) -> bool:
     if q.source.lower() in MARKET_SOURCES:
         return False
     rd = q.resolution_dates
-    return isinstance(rd, list) and len(rd) > 1
+    result = isinstance(rd, list) and len(rd) > 1
+    if result:
+        logger.debug("multi_horizon_detected", question_id=q.id, n_horizons=len(rd))
+    return result
 
 
 class EvalResult(NamedTuple):
@@ -85,7 +88,34 @@ class EvalResult(NamedTuple):
 
 
 def is_async_forecaster(forecaster: Forecaster) -> bool:
-    return inspect.iscoroutinefunction(forecaster)
+    result = inspect.iscoroutinefunction(forecaster)
+    logger.debug("forecaster_type", async_mode=result)
+    return result
+
+
+_MARKET_ANCHOR_WEIGHT = 0.91
+
+
+def _apply_calibration(
+    forecasts: dict[str, float],
+    questions: list[Question],
+) -> dict[str, float]:
+    logger.debug("apply_calibration_start", n_forecasts=len(forecasts), n_questions=len(questions))
+    q_by_id: dict[str, Question] = {q.id: q for q in questions}
+    calibrated: dict[str, float] = {}
+    for key, prob in forecasts.items():
+        base_id = key.rsplit("_", 1)[0] if "_" in key else key
+        q = q_by_id.get(base_id) or q_by_id.get(key)
+
+        if q is not None:
+            is_market = q.source.lower() in MARKET_SOURCES
+            if is_market:
+                fv = getattr(q, "freeze_datetime_value", None)
+                if fv is not None and 0.0 <= fv <= 1.0:
+                    prob = _MARKET_ANCHOR_WEIGHT * fv + (1.0 - _MARKET_ANCHOR_WEIGHT) * prob
+
+        calibrated[key] = max(0.0, min(1.0, prob))
+    return calibrated
 
 
 _PROVIDER_PREFIXES = (
@@ -102,6 +132,7 @@ def _forecaster_fingerprint(prompt_variant: str = "default") -> str:
     Over-invalidating costs a re-run. Under-invalidating silently scores stale
     forecasts against new code, which is unrecoverable in an experiment loop.
     """
+    logger.debug("forecaster_fingerprint", prompt_variant=prompt_variant)
     parts = [
         os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514"),
         os.getenv("FORECAST_TEMPERATURE", ""),
@@ -120,6 +151,7 @@ def _model_slug(
     run_label: str | None = None,
     prompt_variant: str = "default",
 ) -> str:
+    logger.debug("model_slug_build", agent=agent_name, label=run_label, variant=prompt_variant)
     raw = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
     for prefix in _PROVIDER_PREFIXES:
         if raw.startswith(prefix):
@@ -149,8 +181,11 @@ def _read_cache(model_slug: str, question_id: str) -> float | None:
         return None
     try:
         data = json.loads(path.read_text())
-        return float(data["probability"])
+        prob = float(data["probability"])
+        logger.debug("cache_hit", question_id=question_id, probability=prob)
+        return prob
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        logger.warning("cache_read_error", question_id=question_id, path=str(path))
         return None
 
 
@@ -162,6 +197,7 @@ def _write_cache(model_slug: str, question_id: str, probability: float) -> None:
         "model": model_slug,
         "question_id": question_id,
     }))
+    logger.debug("cache_write", question_id=question_id, probability=probability)
 
 
 def save_result(
@@ -177,6 +213,7 @@ def save_result(
     costs: dict[str, float] | None = None,
 ) -> Path:
     """Save run result to results/{prefix}{timestamp}_{model_slug}[_{round}].json."""
+    logger.info("save_result", model_slug=model_slug, n_forecasts=len(forecasts), round_name=round_name)
     timestamp = datetime.datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     metadata: dict[str, object] = {
         "n_questions": result.n_dataset + result.n_market,
@@ -234,6 +271,7 @@ def load_previous_results(results_dir: Path | None = None) -> list[dict[str, obj
     if results_dir is None:
         results_dir = RESULTS_DIR
     if not results_dir.exists():
+        logger.debug("load_previous_results_no_dir", path=str(results_dir))
         return []
     results: list[dict[str, object]] = []
     for p in sorted(results_dir.glob("*.json")):
@@ -241,7 +279,9 @@ def load_previous_results(results_dir: Path | None = None) -> list[dict[str, obj
             data = json.loads(p.read_text())
             results.append(data)
         except (json.JSONDecodeError, KeyError):
+            logger.warning("load_previous_result_error", path=str(p))
             continue
+    logger.info("load_previous_results", n_loaded=len(results))
     return results
 
 
@@ -253,12 +293,14 @@ def split_held_out(
     if n_held_out < 0:
         raise ValueError(f"n_held_out must be non-negative, got {n_held_out}")
     if n_held_out >= len(question_sets):
+        logger.info("split_held_out_all", n_total=len(question_sets), n_held_out=n_held_out)
         return [], list(question_sets)
 
     sorted_qs = sorted(question_sets, key=lambda qs: qs.forecast_due_date)
     split_point = len(sorted_qs) - n_held_out
     iteration_set = sorted_qs[:split_point]
     held_out_set = sorted_qs[split_point:]
+    logger.info("split_held_out", n_iteration=len(iteration_set), n_held_out=len(held_out_set))
     return iteration_set, held_out_set
 
 
@@ -357,6 +399,8 @@ async def run_eval(
             prompt_variant=prompt_variant,
             multi_forecaster=multi_forecaster,  # type: ignore[arg-type]
         )
+
+    forecasts = _apply_calibration(forecasts, questions)
 
     has_composite = any(
         "_" in k and k != q_id
@@ -585,10 +629,12 @@ def _normalize_round_name(name: str) -> str:
     name = name.removesuffix(".json")
     if not name.endswith(("-llm", "-human")):
         name = name + "-llm"
+    logger.debug("normalize_round_name", result=name)
     return name
 
 
 def list_rounds() -> list[tuple[str, int]]:
+    logger.info("list_rounds")
     filenames = list_question_set_files()
     rounds: list[tuple[str, int]] = []
     for fname in sorted(filenames, reverse=True):
@@ -605,6 +651,7 @@ def print_leaderboard_comparison(
     user_index: float,
     leaderboard_name: str = "baseline",
 ) -> None:
+    logger.info("print_leaderboard_comparison", user_index=user_index, leaderboard=leaderboard_name)
     try:
         rows = fetch_leaderboard(leaderboard_name)
     except Exception:

@@ -149,7 +149,10 @@ class TestSmokeTests:
 
     def test_multiple_loggers(self) -> None:
         configure_logging()
-        for name in ["eval", "score", "fetch_data", "lab_forecaster", "cutoff", "dummy_forecaster"]:
+        for name in [
+            "eval", "score", "fetch_data", "lab_forecaster", "cutoff",
+            "dummy_forecaster", "tournament", "analyze", "verify_parity",
+        ]:
             log = get_logger(name)
             log.info("smoke_test", module=name)
             log.debug("smoke_debug", module=name)
@@ -167,3 +170,15 @@ class TestSmokeTests:
         configure_logging()
         log = get_logger("test_types")
         log.info("mixed_types", count=42, ratio=0.75, flag=True, label="test", items=[1, 2])
+
+    def test_instrumented_modules_have_loggers(self) -> None:
+        configure_logging()
+        import tournament
+        import analyze
+        import verify_parity
+        import lab_forecaster
+
+        assert hasattr(tournament, "logger")
+        assert hasattr(analyze, "logger")
+        assert hasattr(verify_parity, "logger")
+        assert hasattr(lab_forecaster, "logger")

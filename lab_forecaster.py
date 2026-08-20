@@ -24,6 +24,7 @@ EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
+THINKING_BUDGET = int(os.getenv("FORECAST_THINKING_BUDGET", "10000"))
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
@@ -34,10 +35,12 @@ _cost_tracker: dict[str, float] = {}
 
 
 def get_tracked_costs() -> dict[str, float]:
+    logger.debug("get_tracked_costs", n_tracked=len(_cost_tracker))
     return dict(_cost_tracker)
 
 
 def clear_tracked_costs() -> None:
+    logger.debug("clear_tracked_costs", n_cleared=len(_cost_tracker))
     _cost_tracker.clear()
 
 
@@ -46,8 +49,9 @@ def _track_cost(question_id: str, response: Any) -> None:
         cost = response._hidden_params.get("response_cost")
         if cost is not None:
             _cost_tracker[question_id] = float(cost)
+            logger.debug("cost_tracked", question_id=question_id, cost_usd=float(cost))
     except (AttributeError, TypeError, ValueError):
-        pass
+        logger.debug("cost_tracking_skipped", question_id=question_id)
 
 
 def _get_google_auth() -> tuple[Any, Any]:
@@ -204,18 +208,31 @@ def _format_question_text(text: str, forecast_due_date: str, is_dataset: bool) -
         return text
 
 
+def _is_thinking_model(model: str) -> bool:
+    return "claude" in model.lower() and THINKING_BUDGET > 0
+
+
 def _forecast_kwargs(
     messages: list[dict[str, str]],
     timeout: int = 180,
+    model: str | None = None,
 ) -> dict[str, Any]:
+    effective_model = model or MODEL
+    logger.debug("forecast_kwargs", model=effective_model, timeout=timeout, thinking=_is_thinking_model(effective_model))
+
     kwargs: dict[str, Any] = {
-        "model": MODEL,
+        "model": effective_model,
         "messages": messages,
         "max_tokens": MAX_TOKENS,
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
-        "temperature": TEMPERATURE,
     }
+
+    if _is_thinking_model(effective_model):
+        kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+    else:
+        kwargs["temperature"] = TEMPERATURE
+
     return kwargs
 
 
@@ -228,6 +245,7 @@ def _build_prompt(
 ) -> str:
     effective_source = source or question.source
     is_market = effective_source.lower() in MARKET_SOURCES
+    logger.debug("build_prompt", question_id=question.id, is_market=is_market, variant=prompt_variant)
 
     background = question.background or ""
     mrc = getattr(question, "market_info_resolution_criteria", None)
@@ -303,6 +321,7 @@ def _parse_probability(text: str) -> float:
         match = re.search(r"(0?\.\d+|1\.0{0,})", text)
     if match:
         return float(match.group(1))
+    logger.warning("parse_probability_failed", text_preview=text[:100])
     raise ValueError(f"Could not parse probability from response: {text[:100]}")
 
 
@@ -372,20 +391,25 @@ def _extract_probabilities(text: str, n_expected: int) -> list[float] | None:
     if answer_block:
         probs = _parse_probs_from_text(answer_block, n_expected)
         if probs:
+            logger.debug("extract_probabilities_answer_block", n_expected=n_expected, method="answer_block")
             return probs
 
     probs = _tokenize_and_extract(text, n_expected)
     if probs:
+        logger.debug("extract_probabilities_success", n_expected=n_expected, method="tokenize")
         return probs
 
     probs = _asterisk_extract(text, n_expected)
     if probs:
+        logger.debug("extract_probabilities_success", n_expected=n_expected, method="asterisk")
         return probs
 
     probs = _decimal_extract(text, n_expected)
     if probs:
+        logger.debug("extract_probabilities_success", n_expected=n_expected, method="decimal")
         return probs
 
+    logger.warning("extract_probabilities_failed", n_expected=n_expected, text_length=len(text))
     return None
 
 
@@ -442,8 +466,7 @@ async def aforecast(
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(question, resolution_date=resolution_date, source=source, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    kwargs = _forecast_kwargs(messages)
-    kwargs["model"] = model
+    kwargs = _forecast_kwargs(messages, model=model)
     response = await litellm.acompletion(**kwargs)
     _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
@@ -456,16 +479,19 @@ def forecast_multi(
     question: Question,
     resolution_dates: list[str],
 ) -> list[float]:
-    logger.info("forecast_multi_start", question_id=question.id, model=MODEL)
+    logger.info("forecast_multi_start", question_id=question.id, n_horizons=len(resolution_dates), model=MODEL)
     _ensure_vertex_credentials()
     prompt = _build_prompt(question, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
     kwargs = _forecast_kwargs(messages)
     response = litellm.completion(**kwargs)
+    _track_cost(question.id, response)
     text = response.choices[0].message.content or ""
     probs = _extract_probabilities(text, len(resolution_dates))
     if probs is not None:
+        logger.info("forecast_multi_complete", question_id=question.id, n_probs=len(probs))
         return probs
+    logger.warning("forecast_multi_extraction_failed", question_id=question.id, n_horizons=len(resolution_dates))
     raise ValueError(f"Could not extract {len(resolution_dates)} probabilities from response")
 
 
@@ -483,8 +509,7 @@ async def aforecast_multi_horizon(
     _ensure_vertex_credentials(model)
     prompt = _build_prompt(question, source=source, resolution_dates=resolution_dates)
     messages = [{"role": "user", "content": prompt}]
-    kwargs = _forecast_kwargs(messages)
-    kwargs["model"] = model
+    kwargs = _forecast_kwargs(messages, model=model)
     try:
         response = await litellm.acompletion(**kwargs)
     except Exception:

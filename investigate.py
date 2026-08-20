@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from fetch_data import MARKET_SOURCES
+from logging_config import get_logger
+
+logger = get_logger("investigate")
 
 RESULTS_DIR = Path("results")
 KNOWLEDGE_CUTOFF = "2025-03"
@@ -23,19 +26,24 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def load_result(path: Path) -> dict[str, Any]:
+    logger.info("load_result", path=str(path))
     data: dict[str, Any] = json.loads(path.read_text())
     return data
 
 
 def load_all_results(results_dir: Path = RESULTS_DIR) -> list[dict[str, Any]]:
+    logger.info("load_all_results", results_dir=str(results_dir))
     if not results_dir.exists():
+        logger.warning("load_all_results_no_dir", path=str(results_dir))
         return []
     results = []
     for p in sorted(results_dir.glob("*.json")):
         try:
             results.append(load_result(p))
         except (json.JSONDecodeError, KeyError):
+            logger.warning("load_all_results_error", path=str(p))
             continue
+    logger.info("load_all_results_complete", n_loaded=len(results))
     return results
 
 
@@ -62,6 +70,7 @@ def extract_date_suffix(key: str) -> str | None:
 
 def diagnose_id_mismatch(result: dict[str, Any]) -> dict[str, Any]:
     """Compare forecast keys against outcome keys to find multi-horizon mismatches."""
+    logger.info("diagnose_id_mismatch_start")
     forecasts: dict[str, float] = result.get("forecasts", {})
     outcomes: dict[str, int] = result.get("outcomes", {})
     sources: dict[str, str] = result.get("sources", {})
@@ -131,11 +140,13 @@ def _guess_category(key: str, sources: dict[str, str]) -> str:
     for full_key, s in sources.items():
         if full_key.startswith(base):
             return classify_source(s)
+    logger.debug("guess_category_fallback", key=key)
     return "dataset"
 
 
 def stratify_by_source(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Per-source statistics: counts, missing rates, Brier scores."""
+    logger.debug("stratify_by_source_start")
     forecasts: dict[str, float] = result.get("forecasts", {})
     outcomes: dict[str, int] = result.get("outcomes", {})
     sources: dict[str, str] = result.get("sources", {})
@@ -196,12 +207,15 @@ def extract_round_date(result: dict[str, Any]) -> str | None:
     round_name = meta.get("round")
     if round_name:
         m = _DATE_RE.search(round_name)
-        return m.group(0) if m else round_name
+        date = m.group(0) if m else round_name
+        logger.debug("extract_round_date", round_name=round_name, date=date)
+        return date
     return None
 
 
 def per_round_breakdown(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Per-round statistics: counts, splits, scores, size category."""
+    logger.info("per_round_breakdown_start", n_results=len(results))
     rows: list[dict[str, Any]] = []
     for result in results:
         round_date = extract_round_date(result)
@@ -250,6 +264,7 @@ def knowledge_cutoff_analysis(
     cutoff: str = KNOWLEDGE_CUTOFF,
 ) -> dict[str, Any]:
     """Compare scores for questions resolving before vs after the knowledge cutoff."""
+    logger.info("knowledge_cutoff_analysis", cutoff=cutoff)
     forecasts: dict[str, float] = result.get("forecasts", {})
     outcomes: dict[str, int] = result.get("outcomes", {})
     sources: dict[str, str] = result.get("sources", {})
@@ -295,6 +310,7 @@ def knowledge_cutoff_analysis(
 
 def superforecaster_gap(result: dict[str, Any]) -> dict[str, Any]:
     """Compute gap vs leaderboard superforecaster medians."""
+    logger.info("superforecaster_gap_analysis")
     sr = result.get("scoring_result", {})
     our_overall = sr.get("overall_index", 0.0)
     our_dataset = sr.get("dataset_index", 0.0)
@@ -328,6 +344,7 @@ def _sf_gap_by_source(result: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 def compare_round_sizes(rounds: list[dict[str, Any]]) -> dict[str, Any]:
     """Compare 1000q vs 500q rounds on composition and scores."""
+    logger.info("compare_round_sizes", n_rounds=len(rounds))
     large: list[dict[str, Any]] = []
     small: list[dict[str, Any]] = []
 
@@ -361,6 +378,7 @@ def compare_round_sizes(rounds: list[dict[str, Any]]) -> dict[str, Any]:
 
 def run_investigation(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Run all 7 analyses and produce a structured report."""
+    logger.info("run_investigation_start", n_results=len(results))
     report: dict[str, Any] = {"analyses": {}, "summary": {}}
 
     if not results:
@@ -466,6 +484,7 @@ def _avg_field(items: list[dict[str, Any]], field: str) -> float:
 
 
 def _build_summary(report: dict[str, Any]) -> dict[str, Any]:
+    logger.debug("build_summary_start", n_analyses=len(report.get("analyses", {})))
     analyses = report["analyses"]
     findings: list[str] = []
     recommendations: list[str] = []
@@ -536,6 +555,7 @@ def _build_summary(report: dict[str, Any]) -> dict[str, Any]:
 
 def format_report(report: dict[str, Any]) -> str:
     """Format investigation report for stdout."""
+    logger.info("format_report_start")
     lines: list[str] = []
     analyses = report.get("analyses", {})
 
@@ -669,6 +689,7 @@ def format_report(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
+    logger.info("investigate_main_start", n_args=len(sys.argv) - 1)
     if len(sys.argv) > 1:
         paths = [Path(arg) for arg in sys.argv[1:]]
         results = []
