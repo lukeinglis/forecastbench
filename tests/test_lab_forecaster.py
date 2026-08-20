@@ -516,8 +516,9 @@ class TestForecastSync:
 
         assert result == pytest.approx(0.55)
         call_args = mock_litellm.completion.call_args
-        prompt_content = call_args.kwargs["messages"][0]["content"]
-        assert "asterisk" in prompt_content.lower()
+        messages = call_args.kwargs["messages"]
+        user_content = next(m["content"] for m in messages if m["role"] == "user")
+        assert "asterisk" in user_content.lower()
 
 
 class TestForecastMulti:
@@ -543,9 +544,10 @@ class TestForecastMulti:
         forecast_multi(q, resolution_dates=["2024-07-01"])
 
         call_args = mock_litellm.completion.call_args
-        prompt = call_args.kwargs["messages"][0]["content"]
-        assert "asterisk" in prompt.lower()
-        assert "resolution dates" in prompt.lower()
+        messages = call_args.kwargs["messages"]
+        user_content = next(m["content"] for m in messages if m["role"] == "user")
+        assert "asterisk" in user_content.lower()
+        assert "resolution dates" in user_content.lower()
 
 
 class TestForecastAsync:

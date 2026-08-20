@@ -416,9 +416,10 @@ class TestAforecastMultiHorizon:
         await aforecast_multi_horizon(q, dates, source="fred", prompt_variant="dataset")
 
         call_kwargs = mock_litellm.acompletion.call_args.kwargs
-        prompt = call_kwargs["messages"][0]["content"]
+        messages = call_kwargs["messages"]
+        user_content = next(m["content"] for m in messages if m["role"] == "user")
         for d in dates:
-            assert d in prompt
+            assert d in user_content
 
     @patch("lab_forecaster.litellm")
     async def test_uses_dataset_prompt_variant_by_default(self, mock_litellm: MagicMock) -> None:
@@ -431,5 +432,6 @@ class TestAforecastMultiHorizon:
         await aforecast_multi_horizon(q, dates, source="fred")
 
         call_kwargs = mock_litellm.acompletion.call_args.kwargs
-        prompt = call_kwargs["messages"][0]["content"]
-        assert "Resolution dates:" in prompt or "resolution dates:" in prompt.lower()
+        messages = call_kwargs["messages"]
+        user_content = next(m["content"] for m in messages if m["role"] == "user")
+        assert "Resolution dates:" in user_content or "resolution dates:" in user_content.lower()

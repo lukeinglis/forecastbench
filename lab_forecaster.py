@@ -216,9 +216,11 @@ def _forecast_kwargs(
 ) -> dict[str, Any]:
     effective_model = model or MODEL
 
+    full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+
     kwargs: dict[str, Any] = {
         "model": effective_model,
-        "messages": messages,
+        "messages": full_messages,
         "max_tokens": MAX_TOKENS,
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
@@ -230,6 +232,32 @@ def _forecast_kwargs(
         kwargs["temperature"] = TEMPERATURE
 
     return kwargs
+
+
+SYSTEM_PROMPT = """\
+You are a superforecaster making calibrated probabilistic predictions.
+
+Before giving your probability, mentally work through these steps:
+
+1. REFERENCE CLASS: Identify the most relevant reference class for this question. \
+What is the base rate for events of this type? Start from the outside view.
+
+2. SPECIFIC EVIDENCE: What factors in the question background, resolution criteria, \
+and current data shift the probability away from the base rate? Consider both \
+directions — evidence FOR and AGAINST resolution.
+
+3. TIME HORIZON: How much time remains until resolution? Longer horizons generally \
+mean more uncertainty — push toward the base rate. Shorter horizons allow more \
+confident predictions if current trends are clear.
+
+4. CALIBRATION CHECK: Before giving your final answer, sanity-check your probability:
+   - Would you bet at these odds?
+   - Are you being anchored by salient but unreliable details?
+   - Very few real-world outcomes are truly >95% or <5% probable. \
+Reserve extreme probabilities for near-certainties only.
+   - When uncertain, err toward moderate probabilities (0.3-0.7).
+
+Give your final probability between 0 and 1."""
 
 
 def _build_prompt(

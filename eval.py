@@ -95,6 +95,12 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
 
 _MARKET_ANCHOR_WEIGHT = 0.91
 
+_EXTREMITY_DAMPEN = 0.12
+
+
+def _dampen_extremes(prob: float) -> float:
+    return _EXTREMITY_DAMPEN * 0.5 + (1.0 - _EXTREMITY_DAMPEN) * prob
+
 
 def _apply_calibration(
     forecasts: dict[str, float],
@@ -113,6 +119,8 @@ def _apply_calibration(
                 fv = getattr(q, "freeze_datetime_value", None)
                 if fv is not None and 0.0 <= fv <= 1.0:
                     prob = _MARKET_ANCHOR_WEIGHT * fv + (1.0 - _MARKET_ANCHOR_WEIGHT) * prob
+
+        prob = _dampen_extremes(prob)
 
         calibrated[key] = max(0.0, min(1.0, prob))
     return calibrated
