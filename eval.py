@@ -93,9 +93,10 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
     return result
 
 
-_MARKET_ANCHOR_WEIGHT = 0.91
-_EXTREMITY_FLOOR = 0.02
-_EXTREMITY_CEIL = 0.98
+_MARKET_ANCHOR_WEIGHT = 0.94
+_EXTREMITY_FLOOR = 0.04
+_EXTREMITY_CEIL = 0.96
+_DATASET_SHRINKAGE = 0.06
 
 
 def _apply_calibration(
@@ -115,6 +116,8 @@ def _apply_calibration(
                 fv = getattr(q, "freeze_datetime_value", None)
                 if fv is not None and 0.0 <= fv <= 1.0:
                     prob = _MARKET_ANCHOR_WEIGHT * fv + (1.0 - _MARKET_ANCHOR_WEIGHT) * prob
+            else:
+                prob = (1.0 - _DATASET_SHRINKAGE) * prob + _DATASET_SHRINKAGE * 0.5
 
         prob = max(_EXTREMITY_FLOOR, min(_EXTREMITY_CEIL, prob))
 
