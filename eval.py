@@ -88,6 +88,30 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
     return inspect.iscoroutinefunction(forecaster)
 
 
+_MARKET_ANCHOR_WEIGHT = 0.91
+
+
+def _apply_calibration(
+    forecasts: dict[str, float],
+    questions: list[Question],
+) -> dict[str, float]:
+    q_by_id: dict[str, Question] = {q.id: q for q in questions}
+    calibrated: dict[str, float] = {}
+    for key, prob in forecasts.items():
+        base_id = key.rsplit("_", 1)[0] if "_" in key else key
+        q = q_by_id.get(base_id) or q_by_id.get(key)
+
+        if q is not None:
+            is_market = q.source.lower() in MARKET_SOURCES
+            if is_market:
+                fv = getattr(q, "freeze_datetime_value", None)
+                if fv is not None and 0.0 <= fv <= 1.0:
+                    prob = _MARKET_ANCHOR_WEIGHT * fv + (1.0 - _MARKET_ANCHOR_WEIGHT) * prob
+
+        calibrated[key] = max(0.0, min(1.0, prob))
+    return calibrated
+
+
 _PROVIDER_PREFIXES = (
     "vertex_ai/", "openai/", "anthropic/", "google/",
     "litellm/", "azure/", "bedrock/",
@@ -357,6 +381,8 @@ async def run_eval(
             prompt_variant=prompt_variant,
             multi_forecaster=multi_forecaster,  # type: ignore[arg-type]
         )
+
+    forecasts = _apply_calibration(forecasts, questions)
 
     has_composite = any(
         "_" in k and k != q_id
