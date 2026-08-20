@@ -73,7 +73,10 @@ def _is_multi_horizon(q: Question) -> bool:
     if q.source.lower() in MARKET_SOURCES:
         return False
     rd = q.resolution_dates
-    return isinstance(rd, list) and len(rd) > 1
+    result = isinstance(rd, list) and len(rd) > 1
+    if result:
+        logger.debug("multi_horizon_detected", question_id=q.id, n_horizons=len(rd))
+    return result
 
 
 class EvalResult(NamedTuple):
@@ -85,7 +88,9 @@ class EvalResult(NamedTuple):
 
 
 def is_async_forecaster(forecaster: Forecaster) -> bool:
-    return inspect.iscoroutinefunction(forecaster)
+    result = inspect.iscoroutinefunction(forecaster)
+    logger.debug("forecaster_type", async_mode=result)
+    return result
 
 
 _MARKET_ANCHOR_WEIGHT = 0.91
@@ -95,6 +100,7 @@ def _apply_calibration(
     forecasts: dict[str, float],
     questions: list[Question],
 ) -> dict[str, float]:
+    logger.debug("apply_calibration_start", n_forecasts=len(forecasts), n_questions=len(questions))
     q_by_id: dict[str, Question] = {q.id: q for q in questions}
     calibrated: dict[str, float] = {}
     for key, prob in forecasts.items():
@@ -144,6 +150,7 @@ def _model_slug(
     run_label: str | None = None,
     prompt_variant: str = "default",
 ) -> str:
+    logger.debug("model_slug_build", agent=agent_name, label=run_label, variant=prompt_variant)
     raw = os.getenv("FORECAST_MODEL", "vertex_ai/claude-sonnet-4@20250514")
     for prefix in _PROVIDER_PREFIXES:
         if raw.startswith(prefix):
@@ -173,8 +180,11 @@ def _read_cache(model_slug: str, question_id: str) -> float | None:
         return None
     try:
         data = json.loads(path.read_text())
-        return float(data["probability"])
+        prob = float(data["probability"])
+        logger.debug("cache_hit", question_id=question_id, probability=prob)
+        return prob
     except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+        logger.warning("cache_read_error", question_id=question_id, path=str(path))
         return None
 
 
@@ -186,6 +196,7 @@ def _write_cache(model_slug: str, question_id: str, probability: float) -> None:
         "model": model_slug,
         "question_id": question_id,
     }))
+    logger.debug("cache_write", question_id=question_id, probability=probability)
 
 
 def save_result(
@@ -258,6 +269,7 @@ def load_previous_results(results_dir: Path | None = None) -> list[dict[str, obj
     if results_dir is None:
         results_dir = RESULTS_DIR
     if not results_dir.exists():
+        logger.debug("load_previous_results_no_dir", path=str(results_dir))
         return []
     results: list[dict[str, object]] = []
     for p in sorted(results_dir.glob("*.json")):
@@ -265,7 +277,9 @@ def load_previous_results(results_dir: Path | None = None) -> list[dict[str, obj
             data = json.loads(p.read_text())
             results.append(data)
         except (json.JSONDecodeError, KeyError):
+            logger.warning("load_previous_result_error", path=str(p))
             continue
+    logger.info("load_previous_results", n_loaded=len(results))
     return results
 
 
@@ -277,12 +291,14 @@ def split_held_out(
     if n_held_out < 0:
         raise ValueError(f"n_held_out must be non-negative, got {n_held_out}")
     if n_held_out >= len(question_sets):
+        logger.info("split_held_out_all", n_total=len(question_sets), n_held_out=n_held_out)
         return [], list(question_sets)
 
     sorted_qs = sorted(question_sets, key=lambda qs: qs.forecast_due_date)
     split_point = len(sorted_qs) - n_held_out
     iteration_set = sorted_qs[:split_point]
     held_out_set = sorted_qs[split_point:]
+    logger.info("split_held_out", n_iteration=len(iteration_set), n_held_out=len(held_out_set))
     return iteration_set, held_out_set
 
 
@@ -611,6 +627,7 @@ def _normalize_round_name(name: str) -> str:
     name = name.removesuffix(".json")
     if not name.endswith(("-llm", "-human")):
         name = name + "-llm"
+    logger.debug("normalize_round_name", result=name)
     return name
 
 

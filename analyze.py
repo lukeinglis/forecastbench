@@ -27,7 +27,9 @@ def _lookup_forecast(forecasts: dict[str, float], question_id: str) -> float:
         base_id = question_id[:m.start()]
         prob = forecasts.get(base_id)
         if prob is not None:
+            logger.debug("lookup_fallback_base_id", question_id=question_id, base_id=base_id)
             return prob
+    logger.debug("lookup_missing_default", question_id=question_id)
     return 0.5
 
 
@@ -35,6 +37,7 @@ def analyze_by_source(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
 ) -> dict[str, dict[str, object]]:
+    logger.info("analyze_by_source_start", n_resolved=len(resolved), n_forecasts=len(forecasts))
     by_source: dict[str, list[tuple[float, int]]] = {}
     for q in resolved:
         f = _lookup_forecast(forecasts, q.id)
@@ -48,6 +51,7 @@ def analyze_by_source(
             "index": brier_index(bs),
             "count": len(pairs),
         }
+    logger.info("analyze_by_source_complete", n_sources=len(results))
     return results
 
 
@@ -56,8 +60,10 @@ def analyze_calibration(
     resolved: list[ResolvedQuestion],
     n_bins: int = 10,
 ) -> list[dict[str, object]]:
+    logger.info("analyze_calibration_start", n_resolved=len(resolved), n_bins=n_bins)
     pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
     if not pairs:
+        logger.warning("analyze_calibration_empty")
         return []
 
     bin_width = 1.0 / n_bins
@@ -139,8 +145,10 @@ def analyze_biases(
     forecasts: dict[str, float],
     resolved: list[ResolvedQuestion],
 ) -> dict[str, object]:
+    logger.info("analyze_biases_start", n_resolved=len(resolved))
     pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
     if not pairs:
+        logger.warning("analyze_biases_empty")
         return {"mean_forecast": 0.0, "mean_outcome": 0.0, "bias": 0.0, "low_bin": {}, "high_bin": {}}
 
     fs, os_ = zip(*pairs)
@@ -177,8 +185,10 @@ def analyze_decomposition(
     n_bins: int = 10,
 ) -> dict[str, dict[str, float]]:
     """Run Murphy decomposition and calibration metrics on forecast/outcome pairs."""
+    logger.info("analyze_decomposition_start", n_resolved=len(resolved), n_bins=n_bins)
     pairs = [(_lookup_forecast(forecasts, q.id), q.outcome) for q in resolved]
     if not pairs:
+        logger.warning("analyze_decomposition_empty")
         return {"murphy": {}, "calibration": {}}
 
     murphy = murphy_decomposition(pairs, n_bins=n_bins)
@@ -241,6 +251,7 @@ def print_analysis(analysis: dict[str, Any]) -> None:
 
 
 def save_analysis(analysis: dict[str, Any], path: str | Path) -> None:
+    logger.info("save_analysis", path=str(path))
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(analysis, indent=2))
@@ -252,6 +263,7 @@ def analyze_worst_questions(
     top_n: int = 50,
 ) -> list[dict[str, object]]:
     """Find the N questions with highest individual Brier scores."""
+    logger.info("analyze_worst_questions_start", n_resolved=len(resolved), top_n=top_n)
     errors: list[dict[str, object]] = []
     for q in resolved:
         f = forecasts.get(q.id, 0.5)
@@ -281,6 +293,7 @@ def analyze_by_horizon(
     resolved: list[ResolvedQuestion],
 ) -> dict[str, dict[str, object]]:
     """Break down dataset question performance by resolution horizon."""
+    logger.info("analyze_by_horizon_start", n_resolved=len(resolved))
     horizon_pattern = re.compile(r"^(.+)_(\d{4}-\d{2}-\d{2})$")
     horizon_groups: dict[str, list[tuple[float, int]]] = {}
 
@@ -310,6 +323,7 @@ def compare_paired(
     result_b_path: str | Path,
 ) -> dict[str, object]:
     """Paired comparison of two runs on shared questions."""
+    logger.info("compare_paired_start", a=str(result_a_path), b=str(result_b_path))
     data_a = json.loads(Path(result_a_path).read_text())
     data_b = json.loads(Path(result_b_path).read_text())
     forecasts_a: dict[str, float] = data_a["forecasts"]
@@ -585,6 +599,7 @@ def compare_to_superforecasters(
 
 def _load_result_forecasts(result_path: str | Path) -> tuple[dict[str, float], list[ResolvedQuestion]]:
     """Load forecasts from a result file and re-join with resolved questions."""
+    logger.info("load_result_forecasts", path=str(result_path))
     from fetch_data import Resolution, load_data, join_resolved_questions
 
     data = json.loads(Path(result_path).read_text())

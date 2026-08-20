@@ -12,6 +12,10 @@ from datetime import date
 
 from pydantic import BaseModel, Field
 
+from logging_config import get_logger
+
+logger = get_logger("tournament_strategy")
+
 
 # ── Enums ──────────────────────────────────────────────────────────────────
 
@@ -527,14 +531,17 @@ ROADMAP = TechniqueRoadmap(
 
 
 def get_techniques_by_tier(tier: int) -> list[Technique]:
+    logger.debug("get_techniques_by_tier", tier=tier)
     return [t for t in TECHNIQUES if t.tier == tier]
 
 
 def get_techniques_for_track(track: str) -> list[Technique]:
+    logger.debug("get_techniques_for_track", track=track)
     return [t for t in TECHNIQUES if t.track.value == track]
 
 
 def get_competitor_by_name(name: str) -> Competitor | None:
+    logger.debug("get_competitor_by_name", name=name)
     for c in COMPETITORS:
         if c.name == name:
             return c
@@ -546,10 +553,12 @@ def get_competitor_by_name(name: str) -> Competitor | None:
 
 
 def get_roadmap() -> TechniqueRoadmap:
+    logger.debug("get_roadmap")
     return ROADMAP
 
 
 def get_pitfalls_by_severity(severity: str) -> list[Pitfall]:
+    logger.debug("get_pitfalls_by_severity", severity=severity)
     return [p for p in PITFALLS if p.severity.value == severity]
 
 
@@ -557,6 +566,7 @@ def get_pitfalls_by_severity(severity: str) -> list[Pitfall]:
 
 
 def _print_summary() -> None:
+    logger.info("print_summary")
     print("ForecastBench Tournament Strategy")
     print("=" * 50)
     print(f"\nTechniques: {len(TECHNIQUES)}")
@@ -574,6 +584,7 @@ def _print_summary() -> None:
 
 
 def _print_techniques_for_tier(tier: int) -> None:
+    logger.info("print_techniques_for_tier", tier=tier)
     techs = get_techniques_by_tier(tier)
     if not techs:
         print(f"No techniques found for tier {tier}")
@@ -591,6 +602,7 @@ def _print_techniques_for_tier(tier: int) -> None:
 
 
 def _print_competitors() -> None:
+    logger.info("print_competitors")
     print("Competitor Profiles")
     print("=" * 50)
     for c in COMPETITORS:
@@ -602,6 +614,7 @@ def _print_competitors() -> None:
 
 
 def _print_pitfalls() -> None:
+    logger.info("print_pitfalls")
     print("Known Pitfalls")
     print("=" * 50)
     for sev in [Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM]:
@@ -614,6 +627,7 @@ def _print_pitfalls() -> None:
 
 
 def _print_roadmap() -> None:
+    logger.info("print_roadmap")
     rm = get_roadmap()
     print("Implementation Roadmap")
     print("=" * 50)
@@ -635,6 +649,7 @@ def _print_roadmap() -> None:
 
 
 def main() -> None:
+    logger.info("tournament_strategy_main")
     parser = argparse.ArgumentParser(
         description="ForecastBench tournament competitive landscape"
     )
