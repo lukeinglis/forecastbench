@@ -316,6 +316,7 @@ def _parse_probability(text: str) -> float:
         match = re.search(r"(0?\.\d+|1\.0{0,})", text)
     if match:
         return float(match.group(1))
+    logger.warning("parse_probability_failed", text_preview=text[:100])
     raise ValueError(f"Could not parse probability from response: {text[:100]}")
 
 
@@ -385,20 +386,25 @@ def _extract_probabilities(text: str, n_expected: int) -> list[float] | None:
     if answer_block:
         probs = _parse_probs_from_text(answer_block, n_expected)
         if probs:
+            logger.debug("extract_probabilities_answer_block", n_expected=n_expected, method="answer_block")
             return probs
 
     probs = _tokenize_and_extract(text, n_expected)
     if probs:
+        logger.debug("extract_probabilities_success", n_expected=n_expected, method="tokenize")
         return probs
 
     probs = _asterisk_extract(text, n_expected)
     if probs:
+        logger.debug("extract_probabilities_success", n_expected=n_expected, method="asterisk")
         return probs
 
     probs = _decimal_extract(text, n_expected)
     if probs:
+        logger.debug("extract_probabilities_success", n_expected=n_expected, method="decimal")
         return probs
 
+    logger.warning("extract_probabilities_failed", n_expected=n_expected, text_length=len(text))
     return None
 
 
