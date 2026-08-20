@@ -12,6 +12,7 @@ build/
 *.egg
 .venv/
 .factory
+!.factory/benchmarks/
 skills/
 submissions/
 response_logs/
