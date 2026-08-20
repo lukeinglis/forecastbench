@@ -11,7 +11,7 @@ build/
 .pytest_cache/
 *.egg
 .venv/
-.factory
+.factory/*
 !.factory/benchmarks/
 skills/
 submissions/
