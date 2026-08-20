@@ -94,6 +94,8 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
 
 
 _MARKET_ANCHOR_WEIGHT = 0.91
+_EXTREMITY_FLOOR = 0.02
+_EXTREMITY_CEIL = 0.98
 
 
 def _apply_calibration(
@@ -114,7 +116,9 @@ def _apply_calibration(
                 if fv is not None and 0.0 <= fv <= 1.0:
                     prob = _MARKET_ANCHOR_WEIGHT * fv + (1.0 - _MARKET_ANCHOR_WEIGHT) * prob
 
-        calibrated[key] = max(0.0, min(1.0, prob))
+        prob = max(_EXTREMITY_FLOOR, min(_EXTREMITY_CEIL, prob))
+
+        calibrated[key] = prob
     return calibrated
 
 

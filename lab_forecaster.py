@@ -24,7 +24,7 @@ EXTRACTION_MODEL = os.getenv("FORECAST_EXTRACTION_MODEL", "openai/gpt-4o-mini")
 TEMPERATURE = float(os.getenv("FORECAST_TEMPERATURE", "0"))
 MAX_TOKENS = int(os.getenv("FORECAST_MAX_TOKENS", "16384"))
 VERTEX_LOCATION = os.getenv("VERTEXAI_LOCATION", "europe-west1")
-THINKING_BUDGET = int(os.getenv("FORECAST_THINKING_BUDGET", "10000"))
+THINKING_BUDGET = int(os.getenv("FORECAST_THINKING_BUDGET", "12000"))
 
 _REFRESH_MARGIN_SECS = 300
 _vertex_creds_lock = threading.Lock()
