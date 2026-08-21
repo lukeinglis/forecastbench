@@ -149,7 +149,10 @@ class TestSmokeTests:
 
     def test_multiple_loggers(self) -> None:
         configure_logging()
-        for name in ["eval", "score", "fetch_data", "lab_forecaster", "cutoff", "dummy_forecaster"]:
+        for name in [
+            "eval", "score", "fetch_data", "lab_forecaster", "cutoff",
+            "dummy_forecaster", "analyze", "tournament", "verify_parity",
+        ]:
             log = get_logger(name)
             log.info("smoke_test", module=name)
             log.debug("smoke_debug", module=name)
@@ -162,6 +165,19 @@ class TestSmokeTests:
             raise ValueError("test error")
         except ValueError:
             log.error("caught_error", exc_info=True)
+
+    def test_instrumented_modules_have_loggers(self) -> None:
+        """Verify all instrumented modules expose a module-level logger."""
+        import analyze
+        import tournament
+        import verify_parity
+
+        assert hasattr(analyze, "logger")
+        assert hasattr(tournament, "logger")
+        assert hasattr(verify_parity, "logger")
+
+        for mod in [analyze, tournament, verify_parity]:
+            mod.logger.info("instrumentation_check", module=mod.__name__)
 
     def test_log_with_various_types(self) -> None:
         configure_logging()
