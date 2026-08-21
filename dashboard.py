@@ -31,7 +31,10 @@ from analyze import (
     calibration_metrics,
 )
 from fetch_data import MARKET_SOURCES, ResolvedQuestion, fetch_leaderboard, load_data
+from logging_config import get_logger
 from score import brier_index, brier_score
+
+logger = get_logger("dashboard")
 
 
 ResultData = dict[str, Any]
@@ -76,7 +79,9 @@ def _cache_data(fn: _F) -> _F:
 
 @_cache_data
 def load_all_results() -> list[ResultData]:
+    logger.info("dashboard_load_all_results")
     if not RESULTS_DIR.exists():
+        logger.warning("dashboard_results_dir_missing", path=str(RESULTS_DIR))
         return []
     results: list[ResultData] = []
     for f in sorted(RESULTS_DIR.glob("*.json")):
@@ -86,12 +91,15 @@ def load_all_results() -> list[ResultData]:
                 data["_filename"] = f.name
                 results.append(data)
         except (json.JSONDecodeError, KeyError):
+            logger.warning("dashboard_load_result_error", path=str(f))
             continue
+    logger.info("dashboard_results_loaded", n_results=len(results))
     return results
 
 
 @_cache_data
 def load_resolved_questions() -> list[dict[str, Any]]:
+    logger.info("dashboard_load_resolved_questions")
     _, resolved = load_data()
     return [
         {
@@ -106,10 +114,12 @@ def load_resolved_questions() -> list[dict[str, Any]]:
 
 @_cache_data
 def load_leaderboard(name: str) -> list[dict[str, str]]:
+    logger.info("dashboard_load_leaderboard", name=name)
     return list(fetch_leaderboard(name))
 
 
 def _round_name_from_result(result: ResultData) -> str:
+    logger.debug("round_name_from_result")
     meta = result.get("metadata", {})
     rnd = meta.get("round")
     if rnd:
@@ -126,6 +136,7 @@ def _compute_aggregate_scoring(
     sources: dict[str, str],
 ) -> dict[str, Any]:
     """Compute scoring result from combined forecasts and outcomes."""
+    logger.debug("compute_aggregate_scoring", n_forecasts=len(forecasts), n_outcomes=len(outcomes))
     shared_ids = set(forecasts.keys()) & set(outcomes.keys())
     if not shared_ids:
         return {
@@ -174,6 +185,7 @@ def _compute_aggregate_scoring(
 
 def _group_results_into_runs(results: list[ResultData]) -> list[AggregateRun]:
     """Group result files by model_slug into aggregate runs."""
+    logger.info("group_results_into_runs", n_results=len(results))
     grouped: dict[str, list[ResultData]] = {}
     for r in results:
         slug = str(r["model_slug"])
@@ -214,6 +226,7 @@ def _group_results_into_runs(results: list[ResultData]) -> list[AggregateRun]:
 @_cache_data
 def group_results(results: list[ResultData]) -> list[dict[str, Any]]:
     """Cached wrapper that returns serializable dicts (Streamlit requirement)."""
+    logger.info("group_results", n_results=len(results))
     runs = _group_results_into_runs(results)
     return [
         {
@@ -245,9 +258,11 @@ def _dict_to_aggregate(d: dict[str, Any]) -> AggregateRun:
 
 def _leaderboard_reference_from_live() -> dict[str, dict[str, float]] | None:
     """Pull top reference entries from the live baseline leaderboard."""
+    logger.info("leaderboard_reference_from_live")
     try:
         rows = load_leaderboard("baseline")
     except Exception:
+        logger.warning("leaderboard_reference_fetch_failed", exc_info=True)
         return None
     ref: dict[str, dict[str, float]] = {}
     for row in rows:
@@ -289,6 +304,7 @@ def _model_matches_slug(leaderboard_model: str, model_slug: str) -> bool:
 
 
 def _resolved_to_objects(resolved_dicts: list[dict[str, Any]]) -> list[ResolvedQuestion]:
+    logger.debug("resolved_to_objects", n_dicts=len(resolved_dicts))
     return [
         ResolvedQuestion(
             id=d["id"],
@@ -321,6 +337,7 @@ def _build_source_brier_matrix(
     runs: list[AggregateRun],
     resolved_dicts: list[dict[str, Any]],
 ) -> tuple[list[str], list[str], list[list[float | None]], list[list[int]]]:
+    logger.debug("build_source_brier_matrix", n_runs=len(runs))
     resolved = _resolved_to_objects(resolved_dicts)
     all_sources: set[str] = set()
     run_source_scores: dict[str, dict[str, float]] = {}
@@ -365,6 +382,7 @@ def _sort_sources_by_track(sources: list[str]) -> list[str]:
 
 
 def view_overview(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
+    logger.info("view_overview", n_runs=len(runs))
     st.header("Overview")
 
     if not runs:
@@ -474,6 +492,7 @@ def view_overview(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]
 
 
 def view_leaderboard(runs: list[AggregateRun]) -> None:
+    logger.info("view_leaderboard", n_runs=len(runs))
     st.header("Official ForecastBench Leaderboard")
 
     lb_name = st.radio(
@@ -559,6 +578,7 @@ def view_leaderboard(runs: list[AggregateRun]) -> None:
 
 
 def view_heatmap(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
+    logger.info("view_heatmap", n_runs=len(runs))
     st.header("Run × Source Heatmap")
 
     if not runs:
@@ -594,6 +614,7 @@ def _view_heatmap_by_source(
     resolved_dicts: list[dict[str, Any]],
     show_index: bool,
 ) -> None:
+    logger.info("view_heatmap_by_source", n_runs=len(runs))
     run_labels, sources, matrix, counts = _build_source_brier_matrix(runs, resolved_dicts)
 
     sources_sorted = _sort_sources_by_track(sources)
@@ -723,6 +744,7 @@ def _view_heatmap_by_track(
     resolved_dicts: list[dict[str, Any]],
     show_index: bool,
 ) -> None:
+    logger.info("view_heatmap_by_track", n_runs=len(runs))
     overall_brier_map: dict[str, float] = {}
     for agg_run in runs:
         overall_brier_map[agg_run.label] = agg_run.scoring_result.get("overall_brier", 1.0)
@@ -808,6 +830,7 @@ def _view_heatmap_by_track(
 
 
 def view_failures(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
+    logger.info("view_failures", n_runs=len(runs))
     st.header("Failure Explorer")
 
     if not runs:
@@ -1080,6 +1103,7 @@ def view_failures(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]
 
 
 def view_calibration(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
+    logger.info("view_calibration", n_runs=len(runs))
     st.header("Calibration Curves")
 
     if not runs:
@@ -1185,6 +1209,7 @@ def view_calibration(runs: list[AggregateRun], resolved_dicts: list[dict[str, An
 def view_question_browser(
     runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]
 ) -> None:
+    logger.info("view_question_browser", n_runs=len(runs))
     st.header("Question Browser")
 
     if not runs or not resolved_dicts:
@@ -1268,6 +1293,7 @@ def view_question_browser(
 
 
 def view_compare(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]]) -> None:
+    logger.info("view_compare", n_runs=len(runs))
     st.header("Compare Runs")
 
     if len(runs) < 2:
@@ -1440,6 +1466,7 @@ def view_compare(runs: list[AggregateRun], resolved_dicts: list[dict[str, Any]])
 
 
 def main() -> None:
+    logger.info("dashboard_main_start")
     if not _HAS_DASHBOARD_DEPS:
         print(
             "Dashboard requires streamlit, pandas and plotly.\n"
@@ -1545,6 +1572,7 @@ def main() -> None:
 
 
 def view_about() -> None:
+    logger.info("view_about")
     st.header("About ForecastBench")
 
     st.markdown("""
