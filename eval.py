@@ -429,8 +429,11 @@ async def run_eval(
         if len(previous) >= 2:
             all_forecasts = {}
             for prev in previous:
-                slug = prev["model_slug"]
-                all_forecasts[str(slug)] = prev["forecasts"]  # type: ignore[assignment]
+                slug = prev.get("model_slug")
+                fcs = prev.get("forecasts")
+                if slug is None or fcs is None:
+                    continue
+                all_forecasts[str(slug)] = fcs  # type: ignore[assignment]
             logger.info("difficulty_adjustment_enabled", n_peers=len(all_forecasts))
         else:
             logger.info("difficulty_adjustment_skipped",
