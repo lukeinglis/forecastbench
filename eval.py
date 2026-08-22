@@ -384,11 +384,19 @@ async def run_eval(
         logger.info("submit_mode_enabled", n_all=len(questions), n_resolved=len(iteration_resolved))
     else:
         seen_ids: set[str] = set()
-        questions = []
+        question_by_id: dict[str, Question] = {}
         for q in iteration_resolved:
             if q.id not in seen_ids:
                 seen_ids.add(q.id)
-                questions.append(_build_question(q))
+                built = _build_question(q)
+                question_by_id[q.id] = built
+            elif isinstance(q.resolution_dates, list):
+                existing = question_by_id[q.id]
+                if isinstance(existing.resolution_dates, list):
+                    merged = list(dict.fromkeys(existing.resolution_dates + q.resolution_dates))
+                    if len(merged) > len(existing.resolution_dates):
+                        question_by_id[q.id] = existing.model_copy(update={"resolution_dates": merged})
+        questions = list(question_by_id.values())
         logger.info("forecasting_questions", n_base=len(questions), n_resolved=len(iteration_resolved))
     model_slug = _model_slug(agent_name, run_label=run_label, prompt_variant=prompt_variant)
 
