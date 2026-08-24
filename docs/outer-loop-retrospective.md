@@ -10,6 +10,7 @@ First-run experience using the remote-factory outer loop on a real project (fore
 - **2026-08-19** — First outer loop run (gen-0). 12 candidates evaluated, ~$206, 5 commits auto-merged.
 - **2026-08-20** — Human review of gen-0 results. Discovered auto-merge baseline confounding, parameter overfitting, off-topic work.
 - **2026-08-21–23** — Validation eval runs to verify gen-0 improvements. Discovered scoring pipeline bug that was invisible to the gate but catastrophic on the full dataset. Three eval re-runs required due to cascading issues.
+- **2026-08-24** — Gate round validation confirmed gen-0 calibration was a **net negative** (-1.6 to -0.6 Brier Index). Calibration reverted (PR #172). Five days of follow-up to discover the outer loop made things worse.
 
 ## Setup Friction
 
@@ -54,6 +55,19 @@ Three sub-CEOs independently tuned calibration parameters (market anchor weight,
 Worse: the gate only covered 2 rounds with ~850 questions each. Our project had a latent scoring bug that made all dataset questions score as 0.5 (missing). The gate didn't catch this because its small question set masked the problem. When we ran the full eval (9,025 questions across 33 rounds), the overall Brier Index was 57.5 — significantly worse than the pre-gen-0 baseline of 61+.
 
 **The outer loop spent $206 optimizing calibration parameters on top of a system where half the questions couldn't even be scored.**
+
+### Validation confirmed the regression
+
+After fixing the scoring bug and running per-round validation on the gate rounds, the results were clear:
+
+| Round | Pre-gen-0 baseline | With gen-0 calibration | Delta |
+|-------|-------------------|----------------------|-------|
+| 2026-03-01 | 61.21 BI | 59.59 BI | **-1.62** |
+| 2026-04-12 | 61.36 BI | 60.76 BI | **-0.60** |
+
+Market scores improved (+2.0 from market anchoring) but dataset scores dropped much more (-3.1 to -4.5 from dataset shrinkage and extremity clamping). The net effect was negative on both rounds. The calibration was reverted (PR #172).
+
+**The outer loop's gate showed improvement (+1.172 BI) but real validation showed regression (-0.6 to -1.6 BI).** The gate's false positive signal led to auto-merging changes that made the system worse.
 
 ### Suggestion
 
@@ -109,19 +123,26 @@ This is the fundamental risk of a narrow gate: it can give false positive signal
 | Item | Cost | Time |
 |------|------|------|
 | Gen-0 outer loop (12 candidates) | ~$206 | ~4 hours |
-| Validation eval run #1 (crashed) | ~$80 | ~10 hours |
-| Validation eval run #2 (cache invalidated) | ~$80 | ~10 hours |
-| Validation eval run #3 (with scoring fix) | ~$100 | ~15 hours (in progress) |
-| Human review session | — | ~8 hours |
-| Debugging (git state, cache, crashes, scoring pipeline) | — | ~6 hours |
-| **Total cost of one outer loop generation** | **~$466** | **~53 hours** |
+| Validation eval run #1 (crashed — KeyError bug) | ~$80 | ~10 hours |
+| Validation eval run #2 (cache invalidated by code change) | ~$80 | ~10 hours |
+| Validation eval run #3 (scoring fix caused horizon explosion) | ~$150 | ~36 hours (killed at 89%) |
+| Validation eval run #4 (per-round, confirmed regression) | ~$5 | ~0.5 hours |
+| Human review + investigation sessions | — | ~12 hours |
+| Debugging (git state, cache, scoring pipeline, ID mismatches) | — | ~8 hours |
+| Revert + cleanup | — | ~2 hours |
+| **Total cost of one outer loop generation** | **~$521** | **~82 hours** |
 
-The outer loop itself was ~4 hours. Everything else — review, validation, debugging, re-runs — was ~49 hours of follow-up work. The ratio of "running the loop" to "dealing with the output" was roughly **1:12**.
+The outer loop itself was ~4 hours. Everything else — review, validation, debugging, re-runs, and revert — was ~78 hours of follow-up work. The ratio of "running the loop" to "dealing with the output" was roughly **1:19**.
 
-Most of this overhead was caused by three issues that the outer loop could help prevent:
-1. Auto-merge making review mandatory (instead of optional PR review)
-2. No focus directive causing off-topic work that needed to be evaluated
-3. Narrow gate masking a scoring bug that only surfaced on the full eval
+**The final outcome was a revert.** After 82 hours and ~$521, the system is back to where it started, minus the calibration code and plus some bugfixes (KeyError guard, multi-round scoring fix) and the extended thinking feature.
+
+Most of this overhead was caused by compounding issues:
+1. Auto-merge committed changes that hadn't been validated beyond the narrow gate
+2. No focus directive caused off-topic work that needed evaluation
+3. Narrow gate gave false positive signals that real validation contradicted
+4. Scoring pipeline bug was invisible to the gate but catastrophic on the full dataset
+5. Fixing the scoring bug introduced a horizon explosion that made full eval runs take 80+ hours
+6. Cache management issues (worktree isolation, label mismatches, fingerprint invalidation) forced multiple re-runs
 
 ## Improvements Wishlist (prioritized)
 
@@ -150,13 +171,25 @@ To be fair to the outer loop:
 - Multi-benchmark support (#1332) landed cleanly and worked once configured correctly
 - The topology search infrastructure ran without crashes — all 12 candidates were evaluated
 - The gate (pytest ladder) worked reliably and gave consistent scores
-- Sub-CEOs produced real, working code changes — the extended thinking and market anchoring features are genuinely useful
+- Sub-CEOs produced real, working code changes — the extended thinking feature survived the revert and is genuinely useful
 - Total cost of $206 for 12 candidates is reasonable for the amount of code generated
+- The bugfixes discovered during validation (KeyError guard PR #170, multi-round scoring PR #171) were real improvements that wouldn't have been found otherwise
 
-The core loop works. The issues are around the edges: focus control, baseline confounding, and the gap between gate scores and full-eval scores.
+The core loop works. The critical gap is between gate-level validation and real-world validation. The loop confidently auto-merged changes that a broader eval would have rejected.
+
+## Outcome
+
+After 5 days and ~$521, the gen-0 calibration changes were reverted. The system returned to the pre-gen-0 baseline (61.2-61.4 BI on gate rounds). What survived:
+
+- **Extended thinking** (commit `0f4701f`) — enables Claude's extended thinking with 10k token budget. Clean addition, doesn't affect scoring.
+- **Structured logging** (commit `a5f1f33`) — 131 lines of observability instrumentation. Off-topic but harmless.
+- **KeyError bugfix** (PR #170) — prevents crash when non-eval files exist in results/.
+- **Multi-round scoring fix** (PR #171) — merges resolution_dates across rounds so dataset questions score correctly. Note: this fix also causes a horizon explosion (72-96 horizons per question) that makes full-dataset eval runs take 80+ hours. A horizon cap or batching optimization is needed before running full evals again.
 
 ## Open Questions
 
-1. Should we run gen-1 with the same 2-round gate, or expand to more rounds first?
-2. Is the topology search providing value with auto-merge confounding, or should we use single-topology improve cycles until #1338 and the baseline fix land?
+1. Should we run gen-1 at all before the auto-merge baseline confounding is fixed?
+2. Is the topology search providing value, or should we use single-topology improve cycles until #1338 and the baseline fix land?
 3. What's the minimum gate size to avoid sub-CEO parameter overfitting? Our experience suggests 2 rounds is far too few.
+4. How do we make full-dataset validation feasible? The multi-round scoring fix created a horizon explosion that makes eval runs 8x slower than they need to be.
+5. Should the outer loop include a mandatory post-generation validation step against a broader eval set before auto-merging?
