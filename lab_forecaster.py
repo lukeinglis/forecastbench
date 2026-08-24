@@ -205,8 +205,13 @@ def _format_question_text(text: str, forecast_due_date: str, is_dataset: bool) -
         return text
 
 
-def _is_thinking_model(model: str) -> bool:
-    return "claude" in model.lower() and THINKING_BUDGET > 0
+def _is_reasoning_model(model: str) -> bool:
+    model_lower = model.lower()
+    if "claude" in model_lower and THINKING_BUDGET > 0:
+        return True
+    if any(x in model_lower for x in ["o1", "o3", "luna"]):
+        return True
+    return False
 
 
 def _forecast_kwargs(
@@ -224,8 +229,9 @@ def _forecast_kwargs(
         "vertex_location": VERTEX_LOCATION,
     }
 
-    if _is_thinking_model(effective_model):
-        kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
+    if _is_reasoning_model(effective_model):
+        if "claude" in effective_model.lower():
+            kwargs["thinking"] = {"type": "enabled", "budget_tokens": THINKING_BUDGET}
     else:
         kwargs["temperature"] = TEMPERATURE
 
