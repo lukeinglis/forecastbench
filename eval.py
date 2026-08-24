@@ -93,38 +93,6 @@ def is_async_forecaster(forecaster: Forecaster) -> bool:
     return result
 
 
-_MARKET_ANCHOR_WEIGHT = 0.94
-_EXTREMITY_FLOOR = 0.04
-_EXTREMITY_CEIL = 0.96
-_DATASET_SHRINKAGE = 0.06
-
-
-def _apply_calibration(
-    forecasts: dict[str, float],
-    questions: list[Question],
-) -> dict[str, float]:
-    logger.debug("apply_calibration_start", n_forecasts=len(forecasts), n_questions=len(questions))
-    q_by_id: dict[str, Question] = {q.id: q for q in questions}
-    calibrated: dict[str, float] = {}
-    for key, prob in forecasts.items():
-        base_id = key.rsplit("_", 1)[0] if "_" in key else key
-        q = q_by_id.get(base_id) or q_by_id.get(key)
-
-        if q is not None:
-            is_market = q.source.lower() in MARKET_SOURCES
-            if is_market:
-                fv = getattr(q, "freeze_datetime_value", None)
-                if fv is not None and 0.0 <= fv <= 1.0:
-                    prob = _MARKET_ANCHOR_WEIGHT * fv + (1.0 - _MARKET_ANCHOR_WEIGHT) * prob
-            else:
-                prob = (1.0 - _DATASET_SHRINKAGE) * prob + _DATASET_SHRINKAGE * 0.5
-
-        prob = max(_EXTREMITY_FLOOR, min(_EXTREMITY_CEIL, prob))
-
-        calibrated[key] = prob
-    return calibrated
-
-
 _PROVIDER_PREFIXES = (
     "vertex_ai/", "openai/", "anthropic/", "google/",
     "litellm/", "azure/", "bedrock/",
@@ -412,8 +380,6 @@ async def run_eval(
             prompt_variant=prompt_variant,
             multi_forecaster=multi_forecaster,  # type: ignore[arg-type]
         )
-
-    forecasts = _apply_calibration(forecasts, questions)
 
     has_composite = any(
         "_" in k and k != q_id
