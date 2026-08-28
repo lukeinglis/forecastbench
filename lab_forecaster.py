@@ -214,6 +214,16 @@ def _is_reasoning_model(model: str) -> bool:
     return False
 
 
+SYSTEM_PROMPT = """\
+You are a calibrated superforecaster. Your predictions are scored with the Brier score, so accuracy AND calibration both matter.
+
+Key principles:
+- Start from base rates, then update with specific evidence.
+- For prediction market questions with a current market price, the market is usually well-calibrated. Only deviate significantly if you have strong reasons.
+- Reserve extreme probabilities (<0.05 or >0.95) for near-certainties.
+- When genuinely uncertain, stay closer to 0.3-0.7."""
+
+
 def _forecast_kwargs(
     messages: list[dict[str, str]],
     timeout: int = 180,
@@ -221,9 +231,11 @@ def _forecast_kwargs(
 ) -> dict[str, Any]:
     effective_model = model or MODEL
 
+    full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + messages
+
     kwargs: dict[str, Any] = {
         "model": effective_model,
-        "messages": messages,
+        "messages": full_messages,
         "max_tokens": MAX_TOKENS,
         "timeout": timeout,
         "vertex_location": VERTEX_LOCATION,
