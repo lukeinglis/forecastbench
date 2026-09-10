@@ -42,13 +42,26 @@ if TYPE_CHECKING:
 
 
 def load_rounds() -> list[str]:
+    """Load pinned gate rounds.
+
+    If GATE_ROUNDS_OVERRIDE is set (comma-separated round names), it takes
+    precedence over gate_rounds.json. This lets the outer loop's OverfitDetector
+    evaluate holdout rounds without modifying the committed gate config.
+    """
+    import os
+
+    override = os.environ.get("GATE_ROUNDS_OVERRIDE")
+    if override:
+        rounds = [r.strip() for r in override.split(",") if r.strip()]
+        if rounds:
+            return rounds
+
     if not ROUNDS.exists():
         raise SystemExit(
             f"{ROUNDS} not found. Run: python gate/make_manifest.py "
             "--rounds 2026-03-01 2026-04-12 2026-05-10"
         )
-    rounds: list[str] = json.loads(ROUNDS.read_text())["rounds"]
-    return rounds
+    return list[str](json.loads(ROUNDS.read_text())["rounds"])
 
 
 def score_rounds(
@@ -119,7 +132,12 @@ def _report(mean_index: float, per_round: list[tuple[str, ScoringResult]]) -> No
             f"market={r.n_market:4d} ({r.market_index:6.2f})  "
             f"missing={r.n_missing}"
         )
-    print(f"mean index across {len(per_round)} rounds: {mean_index:.3f}")
+    mean_dataset = sum(r.dataset_index for _, r in per_round) / len(per_round)
+    mean_market = sum(r.market_index for _, r in per_round) / len(per_round)
+    print(
+        f"mean across {len(per_round)} rounds: "
+        f"overall={mean_index:.3f}  dataset={mean_dataset:.3f}  market={mean_market:.3f}"
+    )
 
 
 def main() -> None:
@@ -143,9 +161,24 @@ def main() -> None:
     if args.set_baseline:
         mean_index, per_round = score_rounds(load_rounds())
         _report(mean_index, per_round)
-        BASELINE.write_text(json.dumps({"brier_index": round(mean_index, 3)}, indent=2))
-        print(f"\nwrote {BASELINE.name}: brier_index = {mean_index:.3f}")
-        print(f"ladder spans {mean_index - 4:.1f} to {mean_index + 5:.1f}")
+
+        mean_dataset = sum(r.dataset_index for _, r in per_round) / len(per_round)
+        mean_market = sum(r.market_index for _, r in per_round) / len(per_round)
+        BASELINE.write_text(
+            json.dumps(
+                {
+                    "overall_index": round(mean_index, 3),
+                    "dataset_index": round(mean_dataset, 3),
+                    "market_index": round(mean_market, 3),
+                },
+                indent=2,
+            )
+        )
+        print(f"\nwrote {BASELINE.name}:")
+        print(f"  overall_index = {mean_index:.3f}  (ladder spans {mean_index - 4:.1f} to {mean_index + 5:.1f})")
+        print(f"  dataset_index = {mean_dataset:.3f}  (ladder spans {mean_dataset - 4:.1f} to {mean_dataset + 5:.1f})")
+        print(f"  market_index  = {mean_market:.3f}  (ladder spans {mean_market - 4:.1f} to {mean_market + 5:.1f})")
+        print("two 10-rung ladders (20 total) — equal weight per category")
 
     if not (args.rounds or args.dry_run or args.set_baseline):
         p.error("nothing to do: pass --rounds, --dry-run, and/or --set-baseline")
