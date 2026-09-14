@@ -40,6 +40,14 @@ if str(REPO) not in sys.path:
 if TYPE_CHECKING:
     from score import ScoringResult
 
+# A round whose forecasts are mostly missing is an eval failure, not a bad
+# forecaster: the lab forecaster never raises, so dead API credentials,
+# exhausted credits, or a routing error silently default everything to 0.5
+# and score a plausible ~50 index (observed 2026-09-04: OpenAI credits out,
+# 100% missing, four rounds "scored" 50.0). Healthy runs are <1% missing;
+# total API failure is exactly 100%. Fail loudly between those.
+MAX_MISSING_FRACTION = 0.10
+
 
 def load_rounds() -> list[str]:
     """Load pinned gate rounds.
@@ -113,6 +121,17 @@ def score_rounds(
             raise SystemExit(
                 f"Round {name} scored zero rows. Check that it has a published "
                 "resolution set."
+            )
+        missing_fraction = scoring.n_missing / (rows + scoring.n_missing)
+        if missing_fraction > MAX_MISSING_FRACTION:
+            raise SystemExit(
+                f"Round {name}: {scoring.n_missing}/{rows + scoring.n_missing} "
+                f"forecasts missing ({missing_fraction:.0%}) exceeds the "
+                f"{MAX_MISSING_FRACTION:.0%} guard. This is almost certainly an "
+                "eval failure, not a bad forecaster — check API credentials, "
+                "credits, and model routing before trusting any score. "
+                "(Missing forecasts default to 0.5, so a dead API silently "
+                "scores ~50.)"
             )
         per_round.append((name, scoring))
 
