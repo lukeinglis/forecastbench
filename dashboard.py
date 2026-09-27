@@ -284,6 +284,7 @@ def _leaderboard_reference_from_live() -> dict[str, dict[str, float]] | None:
 
 def _model_matches_slug(leaderboard_model: str, model_slug: str) -> bool:
     """Check if a leaderboard model name approximately matches our model slug."""
+    logger.debug("model_match_check", leaderboard_model=leaderboard_model, model_slug=model_slug)
     lb = leaderboard_model.lower().replace("-", "_").replace(" ", "_")
     slug = model_slug.lower().replace("-", "_").replace(" ", "_")
     lb_parts = lb.split("_")
