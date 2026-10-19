@@ -416,7 +416,18 @@ def compare_results(results_dir: str | Path = "results") -> None:
         logger.warning("compare_results_no_valid", path=str(p))
         return
 
-    for r in sorted(rows, key=lambda x: x["overall_brier"]):
+    sorted_rows = sorted(rows, key=lambda x: x["overall_brier"])
+
+    print("model | timestamp | overall_brier | overall_index | dataset_brier | market_brier | n | n_missing | adjusted")
+    for r in sorted_rows:
+        print(
+            f"{r['model']:<20} {r['timestamp'][:19]} "
+            f"{r['overall_brier']:.4f} {r['overall_index']:.2f} "
+            f"{r['dataset_brier']:.4f} {r['market_brier']:.4f} "
+            f"{r['n_dataset'] + r['n_market']} {r['n_missing']} {r['adjusted']}"
+        )
+
+    for r in sorted_rows:
         logger.info(
             "compare_result",
             model=r["model"],
