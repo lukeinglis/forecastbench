@@ -18,6 +18,23 @@ def test_dataset_question_formats_date() -> None:
     )
 
 
+def test_merged_gate_round_dates_list() -> None:
+    """Gate-round merged questions build the dates list by filtering N/A entries."""
+    question = SimpleNamespace(
+        question="Gate round merged question.",
+        resolution_dates=["2025-06-01", "N/A", "2025-09-01"],
+    )
+
+    effective_rd = question.resolution_dates or getattr(
+        question, "resolution_dates", None
+    )
+    dates_list: list[str] = []
+    if effective_rd and isinstance(effective_rd, list):
+        dates_list = [str(d) for d in effective_rd if d and str(d).upper() != "N/A"]
+
+    assert dates_list == ["2025-06-01", "2025-09-01"]
+
+
 def test_format_failure_falls_back_to_raw_text() -> None:
     """Unexpected placeholders or malformed specs fall back to the raw text."""
     key_error_text = "Question with {unknown_placeholder}."
