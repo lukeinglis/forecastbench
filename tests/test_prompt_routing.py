@@ -1,5 +1,7 @@
 """Regression tests for lab_forecaster prompt routing (H1)."""
 
+from types import SimpleNamespace
+
 from lab_forecaster import _format_question_text
 
 
