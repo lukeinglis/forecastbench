@@ -350,14 +350,15 @@ TECHNIQUES: list[Technique] = [
 COMPETITORS: list[Competitor] = [
     Competitor(
         name="Superforecasters",
-        best_known_brier=0.096,
-        best_known_brier_index=67.8,
+        best_known_brier=0.099,
+        best_known_brier_index=68.5,
         approach_summary=(
-            "Human expert forecasters. Rank first overall as of April 2026. "
-            "Market questions: 80.3 Brier Index. Gap vs LLMs: p<0.001."
+            "Human expert forecasters. Now rank 8 in tournament track as of "
+            "2026-10-20 (68.5 Overall BI). Market questions: 74.5 BI. Still "
+            "top baseline-track entry at 67.5."
         ),
         source_url="https://arxiv.org/abs/2409.19839",
-        as_of_date=date(2026, 4, 1),
+        as_of_date=date(2026, 10, 20),
     ),
     Competitor(
         name="BLF (Bayesian Linguistic Forecaster)",
@@ -367,6 +368,7 @@ COMPETITORS: list[Competitor] = [
             "SOTA AI system on 400 questions. Tool-use loop, semi-structured "
             "belief state, 5-trial logit-space aggregation, hierarchical Platt "
             "scaling, web search. Only method significantly beating crowd baseline."
+            " NOTE: 400-question subset — not directly comparable to full-set leaderboard top (69.7)."
         ),
         source_url="https://arxiv.org/abs/2604.18576v4",
         as_of_date=date(2026, 4, 1),
@@ -374,26 +376,29 @@ COMPETITORS: list[Competitor] = [
     Competitor(
         name="Cassi AI",
         approach_summary=(
-            "Top tournament system. Specific score undisclosed."
+            "Top tournament system. 68.3 Overall BI (rank 10) as of 2026-10-20."
         ),
         source_url="https://www.forecastbench.org/leaderboard",
-        as_of_date=date(2026, 4, 1),
+        as_of_date=date(2026, 10, 20),
     ),
     Competitor(
         name="xAI",
         approach_summary=(
-            "Statistically indistinguishable from superforecaster-level accuracy."
+            "No xAI entry in the tournament top 12 as of 2026-10-20; "
+            "previously noted as statistically indistinguishable from "
+            "superforecasters."
         ),
         source_url="https://www.forecastbench.org/leaderboard",
-        as_of_date=date(2026, 4, 1),
+        as_of_date=date(2026, 10, 20),
     ),
     Competitor(
         name="Google DeepMind",
         approach_summary=(
-            "Statistically indistinguishable from superforecaster-level accuracy."
+            "Holds 4 of the tournament top 12 as of 2026-10-20 (68.9, 68.8, "
+            "68.6, 68.3 Overall BI) with distinct model variants."
         ),
         source_url="https://www.forecastbench.org/leaderboard",
-        as_of_date=date(2026, 4, 1),
+        as_of_date=date(2026, 10, 20),
     ),
     Competitor(
         name="metac-claude-4-5-sonnet+asknews",
@@ -408,6 +413,7 @@ COMPETITORS: list[Competitor] = [
         best_known_brier=0.123,
         best_known_brier_index=58.6,
         approach_summary=(
+            "HISTORICAL REFERENCE (superseded by 2026-10 baseline table). "
             "Baseline zero-shot performance on 1000-question set."
         ),
         source_url="https://arxiv.org/abs/2409.19839",
@@ -418,6 +424,7 @@ COMPETITORS: list[Competitor] = [
         best_known_brier=0.126,
         best_known_brier_index=57.0,
         approach_summary=(
+            "HISTORICAL REFERENCE (superseded by 2026-10 baseline table). "
             "Baseline zero-shot performance on 1000-question set."
         ),
         source_url="https://arxiv.org/abs/2409.19839",

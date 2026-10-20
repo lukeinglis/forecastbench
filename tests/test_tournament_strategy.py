@@ -152,7 +152,8 @@ class TestHelperFunctions:
     def test_get_competitor_by_name_found(self) -> None:
         c = get_competitor_by_name("Superforecasters")
         assert c is not None
-        assert c.best_known_brier == 0.096
+        # Updated 2026-10-20: Superforecasters now 0.099 (68.5 BI, rank 8 tournament)
+        assert c.best_known_brier == 0.099
         blf = get_competitor_by_name("BLF")
         assert blf is not None
         assert blf.name == "BLF (Bayesian Linguistic Forecaster)"
