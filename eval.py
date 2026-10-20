@@ -209,6 +209,7 @@ def save_result(
             "n_market": result.n_market,
             "n_missing": result.n_missing,
             "difficulty_adjusted": result.difficulty_adjusted,
+            "question_effects": dict(result.question_effects),
         },
         "forecasts": forecasts,
         "outcomes": outcomes,
