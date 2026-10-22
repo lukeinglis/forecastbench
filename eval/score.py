@@ -166,6 +166,7 @@ def eval_observability() -> dict:
     skip = {
         "tests", "test", ".venv", "venv", "node_modules", "__pycache__",
         ".git", ".factory", "eval", "dist", "build", ".mypy_cache",
+        "archive", "gate",
     }
     log_pats = [
         r"\blogger\.\w+\(",

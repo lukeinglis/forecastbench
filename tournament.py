@@ -64,6 +64,7 @@ def load_tournament_results(results_dir: str | Path = "results") -> list[ModelRe
 def _source_pairs(
     result: ModelResult,
 ) -> dict[str, list[tuple[float, int]]]:
+    logger.debug("source_pairs", model_slug=result.model_slug, n_outcomes=len(result.outcomes))
     by_source: dict[str, list[tuple[float, int]]] = {}
     for qid, outcome in result.outcomes.items():
         forecast = result.forecasts.get(qid, 0.5)

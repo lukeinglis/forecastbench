@@ -140,6 +140,7 @@ def _guess_category(key: str, sources: dict[str, str]) -> str:
     for full_key, s in sources.items():
         if full_key.startswith(base):
             return classify_source(s)
+    logger.debug("guess_category_fallback", key=key)
     return "dataset"
 
 
@@ -206,7 +207,9 @@ def extract_round_date(result: dict[str, Any]) -> str | None:
     round_name = meta.get("round")
     if round_name:
         m = _DATE_RE.search(round_name)
-        return m.group(0) if m else round_name
+        date = m.group(0) if m else round_name
+        logger.debug("extract_round_date", round_name=round_name, date=date)
+        return date
     return None
 
 
@@ -481,6 +484,7 @@ def _avg_field(items: list[dict[str, Any]], field: str) -> float:
 
 
 def _build_summary(report: dict[str, Any]) -> dict[str, Any]:
+    logger.debug("build_summary_start", n_analyses=len(report.get("analyses", {})))
     analyses = report["analyses"]
     findings: list[str] = []
     recommendations: list[str] = []
@@ -685,6 +689,7 @@ def format_report(report: dict[str, Any]) -> str:
 
 
 def main() -> None:
+    logger.info("investigate_main_start", n_args=len(sys.argv) - 1)
     if len(sys.argv) > 1:
         paths = [Path(arg) for arg in sys.argv[1:]]
         results = []
