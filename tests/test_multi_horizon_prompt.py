@@ -416,7 +416,7 @@ class TestAforecastMultiHorizon:
         await aforecast_multi_horizon(q, dates, source="fred", prompt_variant="dataset")
 
         call_kwargs = mock_litellm.acompletion.call_args.kwargs
-        prompt = call_kwargs["messages"][0]["content"]
+        prompt = call_kwargs["messages"][1]["content"]
         for d in dates:
             assert d in prompt
 
@@ -431,5 +431,5 @@ class TestAforecastMultiHorizon:
         await aforecast_multi_horizon(q, dates, source="fred")
 
         call_kwargs = mock_litellm.acompletion.call_args.kwargs
-        prompt = call_kwargs["messages"][0]["content"]
+        prompt = call_kwargs["messages"][1]["content"]
         assert "Resolution dates:" in prompt or "resolution dates:" in prompt.lower()
